@@ -1,4 +1,7 @@
 # ICE-BA
+## ICE-BA 的中文注释  
+基本全都注释了,推荐先看LBA流程,再看滑窗边缘化老帧的思路，以及滑窗是如何将先验给到GBA和LBA的,最后看GBA的部分  
+
 ## ICE-BA: Incremental, Consistent and Efficient Bundle Adjustment for Visual-Inertial SLAM  
 We present ICE-BA, an incremental, consistent and efficient bundle adjustment for visual-inertial SLAM, which takes feature tracks, IMU measurements and optionally the loop constraints as input, performs in parallel both local BA over the sliding window and global BA over all keyframes, and outputs camera pose and updated map points for each frame in real-time. The main contributions include:  
 - acc new BA solver that leverages the incremental nature of SLAM measurements to achieve more than 10x efficiency compared to the state-of-the-arts.
