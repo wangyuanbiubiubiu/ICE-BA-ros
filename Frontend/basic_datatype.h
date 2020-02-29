@@ -20,12 +20,12 @@
 #include <vector>
 
 namespace XP {
-
+//imu原始数据的数据结构
 class ImuData {
  public:
   Eigen::Vector3f accel;
   Eigen::Vector3f ang_v;
-  float time_stamp;
+  float time_stamp;//这里的时间戳存储的是设备时间戳,就是第一个时间戳为0
  public:
 #ifndef __ANDROID__
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW

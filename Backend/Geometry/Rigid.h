@@ -18,7 +18,7 @@
 
 #include "Rotation.h"
 #include "Matrix4x4.h"
-
+//除了旋转以外,还有平移
 class Rigid3D : public Rotation3D {
 
  public:
@@ -86,7 +86,7 @@ class Rigid3D : public Rotation3D {
   }
   inline Point3D operator * (const Point3D &X) const {
 #ifdef CFG_DEBUG
-    UT_ASSERT(X.w() == 1.0f);
+    UT_ASSERT(X.gyr() == 1.0f);
 #endif
     Point3D TX;
     Apply(X, TX);
@@ -142,7 +142,7 @@ class Rigid3D : public Rotation3D {
     tz() = t.z();
   }
   inline void SetPosition(const LA::AlignedVector3f &p) { SetPosition(p.xyzr()); }
-  inline void SetPosition(const xp128f &p) {
+  inline void SetPosition(const xp128f &p) {//tc0w = -Rwc0.t * twc0或者是反着的twc0 = -Rc0w.t * tc0w
     tx() = -(r_00_01_02_x() * p).vsum_012();
     ty() = -(r_10_11_12_x() * p).vsum_012();
     tz() = -(r_20_21_22_x() * p).vsum_012();
@@ -165,7 +165,7 @@ class Rigid3D : public Rotation3D {
   inline void GetTranslation(LA::AlignedVector3f &t) const {
     t.xyzr().vset_all_lane(tx(), ty(), tz(), 0.0f);
   }
-  inline LA::AlignedVector3f GetTranslation() const {
+  inline LA::AlignedVector3f GetTranslation() const {//tc0w
     return LA::AlignedVector3f(tx(), ty(), tz());
   }
   inline Row GetRowX() const { return Row(r_00_01_02_x()); }
@@ -174,7 +174,7 @@ class Rigid3D : public Rotation3D {
   inline void GetRotation(Quaternion &q) const { GetQuaternion(q); }
   inline void GetRotationTranspose(Rotation3D &RT) const { Rotation3D::GetTranspose(RT); }
   inline Rotation3D GetRotationTranspose() const { return Rotation3D::GetTranspose(); }
-  inline void GetPosition(Point3D &p) const { GetPosition(p.xyzw()); p.w() = 1.0f; }
+  inline void GetPosition(Point3D &p) const { GetPosition(p.xyzw()); p.w() = 1.0f; }//返回的是twc
   inline void GetPosition(LA::AlignedVector3f &p) const { GetPosition(p.xyzr()); }
   inline void GetPosition(xp128f &p) const {
     // TODO (yanghongtian) : computation order
@@ -183,10 +183,10 @@ class Rigid3D : public Rotation3D {
         r_20_21_22_x() * (-tz());
   }
   inline Point3D GetPosition() const { Point3D p; GetPosition(p); return p; }
-  inline float GetPositionZ() const {
+  inline float GetPositionZ() const { //twc0[2] twc0 = -Rc0w.t * tc0w
     return -(r02() * tx() + r12() * ty() + r22() * tz());
   }
-  inline void GetTranspose(LA::AlignedMatrix4x4f &MT) const {
+  inline void GetTranspose(LA::AlignedMatrix4x4f &MT) const {//只对R进行了转置,就是Rwc0,tc0w
     MT.m00() = r00(); MT.m10() = r01(); MT.m20() = r02(); MT.m30() = tx();
     MT.m01() = r10(); MT.m11() = r11(); MT.m21() = r12(); MT.m31() = ty();
     MT.m02() = r20(); MT.m12() = r21(); MT.m22() = r22(); MT.m32() = tz();
@@ -196,16 +196,17 @@ class Rigid3D : public Rotation3D {
     const Point3D p = GetPosition();
     Transpose();
     SetTranslation(p);
-  }
+  }//返回T^-1
+  //调用的这个T里如果存的是Tab,那么T的就是Tba
   inline void GetInverse(Rigid3D &T) const {
-    Rotation3D::GetTranspose(T);
+    Rotation3D::GetTranspose(T);//T.r = Rba
     T.SetPosition(GetTranslation());
   }
   inline Rigid3D GetInverse() const { Rigid3D T; GetInverse(T); return T; }
 
   inline void Apply(const Point3D &X, LA::AlignedVector3f &TX) const {
 #ifdef CFG_DEBUG
-    UT_ASSERT(X.w() == 1.0f);
+    UT_ASSERT(X.gyr() == 1.0f);
 #endif
     TX.x() = (r00_r01_r02_tx() * X.xyzw()).vsum_all();
     TX.y() = (r10_r11_r12_ty() * X.xyzw()).vsum_all();
@@ -213,7 +214,7 @@ class Rigid3D : public Rotation3D {
   }
   inline bool Apply(const Point3D &X, Point2D &x) const {
 #ifdef CFG_DEBUG
-    UT_ASSERT(X.w() == 1.0f);
+    UT_ASSERT(X.gyr() == 1.0f);
 #endif
     x.y() = (r20_r21_r22_tz() * X.xyzw()).vsum_all();
     if (x.y() < 0.0f) {
@@ -226,7 +227,7 @@ class Rigid3D : public Rotation3D {
   }
   inline bool Apply(const Point3D &X, Point2D &x, float &z) const {
 #ifdef CFG_DEBUG
-    UT_ASSERT(X.w() == 1.0f);
+    UT_ASSERT(X.gyr() == 1.0f);
 #endif
     z = (r20_r21_r22_tz() * X.xyzw()).vsum_all();
     if (z < 0.0f) {
@@ -240,7 +241,7 @@ class Rigid3D : public Rotation3D {
   inline LA::AlignedVector3f GetApplied(const Point3D &X) const { LA::AlignedVector3f TX; Apply(X, TX); return TX; }
   inline float GetAppliedZ(const Point3D &X) const {
 #ifdef CFG_DEBUG
-    UT_ASSERT(X.w() == 1.0f);
+    UT_ASSERT(X.gyr() == 1.0f);
 #endif
     return (r20_r21_r22_tz() * X.xyzw()).vsum_all();
   }
@@ -330,14 +331,13 @@ class Rigid3D : public Rotation3D {
     }
     return false;
   }
-
-  static inline void ABI(const Rigid3D &Ta, const Rigid3D &Tb, Rigid3D &TabI) {
-    LA::AlignedMatrix3x3f::ABT(Ta, Tb, TabI);
+  static inline void ABI(const Rigid3D &Ta/*参考关键帧Tc0w*/, const Rigid3D &Tb/*次老帧的Tc0w*/, Rigid3D &TabI) {
+    LA::AlignedMatrix3x3f::ABT(Ta, Tb, TabI);//Rc0w(kf)*RC0W(lf) = Rc0(kf)_c0(lf)
     TabI.MakeOrthogonal();
-    TabI.SetTranslation(Ta.GetTranslation() - TabI.GetAppliedRotation(Tb.GetTranslation()));
+    TabI.SetTranslation(Ta.GetTranslation()/*tc0w(kf)*/ - TabI.GetAppliedRotation(Tb.GetTranslation())/*这里在求tc0(kf)_c0(lf)*/);//
   }
-  static inline void ABI(const Row &Ta, const Rigid3D &Tb, Row &TabI) {
-    LA::AlignedMatrix3x3f::aBT(Ta, Tb, TabI);
+  static inline void ABI(const Row &Ta/*Tc0jw第三行*/, const Rigid3D &Tb/*Tc0iw*/, Row &TabI) {
+    LA::AlignedMatrix3x3f::aBT(Ta/*Tc0jw第三行*/, Tb/*Tc0iw*/, TabI);//TabI = Ta*Tb.t
     TabI.t() = Ta.t() - (TabI.r0_r1_r2_t() * Tb.GetTranslation().v012r()).vsum_012();
   }
 };

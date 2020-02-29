@@ -130,7 +130,7 @@ class AlignedMatrix2x2f {
     Ab.v0() += t[0] + t[1];
     Ab.v1() += t[2] + t[3];
   }
-
+// ABT = A*B.t
   static inline void ABT(const AlignedMatrix2x2f &A, const AlignedMatrix2x2f &B, AlignedMatrix2x2f &ABT) {
     const xp128f t = A.m_00_01_10_11() * B.m_00_01_10_11();
 
@@ -146,7 +146,7 @@ class AlignedMatrix2x2f {
 
   xp128f m_data;
 };
-
+//对称矩阵矩阵只会保存右上角的元素
 template<typename TYPE> class SymmetricMatrix2x2 {
 
  public:

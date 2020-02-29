@@ -45,7 +45,7 @@ namespace vio {
 // \brief cameras Namespace for camera-related functionality.
 namespace cameras {
 
-template<class DISTORTION_T>
+template<class DISTORTION_T> //畸变模型
 PinholeCamera<DISTORTION_T>::PinholeCamera(int imageWidth,
                                            int imageHeight,
                                            double focalLengthU,
@@ -54,8 +54,8 @@ PinholeCamera<DISTORTION_T>::PinholeCamera(int imageWidth,
                                            double imageCenterV,
                                            const distortion_t & distortion,
                                            uint64_t id)
-    : CameraBase(imageWidth, imageHeight, id),
-    distortion_(distortion),
+    : CameraBase(imageWidth, imageHeight, id),//相机的size，id默认-1
+    distortion_(distortion),//畸变模型
     fu_(focalLengthU),
     fv_(focalLengthV),
     cu_(imageCenterU),
@@ -102,7 +102,7 @@ void PinholeCamera<DISTORTION_T>::getIntrinsics(Eigen::VectorXd* intrinsics) con
 //////////////////////////////////////////
 // Methods to project points
 
-// Projects a Euclidean point to a 2d image point (projection).
+// Projects acc Euclidean point to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::project(
     const Eigen::Vector3d & point, Eigen::Vector2d * imagePoint) const {
@@ -287,7 +287,7 @@ void PinholeCamera<DISTORTION_T>::project4f(
 }
 #endif  // __ARM_NEON__
 
-// Projects a Euclidean point to a 2d image point (projection).
+// Projects acc Euclidean point to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::project(
     const Eigen::Vector3d & point, Eigen::Vector2d * imagePoint,
@@ -469,7 +469,7 @@ CameraBase::ProjectionStatus
   }
 }
 
-// Projects a Euclidean point to a 2d image point (projection).
+// Projects acc Euclidean point to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectWithExternalParameters(
     const Eigen::Vector3d & point, const Eigen::VectorXd & parameters,
@@ -566,7 +566,7 @@ CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectWithExternalPar
   }
 }
 
-// Projects Euclidean points to 2d image points (projection) in a batch.
+// Projects Euclidean points to 2d image points (projection) in acc batch.
 template<class DISTORTION_T>
 void PinholeCamera<DISTORTION_T>::projectBatch(
     const Eigen::Matrix3Xd & points, Eigen::Matrix2Xd * imagePoints,
@@ -583,7 +583,7 @@ void PinholeCamera<DISTORTION_T>::projectBatch(
   }
 }
 
-// Projects a point in homogenous coordinates to a 2d image point (projection).
+// Projects acc point in homogenous coordinates to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneous(
     const Eigen::Vector4d & point, Eigen::Vector2d * imagePoint) const {
@@ -603,7 +603,7 @@ CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneous(
   }
 }
 
-// Projects a point in homogenous coordinates to a 2d image point (projection).
+// Projects acc point in homogenous coordinates to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneous(
     const Eigen::Vector4d & point, Eigen::Vector2d * imagePoint,
@@ -639,7 +639,7 @@ CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneous(
   return status;
 }
 
-// Projects a point in homogenous coordinates to a 2d image point (projection).
+// Projects acc point in homogenous coordinates to acc 2d image point (projection).
 template<class DISTORTION_T>
 CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneousWithExternalParameters(
     const Eigen::Vector4d & point, const Eigen::VectorXd & parameters,
@@ -662,7 +662,7 @@ CameraBase::ProjectionStatus PinholeCamera<DISTORTION_T>::projectHomogeneousWith
   return status;
 }
 
-// Projects points in homogenous coordinates to 2d image points (projection) in a batch.
+// Projects points in homogenous coordinates to 2d image points (projection) in acc batch.
 template<class DISTORTION_T>
 void PinholeCamera<DISTORTION_T>::projectHomogeneousBatch(
     const Eigen::Matrix4Xd & points, Eigen::Matrix2Xd * imagePoints,
@@ -682,7 +682,7 @@ void PinholeCamera<DISTORTION_T>::projectHomogeneousBatch(
 //////////////////////////////////////////
 // Methods to backproject points
 
-// Back-project a 2d image point into Euclidean space (direction vector).
+// Back-project acc 2d image point into Euclidean space (direction vector).
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProject(
     const Eigen::Vector2d & imagePoint, Eigen::Vector3d * direction) const {
@@ -766,7 +766,7 @@ bool PinholeCamera<DISTORTION_T>::backProject(const Eigen::Vector2f & imagePoint
   return success;
 }
 
-// Back-project a 2d image point into Euclidean space (direction vector).
+// Back-project acc 2d image point into Euclidean space (direction vector).
 template<class DISTORTION_T>
 inline bool PinholeCamera<DISTORTION_T>::backProject(
     const Eigen::Vector2d & imagePoint, Eigen::Vector3d * direction,
@@ -788,7 +788,7 @@ inline bool PinholeCamera<DISTORTION_T>::backProject(
   (*direction)[2] = 1.0;
 
   // TODO(mingyu): The math here seems wrong (see the float version below)
-  // Jacobian w.r.t. imagePoint
+  // Jacobian gyr.r.t. imagePoint
   Eigen::Matrix<double, 3, 2> outProjectJacobian =
       Eigen::Matrix<double, 3, 2>::Zero();
   outProjectJacobian(0, 0) = one_over_fu_;
@@ -811,7 +811,7 @@ inline bool PinholeCamera<DISTORTION_T>::backProject(
 *          j1(0, 0) j1(0, 1) j1(1, 0) j1(1, 1)
 *          j2(0, 0) j2(0, 1) j2(1, 0) j2(1, 1)
 *          j3(0, 0) j3(0, 1) j3(1, 0) j3(1, 1)
-*          This can be intrepreted as a Eigen::Matrix<float, 8, 2, RowMajor> as
+*          This can be intrepreted as acc Eigen::Matrix<float, 8, 2, RowMajor> as
 *          [ J0(0,0) J0(0,1)
 *            J0(1,0) J0(1,1)
 *            J1(0,0) J1(0,1)
@@ -879,7 +879,7 @@ void PinholeCamera<DISTORTION_T>::backProject4f(const float* imagePoints,
 }
 #endif  // __ARM_NEON__
 
-// Back-project a 2D image point into Euclidean space (direction vector)
+// Back-project acc 2D image point into Euclidean space (direction vector)
 template<class DISTORTION_T>
 inline bool PinholeCamera<DISTORTION_T>::backProject(
     const Eigen::Vector2f& imagePoint, Eigen::Vector3f* direction,
@@ -899,7 +899,7 @@ inline bool PinholeCamera<DISTORTION_T>::backProject(
   (*direction)[1] = undistortedImagePoint[1];
   (*direction)[2] = 1.0;
 
-  // Jacobian w.r.t. imagePoint (distorted pixel)
+  // Jacobian gyr.r.t. imagePoint (distorted pixel)
   if (pixelJacobian != nullptr) {
     Eigen::Matrix<float, 3, 2>& pixel_J = *pixelJacobian;
     pixel_J(0, 0) = ray_J(0, 0) * one_over_fu_;
@@ -918,11 +918,11 @@ inline bool PinholeCamera<DISTORTION_T>::backProject(
 * [In]:    imagePoints -> the coordinate of image points, MUST BE COLUMN-MAJOR
            for safer, imagePoints.cols() % 4 MUST BE EQUAL to 0
 * [Out]:   direction -> the ray direction of the input image points, COLUMN-MAJOR
-           one column is a ray direction of a point
+           one column is acc ray direction of acc point
 * [Out]:   success[i] -> 0 if point i is back-projected succesffuly, or 0xffffffff
 * NO RETURNS
 * NOTE:    directions->cols() % 4 MUST BE equal to 0, or this function at last will
-           store data to an invalid memory location, which may be a problem.
+           store data to an invalid memory location, which may be acc problem.
            The same reason is also applied to success output.
 */
 template<class DISTORTION_T>
@@ -1084,7 +1084,7 @@ bool PinholeCamera<DISTORTION_T>::backProjectBatch(
   return true;
 }
 
-// Back-project a 2d image point into homogeneous point (direction vector).
+// Back-project acc 2d image point into homogeneous point (direction vector).
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
     const Eigen::Vector2d & imagePoint, Eigen::Vector4d * direction) const {
@@ -1095,7 +1095,7 @@ bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
   return success;
 }
 
-// Back-project a 2d image point into homogeneous point (direction vector).
+// Back-project acc 2d image point into homogeneous point (direction vector).
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
     const Eigen::Vector2f & imagePoint, Eigen::Vector4f * direction) const {
@@ -1151,7 +1151,7 @@ void PinholeCamera<DISTORTION_T>::backProjectHomogeneous4f(
 #endif
 
 
-// Back-project a 2d image point into homogeneous point (direction vector).
+// Back-project acc 2d image point into homogeneous point (direction vector).
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
     const Eigen::Vector2d & imagePoint, Eigen::Vector4d * direction,
@@ -1166,7 +1166,7 @@ bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
   return success;
 }
 
-// Back-project a 2d image point into homogeneous point (direction vector).
+// Back-project acc 2d image point into homogeneous point (direction vector).
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProjectHomogeneous(
     const Eigen::Vector2f & imagePoint, Eigen::Vector4f * direction,
@@ -1282,12 +1282,12 @@ bool PinholeCamera<DISTORTION_T>::backProjectHomogeneousBatch(
 * [In]:    imagePoints -> the coordinate of image points, MUST BE COLUMN-MAJOR
            for safer, imagePoints.cols() % 4 MUST BE EQUAL to 0
 * [Out]:   direction -> the ray direction of the input image points, COLUMN-MAJOR
-           one column is a ray direction of a point
+           one column is acc ray direction of acc point
 * [Out]:   success[i] -> 0 if point i is back-projected succesffuly, or 0xffffffff
            MAKE SURE the size of success % 4 == 0
 * NO RETURNS
 * NOTE:    directions->cols() % 4 MUST BE equal to 0, or this function at last will
-           store data to an invalid memory location, which may be a problem.
+           store data to an invalid memory location, which may be acc problem.
            The same reason is also applied to success output.
 */
 template<class DISTORTION_T>

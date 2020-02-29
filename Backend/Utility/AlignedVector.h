@@ -18,6 +18,7 @@
 
 #include "Utility.h"
 
+
 template <class TYPE, const int GROWTH = 0, const int GROWTH_MAX = 1024>
 class AlignedVector {
 
@@ -112,7 +113,7 @@ class AlignedVector {
   inline TYPE& Push() {
     if (m_N == m_capacity) {
       const int growth = GROWTH == 0 ? std::max(std::min(m_capacity, GROWTH_MAX), 1) : GROWTH;
-      m_capacity += growth;
+      m_capacity += growth;//扩容
       TYPE *dataBkp = m_data;
       m_data = SIMD::Malloc<TYPE>(m_capacity);
       if (dataBkp) {
@@ -200,7 +201,7 @@ class AlignedVector {
 #ifdef CFG_DEBUG
     UT_ASSERT(N <= Size());
 #endif
-    V.Set(Data() + N, Size() - N);
+    V.Set(Data() + N, Size() - N);//将数据里前N个数据给V
     Resize(N);
     Swap(V);
   }
@@ -357,8 +358,8 @@ class AlignedVector {
  protected:
 
   bool m_own;
-  TYPE* m_data;
-  int m_N, m_capacity;
+  TYPE* m_data;//记录所有关键帧的左相机位姿
+  int m_N/*size*/, m_capacity/*容量*/;
 
 };
 

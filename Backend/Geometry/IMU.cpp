@@ -21,18 +21,18 @@
 //#define CFG_DEBUG_EIGEN
 //#endif
 #include "IMU.h"
-
+#include <eigen3/Eigen/Dense>
 namespace IMU {
 
-void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J, const Error &e,
-                                           const float w, const Weight &W, const float Tpv) {
-  J.GetTranspose(m_JT);
+void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部分的雅克比*/, const Error &e,//motion部分的残差
+                                           const float w, const Weight &W/*motion部分的协方差*/, const float Tpv/*dt*/) {
+  J.GetTranspose(m_JT);//m_Jrr1,m_Jrbw1,m_Jvr1,m_Jvv1,m_Jvba1,m_Jvbw1,m_Jpr1,m_Jpr2,m_Jpp1,m_Jpv1,m_Jpba1,m_Jpbw1的转置
   W.GetScaled(w, &m_W);
-  const xp128f _Tpv = xp128f::get(Tpv);
+  const xp128f _Tpv = xp128f::get(Tpv);//dt
 #ifdef CFG_IMU_FULL_COVARIANCE
-  for (int i = 0; i < 5; ++i) {
-    const LA::AlignedMatrix3x3f *Wi = m_W[i];
-    const LA::AlignedMatrix3x3f &Wir = Wi[0];
+  for (int i = 0; i < 5; ++i) {//m_W存储的顺序是R,v,p,ba,bw,这里矩阵存储的顺序好像是变了
+    const LA::AlignedMatrix3x3f *Wi = m_W[i];//i对应的状态各自对应的那一行
+    const LA::AlignedMatrix3x3f &Wir = Wi[0];//i和r部分的信息矩阵
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrr1, Wir, m_JTW[1][i]);
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrbw1, Wir, m_JTW[4][i]);
     m_JTW[1][i].GetMinus(m_JTW[6][i]);
@@ -56,7 +56,7 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J, const Erro
     m_JTW[4][i] += m_W[4][i];
     m_W[4][i].GetMinus(m_JTW[9][i]);
   }
-
+//这里在算J.t*W*J的上三角存在m_A里
   LA::AlignedMatrix3x3f *A[10] = {&m_A[ 0], &m_A[ 9], &m_A[17], &m_A[24], &m_A[30],
                                   &m_A[35], &m_A[39], &m_A[42], &m_A[44], &m_A[45]};
   const LA::AlignedVector3f *_e = (LA::AlignedVector3f *) &e;
@@ -126,7 +126,7 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J, const Erro
         }
       }
     }
-    LA::AlignedVector3f &bi = m_b[i];
+    LA::AlignedVector3f &bi = m_b[i];//J.t*W*e
     bi.MakeZero();
     float *_bi = bi;
     for (int j = 0; j < 5; ++j) {
@@ -717,35 +717,35 @@ void Delta::Factor::Auxiliary::RelativeKF::Set(const Jacobian::RelativeKF &J, co
   LA::AlignedMatrix2x3f::AddAbTo(m_JTWgp, e.m_ep, m_bg);
 #endif
 }
-
+//如果有imu数据(已经被转到了左相机坐标系(Rc0_i*)下的观测),就用加速度数据求出东北天坐标系下左相机的一个初始朝向
 void InitializeCamera(const AlignedVector<Measurement> &us, Camera &C) {
   const int N = us.Size();
-  if (N == 0 || IMU_GRAVITY_EXCLUDED) {
+  if (N == 0 || IMU_GRAVITY_EXCLUDED) {//如果没有imu数据或者不用重力
     C.MakeIdentity();
   } else {
-    LA::AlignedVector3f g;
+    LA::AlignedVector3f g;//加速度测量
     g.MakeZero();
-    for (int i = 0; i < N; ++i) {
+    for (int i = 0; i < N; ++i) {//这里需要静止才可以
       g += us[i].m_a;
     }
-    g.Normalize();
-    g.MakeMinus();
-    C.MakeIdentity(&g);
+    g.Normalize();//对加速度数据进行归一化
+    g.MakeMinus();//-g
+    C.MakeIdentity(&g);//JPL的四元数,所以是Rc0w，这里tc0w是0
   }
 }
 
-void PreIntegrate(const AlignedVector<Measurement> &us, const float t1, const float t2,
-                  const Camera &C1, Delta *D, AlignedVector<float> *work, const bool jac,
-                  const Measurement *u1, const Measurement *u2, const float eps) {
+void PreIntegrate(const AlignedVector<Measurement> &us/*当前帧和之间帧之间的所有imu测量*/, const float t1/*上一帧的时间戳*/, const float t2/*当前帧的时间戳*/,
+                  const Camera &C1/*上一帧的状态*/, Delta *D, AlignedVector<float> *work, const bool jac,
+                  const Measurement *u1/*上一帧最后一个imu测量*/, const Measurement *u2, const float eps) {
 #ifdef CFG_DEBUG
-  UT_ASSERT(us.Empty() || (us.Front().t() >= t1 && us.Back().t() <= t2));
+  UT_ASSERT(imu_measures.Empty() || (imu_measures.Front().t() >= t1 && imu_measures.Back().t() <= t2));
 #endif
-  PreIntegrate(us.Data(), us.Size(), t1, t2, C1, D, work, jac, u1, u2, eps);
+  PreIntegrate(us.Data()/*当前帧和之间帧之间的所有imu测量*/, us.Size()/*imu测量的数量*/, t1/*上一帧的时间戳*/, t2/*当前帧的时间戳*/, C1/*上一帧的状态*/, D/*预计分的pvq*/, work, jac/*是否要输出雅克比*/, u1/*上一帧最后一个imu测量*/, u2, eps);
 }
 
-void PreIntegrate(const Measurement *us, const int N, const float t1, const float t2,
-                  const Camera &C1, Delta *D, AlignedVector<float> *work, const bool jac,
-                  const Measurement *u1, const Measurement *u2, const float eps) {
+void PreIntegrate(const Measurement *us/*当前帧和之间帧之间的所有imu测量*/, const int N/*imu测量的数量*/, const float t1/*上一帧的时间戳*/, const float t2/*当前帧的时间戳*/,
+                  const Camera &C1/*上一帧的状态*/, Delta *D, AlignedVector<float> *work, const bool jac/*是否要输出雅克比*/,
+                  const Measurement *u1/*上一帧(有u2时就是上上帧)最后一个imu测量*/, const Measurement *u2/*当前帧第一个imu测量*/, const float eps) {
 #ifdef CFG_DEBUG
   if (u1) {
     UT_ASSERT(u1->Valid() && u1->t() <= t1);
@@ -754,7 +754,7 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
     UT_ASSERT(u2->Valid() && u2->t() >= t2);
   }
 #endif
-  if (u1) {
+  if (u1) {//如果给了上一帧最后一个imu数据,就记录一下
     D->m_u1 = *u1;
   } else {
     D->m_u1.Invalidate();
@@ -785,72 +785,82 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
   Jrbw[r2].MakeZero();
 
 #ifdef CFG_IMU_FULL_COVARIANCE
-  Delta::Transition F;
-  Delta::Covariance P[2];
+  Delta::Transition F;//传播矩阵
+  Delta::Covariance P[2];//协方差
   Delta::Covariance::DD U;
   P[r1].MakeZero();
   P[r2].MakeZero();
 #endif
 
   float Tpg = 0.0f;
-  float _t1, _t2;
+  float _t1/*前一次的imu测量的数据的时间戳*/, _t2;
   LA::AlignedVector3f a, adt, w, wdt;
   LA::AlignedMatrix3x3f Jr[2], Jrdt;
   const xp128f s = xp128f::get(0.5f);
-  for (int i1 = -1, i2 = 0; i1 < N; i1 = i2++) {
-    if (i1 != -1) {
-      const Measurement &_u1 = us[i1];
-      _t1 = _u1.t();
-      if (i2 != N) {
+  for (int i1 = -1, i2 = 0; i1 < N; i1 = i2++)
+  {
+    if (i1 != -1)
+    {//i1 != -1时就全是当前的imu消息了
+      const Measurement &_u1 = us[i1];//
+      _t1 = _u1.t();//k时刻imu测量时间戳
+      if (i2 != N)
+      {
         const Measurement &_u2 = us[i2];
-        _t2 = _u2.t();
-        a.xyzr() = (_u1.m_a.xyzr() + _u2.m_a.xyzr()) * s;
+        _t2 = _u2.t();//k+1时刻imu测量时间戳
+        a.xyzr() = (_u1.m_a.xyzr() + _u2.m_a.xyzr()) * s;//中值
         w.xyzr() = (_u1.m_w.xyzr() + _u2.m_w.xyzr()) * s;
-      } else {
-        _t2 = t2;
-        if (u2) {
-          Measurement::Interpolate(_u1, *u2, (_t1 + _t2) * 0.5f, a, w);
-        } else {
-          a = _u1.m_a;
-          w = _u1.m_w;
-        }
+      } else
+      {
+          _t2 = t2;
+          if (u2)
+          {
+              Measurement::Interpolate(_u1, *u2, (_t1 + _t2) * 0.5f, a, w);
+          } else
+          {
+              a = _u1.m_a;
+              w = _u1.m_w;
+          }
       }
-    } else {
+    } else
+    {
 #ifdef CFG_DEBUG
-      UT_ASSERT(i2 < N);
+        UT_ASSERT(i2 < N);
 #endif
-      const Measurement &_u2 = us[i2];
-      _t1 = t1;
-      _t2 = _u2.t();
-      if (u1) {
-        Measurement::Interpolate(*u1, _u2, (_t1 + _t2) * 0.5f, a, w);
-      } else {
-        a = _u2.m_a;
-        w = _u2.m_w;
-      }
+        const Measurement &_u2 = us[i2];//当前帧的第一个imu测量
+        _t1 = t1;//k时刻imu测量时间戳
+        _t2 = _u2.t();//k+1时刻imu测量时间戳
+        if (u1)
+        {
+            Measurement::Interpolate(*u1/*上一帧最后一个imu测量*/, _u2/*当前帧的第一个imu测量*/, (_t1 + _t2) * 0.5f/*中间时间值*/, a, w);//a,w对应于k和k+1中间时刻的imu测量
+        } else
+        {
+            a = _u2.m_a;
+            w = _u2.m_w;
+        }
     }
-    if (_t1 == _t2) {
+    if (_t1 == _t2)
+    {
       continue;
     }
-    a -= D->m_ba;
+    a -= D->m_ba;//减去bias的影响
     w -= D->m_bw;
-    const xp128f dt = xp128f::get(_t2 - _t1);
-    const xp128f dT = xp128f::get(_t1 - t1);
-    const xp128f dt_2 = xp128f::get(dt[0] * 0.5f);
-    Tpg = (dt_2[0] + (_t1 - t1)) * dt[0] + Tpg;
-
-    w.GetScaled(dt, wdt);
+    const xp128f dt = xp128f::get(_t2 - _t1);//delta_t
+    const xp128f dT = xp128f::get(_t1 - t1/*上一帧的时间戳*/);
+    const xp128f dt_2 = xp128f::get(dt[0] * 0.5f);//0.5*delta_t
+    Tpg = (dt_2[0] + (_t1 - t1)) * dt[0] + Tpg;// Tpg += (0.5dt + dt0)dt 这里为啥这么算呢
+//预计分pvq
+    w.GetScaled(dt, wdt);//wdt = (w-bw)*delta_t
     //dR.SetRodrigues(wdt);
     //Rotation3D::ABT(dR, RT[r1], D->m_R);
-    dq.SetRodrigues(wdt, eps);
-    dR.SetQuaternion(dq);
-    q = dq * q;
-    RT[r2].SetQuaternion(q);
-    RT[r2].Transpose();
+    dq.SetRodrigues(wdt, eps);//so3 转四元数
+    dR.SetQuaternion(dq);//dRc0k+1_c0k
+    q = dq * q;//因为是JPL形式,所以是反着的 qc0k+1_c0i = qc0k+1_c0k* qc0k_c0i
+    RT[r2].SetQuaternion(q);//Rc0k+1_c0i
+    RT[r2].Transpose();//Rc0i_c0k+1
 
-    const LA::AlignedMatrix3x3f RTdt = (RT[r1] + RT[r2]) * dt_2;
-    const LA::AlignedVector3f dv = RTdt * a;
-    const LA::AlignedVector3f dp = D->m_v * dt + dv * dt_2;
+    const LA::AlignedMatrix3x3f RTdt = (RT[r1] + RT[r2]) * dt_2;//0.5*(Rc0i_c0k + Rc0i_c0k+1) *dt，为啥这里直接加了?这么加能满足正交性么
+    const LA::AlignedVector3f dv = RTdt * a;//vc0k_c0k+1 = Rc0i_c0mid * (ac0mid-ba) * dt
+    const LA::AlignedVector3f dp = D->m_v * dt + dv * dt_2;//pc0k_c0k+1 =vc0i_c0k * dt + 0.5 * ac0i * dt^2
     D->m_v += dv;
     D->m_p += dp;
 //#ifdef CFG_DEBUG
@@ -862,11 +872,20 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
       D->m_p.Print();
     }
 #endif
-
-    if (jac) {
-      Rotation3D::GetRodriguesJacobian(wdt, Jrdt, eps);
+    //////R部分的不确定性传播过程
+    // 首先是旋转的传播过程 Rci_cj = ∏(下标k=i,上标j-1)exp[(w_mid -bw_k)*dt)]x
+    //   如果给bw的bias一个扰动的话 = ∏(下标k=i,上标j-1)exp[(w_mid -bw_k -d_bw_k)*dt)]x
+      //= ∏(下标k=i,上标j-1){exp[(w_mid -bw_k)*dt]x *exp[-Jr[(w_mid -bw_k)*dt]*d_bw_k*dt]x }
+      //= &Rij* ∏(下标k=i,上标j-1){exp[ -&Rk+1_j.t * Jr[(w_mid -bw_k)*dt] * d_bw_k*dt]x } 其中&Rij代表 ∏(下标k=i,上标j-1){exp[(w_mid -bw_k)*dt]x}
+   // so3下的 d(theta)i_j = ∑(下标k=i,上标j-1){-&Rk+1_j.t * Jr[(w_mid -bw_k)*dt] * d_bw_k*dt}
+   // 李代数下的旋转误差传逆: d(theta)i_k+1 = &Rk_k+1.t(这个就是用w积分出的旋转dR) * d(theta)i_k + - Jr[(w_mid -bw_k)*dt] * dt * d_bw_k
+  //////P,V部分的雅克比推导比较常规，就不打了,但我求的有两处对不上
+    //
+    if (jac)//计算一下误差传递矩阵
+    {
+      Rotation3D::GetRodriguesJacobian(wdt/*delta_th*/, Jrdt, eps);//算了一下右乘雅克比
       Jrdt *= dt;
-      Jrbw[r2] = dR * Jrbw[r1] - Jrdt;
+      Jrbw[r2] = dR * Jrbw[r1] - Jrdt;//Jk+1 = Fk*Jk 这里是递推得到预积分后状态量对i时刻bw的雅克比
 #if 0
       if (UT::Debugging()) {
         UT::PrintSeparator();
@@ -876,18 +895,19 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
 #endif
       const LA::AlignedMatrix3x3f dJvba = RTdt.GetMinus();
       const LA::AlignedMatrix3x3f dJpba = D->m_Jvba * dt + dJvba * dt_2;
-      D->m_Jvba += dJvba;
-      D->m_Jpba += dJpba;
-      a.GetScaled(dt_2, adt);
-      SkewSymmetricMatrix::ABT(RT[r1], adt, Jr[r1]);
-      SkewSymmetricMatrix::ABT(RT[r2], adt, Jr[r2]);
-      const LA::AlignedMatrix3x3f dJvbw = (Jr[r1] * Jrbw[r1]) + (Jr[r2] * Jrbw[r2]);
+      D->m_Jvba += dJvba;//d_v/d_ba = - Rc0i_c0mid * dt
+      D->m_Jpba += dJpba;//d_p/d_ba = (d_v/d_ba) + -0.5 Rc0i_c0mid * dt^2
+      a.GetScaled(dt_2, adt);//adt = 0.5 * (ac0mid-ba) * t
+      SkewSymmetricMatrix::ABT(RT[r1], adt, Jr[r1]);//r1就是之前的状态 Jr[r1] = Rc0i_c0k * [-0.5*(ac0mid-ba)*t]x
+      SkewSymmetricMatrix::ABT(RT[r2], adt, Jr[r2]);//Jr[r2] = Rc0i_c0k+1 * [-0.5*(ac0mid-ba)*t]x
+      const LA::AlignedMatrix3x3f dJvbw = (Jr[r1] * Jrbw[r1]) + (Jr[r2] * Jrbw[r2]);//这里为啥是Jr[r2] * Jrbw[r2]而不是Jr[r2]*Jrdt
       const LA::AlignedMatrix3x3f dJpbw = D->m_Jvbw * dt + dJvbw * dt_2;
       D->m_Jvbw += dJvbw;
       D->m_Jpbw += dJpbw;
 
 #ifdef CFG_IMU_FULL_COVARIANCE
-      if (i1 != -1) {
+      if (i1 != -1)
+      {
         RT[r2].GetScaled(dt, F.m_Fdb.m_Frbw);
         F.m_Fdb.m_Frbw.MakeMinus();
         dv.GetMinus(F.m_Fdd.m_Fvr);
@@ -897,8 +917,8 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
         F.m_Fdd.m_Fpv = dt;
         F.m_Fdb.m_Fpba = dJpba;
         F.m_Fdb.m_Fpbw = dJpbw;
-        Delta::Covariance::FPFT(F, P[r1], &U, &P[r2]);
-      }
+        Delta::Covariance::FPFT(F/*传递矩阵*/, P[r1]/*上个时刻协方差*/, &U, &P[r2]/*当前时刻协方差*/);//计算下一次的斜方差P[r2] = FP[r1]F.t
+      }//前面算了状态量误差的传播,现在把噪声的传播也加上
       const float s2r = dt[0] * IMU_VARIANCE_GYROSCOPE_NOISE;
       const float s2v = dt[0] * IMU_VARIANCE_ACCELERATION_NOISE;
       const float s2p = dt[0] * dt_2[0] * s2v;
@@ -931,11 +951,11 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
 #endif
     }
 
-    r1 = r2;
+    r1 = r2;//置换一下,这样[2]就可以做循环预积分了
     r2 = 1 - r2;
   }
-  D->m_RT = RT[r1];
-  D->m_Jrbw = Jrbw[r1];
+  D->m_RT = RT[r1];//这里实际是最后一次循环r2的位置
+  D->m_Jrbw = Jrbw[r1];//保存一下递推得到的雅克比,方便后面使用
   D->m_Tvg = D->m_Tpv = t2 - t1;
   D->m_Tpg = Tpg;
   //D->m_Tpg = 0.5f * D.m_Tvg * D.m_Tvg;
@@ -946,7 +966,7 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
                            IMU_VARIANCE_EPSILON_POSITION,
                            IMU_VARIANCE_EPSILON_BIAS_ACCELERATION,
                            IMU_VARIANCE_EPSILON_BIAS_GYROSCOPE);
-    D->m_W.Set(P[r1], work);
+    D->m_W.Set(P[r1], work);//存储的顺序是R,v,p,ba,bw用协方差的逆设置一下信息矩阵
 //#ifdef CFG_DEBUG
 #if 0
     FILE *fp = fopen("D:/tmp/W.txt", "rb");
@@ -1022,69 +1042,78 @@ void PreIntegrate(const Measurement *us, const int N, const float t1, const floa
 #endif
   }
 }
-
-void Propagate(const Point3D &pu, const Delta &D, const Camera &C1, Camera &C2, const float eps) {
+//考虑了bias以后进行pvR传播
+void Propagate(const Point3D &pu/*外参tc0_i*/, const Delta &D/*预积分部分*/, const Camera &C1/*上一帧的状态*/, Camera &C2/*当前帧的Twc*/, const float eps) {
   const LA::AlignedVector3f dba = C1.m_ba - D.m_ba;
   const LA::AlignedVector3f dbw = C1.m_bw - D.m_bw;
-  const Rotation3D R1T = C1.m_T.GetRotationTranspose();
+  const Rotation3D R1T = C1.m_Cam_pose.GetRotationTranspose();//Rwc0i
 #ifdef CFG_IMU_FULL_COVARIANCE
-  C2.m_T = D.GetRotationMeasurement(dbw, eps).GetTranspose() / R1T;
+  C2.m_Cam_pose = D.GetRotationMeasurement(dbw, eps).GetTranspose() / R1T;//Rc0j_w=Rc0k+1_c0i* Rc0iw
 #else
-  C2.m_T = D.GetRotationMeasurement(dbw, eps) / R1T;
+  C2.m_Cam_pose = D.GetRotationMeasurement(dbw, eps) / R1T;
 #endif
-  const LA::AlignedVector3f dp = D.m_p + D.m_Jpba * dba + D.m_Jpbw * dbw;
-  C2.m_p = (R1T - C2.m_T.GetRotationTranspose()) * pu + C1.m_p +
-            C1.m_v * D.m_Tpv + R1T.GetApplied(dp);
+  const LA::AlignedVector3f dp = D.m_p + D.m_Jpba * dba + D.m_Jpbw * dbw;//考虑bias的影响
+  C2.m_p = (R1T - C2.m_Cam_pose.GetRotationTranspose()) * pu /*因为把imu的测量挪到了c0上,所以这里需要考虑挪到c0以后的外参的ex_t补偿*/
+          //b是imu twb = Rwc0*tc0b + twc0 ,ex_t=(twbj - twbi) - (twc0j - twc0i) = (Rwc0j - Rwc0i)*tc0i
+          +C1.m_p + C1.m_v * D.m_Tpv + R1T.GetApplied(dp);
+  //tw_c0j = ex_t + tw_c0i + Vw_c0i*dt + Rwc0*pc0i_c0j -0.5*gw*dt^2
   if (!IMU_GRAVITY_EXCLUDED) {
-    C2.m_p.z() -= IMU_GRAVITY_MAGNITUDE * D.m_Tpg;
+    C2.m_p.z() -= IMU_GRAVITY_MAGNITUDE * D.m_Tpg;//考虑重力
   }
-  C2.m_T.SetPosition(C2.m_p);
+
+  C2.m_Cam_pose.SetPosition(C2.m_p);//存的是tc0w
   const LA::AlignedVector3f dv = D.m_v + D.m_Jvba * dba + D.m_Jvbw * dbw;
   C2.m_v = C1.m_v + R1T.GetApplied(dv);
   if (!IMU_GRAVITY_EXCLUDED) {
-    C2.m_v.z() -= IMU_GRAVITY_MAGNITUDE * D.m_Tvg;
+    C2.m_v.z() -= IMU_GRAVITY_MAGNITUDE * D.m_Tvg;//vw_j = vw_i − gw*delta_t + Rwc0i * vc0i_c0j
   }
   //////////////////////////////////////////////////////////////////////////
   //C2.m_p = C1.m_p;
-  //C2.m_T.SetPosition(C2.m_p);
+  //C2.m_Cam_pose.SetPosition(C2.m_p);
   //C2.m_v.MakeZero();
   //////////////////////////////////////////////////////////////////////////
-  C2.m_ba = C1.m_ba;
+  C2.m_ba = C1.m_ba;//bias
   C2.m_bw = C1.m_bw;
 #ifdef CFG_DEBUG
-  C2.m_T.AssertOrthogonal();
+  C2.m_Cam_pose.AssertOrthogonal();
 #endif
 }
 
 #ifdef CFG_DEBUG_EIGEN
-//#define IMU_DELTA_EIGEN_DEBUG_JACOBIAN
-void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
+#define IMU_DELTA_EIGEN_DEBUG_JACOBIAN
+void Delta::EigenGetErrorJacobian(const Camera &C1/*前一帧(i)状态*/, const Camera &C2/*后一帧(j)状态*/, const Point3D &pu,/*tc0_i*/
                                   EigenError *e_e, EigenJacobian::Global *e_J,
                                   const float eps) const {
-  const EigenVector3f e_ba = EigenVector3f(m_ba), e_bw = EigenVector3f(m_bw);
-  const EigenRotation3D e_RdT = EigenRotation3D(m_RT), e_Rd = EigenRotation3D(e_RdT.transpose());
-  const EigenVector3f e_vd = EigenVector3f(m_v), e_pd = EigenVector3f(m_p);
-  const EigenMatrix3x3f e_Jrbw = EigenMatrix3x3f(m_Jrbw);
-  const EigenMatrix3x3f e_Jvba = EigenMatrix3x3f(m_Jvba), e_Jvbw = EigenMatrix3x3f(m_Jvbw);
-  const EigenMatrix3x3f e_Jpba = EigenMatrix3x3f(m_Jpba), e_Jpbw = EigenMatrix3x3f(m_Jpbw);
+  const EigenVector3f e_ba = EigenVector3f(m_ba), e_bw = EigenVector3f(m_bw);//预积分
+  const EigenRotation3D e_RdT = EigenRotation3D(m_RT)/*预积分Rc0i_c0j*/, e_Rd = EigenRotation3D(e_RdT.transpose());/*预积分Rc0j_c0i*/
+  const EigenVector3f e_vd = EigenVector3f(m_v)/*预积分vc0i_c0j*/, e_pd = EigenVector3f(m_p);/*预积分pc0i_c0j*/
+  const EigenMatrix3x3f e_Jrbw = EigenMatrix3x3f(m_Jrbw);//dr/bw
+  const EigenMatrix3x3f e_Jvba = EigenMatrix3x3f(m_Jvba)/*dv/da*/, e_Jvbw = EigenMatrix3x3f(m_Jvbw);/*dv/dw*/
+  const EigenMatrix3x3f e_Jpba = EigenMatrix3x3f(m_Jpba)/*dp/da*/, e_Jpbw = EigenMatrix3x3f(m_Jpbw);/*dp/dw*/
 
-  const EigenRotation3D e_R1 = C1.m_T, e_R1T = EigenRotation3D(e_R1.transpose());
-  const EigenRotation3D e_R2 = C2.m_T, e_R2T = EigenRotation3D(e_R2.transpose());
-  const EigenPoint3D e_p1 = EigenPoint3D(C1.m_p), e_p2 = EigenPoint3D(C2.m_p);
-  const EigenVector3f e_v1 = EigenVector3f(C1.m_v), e_v2 = EigenVector3f(C2.m_v);
-  const EigenVector3f e_ba1 = EigenVector3f(C1.m_ba), e_ba2 = EigenVector3f(C2.m_ba);
-  const EigenVector3f e_dba = EigenVector3f(e_ba1 - e_ba);
+  const EigenRotation3D e_R1 = C1.m_Cam_pose,/*Rc0iw*/ e_R1T = EigenRotation3D(e_R1.transpose());//Rwc0i
+  const EigenRotation3D e_R2 = C2.m_Cam_pose,/*Rc0jw*/ e_R2T = EigenRotation3D(e_R2.transpose());//Rwc0j
+  const EigenPoint3D e_p1 = EigenPoint3D(C1.m_p)/*twc0i*/, e_p2 = EigenPoint3D(C2.m_p);/*twc0j*/
+  const EigenVector3f e_v1 = EigenVector3f(C1.m_v)/*Vwc0i*/, e_v2 = EigenVector3f(C2.m_v);/*Vwc0j*/
+  const EigenVector3f e_ba1 = EigenVector3f(C1.m_ba)/*ba_wc0i*/, e_ba2 = EigenVector3f(C2.m_ba);/*ba_wc0j*/
+  const EigenVector3f e_dba = EigenVector3f(e_ba1 - e_ba);//e_ba = ba_wc0i - m_ba 这里m_ba == ba_wc0i =ba_wc0j
   const EigenVector3f e_bw1 = EigenVector3f(C1.m_bw), e_bw2 = EigenVector3f(C2.m_bw);
-  const EigenVector3f e_dbw = EigenVector3f(e_bw1 - e_bw);
-  const EigenVector3f e_pu = EigenVector3f(pu);
+  const EigenVector3f e_dbw = EigenVector3f(e_bw1 - e_bw);//e_bw = bw_wc0i - m_bw 这里m_bw == bw_wc0i =bw_wc0j
+  const EigenVector3f e_pu = EigenVector3f(pu);/*tc0_i*/
 
-  const EigenRotation3D e_R12 = EigenRotation3D(e_R2 * e_R1T);
-  const EigenRotation3D e_R21 = EigenRotation3D(e_R12.transpose());
-  const EigenVector3f e_drbw = EigenVector3f(-e_Jrbw * e_dbw);
+  const EigenRotation3D e_R12 = EigenRotation3D(e_R2 * e_R1T);//e_R12 = Rc0jw * Rwc0i
+  const EigenRotation3D e_R21 = EigenRotation3D(e_R12.transpose());//e_R21 = (Rc0jw * Rwc0i).t
+  const EigenVector3f e_drbw = EigenVector3f(-e_Jrbw * e_dbw);// - dr/bw * (bw_wc0i - m_bw)
 #ifdef CFG_IMU_FULL_COVARIANCE
   //const EigenRotation3D e_eR = EigenRotation3D(e_RdT * EigenRotation3D(e_drbw) * e_R12, eps);
   const EigenRotation3D e_eR = GetRotationMeasurement(C1, eps) / GetRotationState(C1, C2);
-#else
+
+//GetRotationMeasurement(C1, eps)是m_RT*exp[-(m_Jrbw*(C1.m_bw - m_bw))]x.t =>
+// Rc0i_c0j*exp[(m_Jrbw*(C1.m_bw - m_bw))]x 因为是jpl转的R,所以是exp[-th]
+//GetRotationState(C1, C2) 是 Rc0i_w *Rc0j_w.t
+// e_eR => Rc0i_c0j*exp[(m_Jrbw*(C1.m_bw - m_bw))]x * ((Rc0i_w *Rc0j_w.t)).t
+
+  #else
   const EigenRotation3D e_eR = EigenRotation3D(e_R12 * e_RdT * EigenRotation3D(e_drbw));
 #endif
   const EigenVector3f e_er = e_eR.GetRodrigues(eps);
@@ -1291,21 +1320,22 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
   e_J->Set(J);
 #endif
 }
-void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
-                                  const Rotation3D &Rg, EigenError *e_e,
-                                  EigenJacobian::RelativeLF *e_J, const float eps) const {
-  const EigenVector3f e_ba = EigenVector3f(m_ba), e_bw = EigenVector3f(m_bw);
-  const EigenRotation3D e_RdT = EigenRotation3D(m_RT), e_Rd = EigenRotation3D(e_RdT.transpose());
-  const EigenVector3f e_vd = EigenVector3f(m_v), e_pd = EigenVector3f(m_p);
-  const EigenMatrix3x3f e_Jrbw = EigenMatrix3x3f(m_Jrbw);
-  const EigenMatrix3x3f e_Jvba = EigenMatrix3x3f(m_Jvba), e_Jvbw = EigenMatrix3x3f(m_Jvbw);
-  const EigenMatrix3x3f e_Jpba = EigenMatrix3x3f(m_Jpba), e_Jpbw = EigenMatrix3x3f(m_Jpbw);
 
-  const Rotation3D R1 = Rotation3D(C1.m_T) / Rg, R2 = Rotation3D(C2.m_T) / Rg;
-  const Point3D p1 = Rg.GetApplied(C1.m_p), p2 = Rg.GetApplied(C2.m_p);
-  const Point3D v1 = C1.m_T.GetAppliedRotation(C1.m_v), v2 = C2.m_T.GetAppliedRotation(C2.m_v);
-  const EigenRotation3D e_Rg = EigenRotation3D(Rg), e_RgT = EigenRotation3D(e_Rg.transpose());
-  const EigenVector3f e_g(0.0f, 0.0f, IMU_GRAVITY_EXCLUDED ? 0.0f : -IMU_GRAVITY_MAGNITUDE);
+void Delta::EigenGetErrorJacobian(const Camera &C1/*最老帧状态*/, const Camera &C2/*次老帧(j)状态*/, const Point3D &pu/*tc0_i*/,
+                                  const Rotation3D &Rg/*kf的Rc0w*/, EigenError *e_e,
+                                  EigenJacobian::RelativeLF *e_J, const float eps) const {
+  const EigenVector3f e_ba = EigenVector3f(m_ba), e_bw = EigenVector3f(m_bw);//预积分
+  const EigenRotation3D e_RdT = EigenRotation3D(m_RT)/*预积分Rc0i_c0j*/, e_Rd = EigenRotation3D(e_RdT.transpose());/*预积分Rc0j_c0i*/
+  const EigenVector3f e_vd = EigenVector3f(m_v)/*预积分vc0i_c0j*/, e_pd = EigenVector3f(m_p);/*预积分pc0i_c0j*/
+    const EigenMatrix3x3f e_Jrbw = EigenMatrix3x3f(m_Jrbw);//dr/bw
+    const EigenMatrix3x3f e_Jvba = EigenMatrix3x3f(m_Jvba)/*dv/da*/, e_Jvbw = EigenMatrix3x3f(m_Jvbw);/*dv/dw*/
+    const EigenMatrix3x3f e_Jpba = EigenMatrix3x3f(m_Jpba)/*dp/da*/, e_Jpbw = EigenMatrix3x3f(m_Jpbw);/*dp/dw*/
+
+  const Rotation3D R1 = Rotation3D(C1.m_Cam_pose) / Rg/*Rcick = Rciw*Rckw.t*/, R2 = Rotation3D(C2.m_Cam_pose) / Rg;/*Rcjck = Rcjw*Rckw.t*/
+  const Point3D p1 = Rg.GetApplied(C1.m_p)/*Rckw*twci*/, p2 = Rg.GetApplied(C2.m_p);/*Rckw*twcj*/
+  const Point3D v1 = C1.m_Cam_pose.GetAppliedRotation(C1.m_v)/*Rciw*vwi*/, v2 = C2.m_Cam_pose.GetAppliedRotation(C2.m_v);/*Rcjw*vwj*/
+  const EigenRotation3D e_Rg = EigenRotation3D(Rg)/*Rckw*/, e_RgT = EigenRotation3D(e_Rg.transpose());/*Rckw.t*/
+  const EigenVector3f e_g(0.0f, 0.0f, IMU_GRAVITY_EXCLUDED ? 0.0f : -IMU_GRAVITY_MAGNITUDE);//重力在东北天的方向
   const EigenRotation3D e_R1 = EigenRotation3D(R1), e_R1T = EigenRotation3D(e_R1.transpose());
   const EigenRotation3D e_R2 = EigenRotation3D(R2), e_R2T = EigenRotation3D(e_R2.transpose());
   const EigenPoint3D e_p1 = EigenPoint3D(p1), e_p2 = EigenPoint3D(p2);
@@ -1316,19 +1346,21 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
   const EigenVector3f e_dbw = EigenVector3f(e_bw1 - e_bw);
   const EigenVector3f e_pu = EigenVector3f(pu);
 
-  const EigenRotation3D e_R12 = EigenRotation3D(e_R2 * e_R1T);
+
+  const EigenRotation3D e_R12 = EigenRotation3D(e_R2 * e_R1T);////e_R12 = Rcjck * Rckci
   const EigenRotation3D e_R21 = EigenRotation3D(e_R12.transpose());
   const EigenVector3f e_drbw = EigenVector3f(-e_Jrbw * e_dbw);
 #ifdef CFG_IMU_FULL_COVARIANCE
   //const EigenRotation3D e_eR = EigenRotation3D(e_RdT * EigenRotation3D(e_drbw) * e_R12, eps);
-  const EigenRotation3D e_eR = GetRotationMeasurement(C1, eps) / GetRotationState(C1, C2);
-#else
-  const EigenRotation3D e_eR = EigenRotation3D(e_R12 * e_RdT * EigenRotation3D(e_drbw), eps);
+  const EigenRotation3D e_eR = GetRotationMeasurement(C1, eps) / GetRotationState(C1, C2);//m_RT*exp[-(m_Jrbw*(C1.m_bw - m_bw))]x.t
+#else //e_eR => Rc0i_c0j*exp[(m_Jrbw*(C1.m_bw - m_bw))]x * (Rc0j_w *Rc0i_w.t)
+
+    const EigenRotation3D e_eR = EigenRotation3D(e_R12 * e_RdT * EigenRotation3D(e_drbw), eps);
 #endif
   const EigenVector3f e_er = e_eR.GetRodrigues(eps);
   const EigenMatrix3x3f e_JrI = EigenRotation3D::GetRodriguesJacobianInverse(e_er, eps);
 #ifdef CFG_IMU_FULL_COVARIANCE
-  const EigenMatrix3x3f e_Jrr2 = EigenMatrix3x3f(e_JrI * (e_eR * e_R1));
+  const EigenMatrix3x3f e_Jrr2 = EigenMatrix3x3f(e_JrI * (e_eR * e_R1/*Rcick*/));
 #else
   const EigenMatrix3x3f e_Jrr2 = EigenMatrix3x3f(e_JrI * e_R2);
 #endif
@@ -1337,6 +1369,8 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
   const EigenMatrix3x3f e_Jrbw1 = EigenMatrix3x3f(-e_JrI * e_RdT *
                                                   EigenRotation3D::GetRodriguesJacobian(e_drbw, eps) *
                                                   e_Jrbw);
+
+
 #else
   const EigenMatrix3x3f e_Jrbw1 = EigenMatrix3x3f(-e_JrI * e_R12 * e_RdT *
                                                   EigenRotation3D::GetRodriguesJacobian(e_drbw, eps) *
@@ -1354,7 +1388,7 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
                                                  EigenVector3f(e_R2.transpose() * e_v2)));
   const EigenMatrix3x3f e_Jvv2 = e_R21;
   const EigenMatrix3x3f e_Jvrg = EigenMatrix3x3f(-e_R1 * e_Rg * EigenSkewSymmetricMatrix(e_g) *
-                                                 m_Tvg);
+                                                 m_Tvg);//重力的扰动
 
   EigenVector3f e_p12 = EigenVector3f(e_R2T * e_pu + e_p2 - e_p1 - e_Rg * e_g * m_Tpg);
   const EigenMatrix3x3f e_Jpr1 = EigenMatrix3x3f(e_R1 * EigenSkewSymmetricMatrix(e_p12));
@@ -1479,7 +1513,7 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
   e_J->m_Jv.block<3, 3>(0, 12) = e_Jvbw1;
   e_J->m_Jv.block<3, 3>(0, 18) = e_Jvr2;
   e_J->m_Jv.block<3, 3>(0, 21) = e_Jvv2;
-  e_J->m_JvgT = EigenMatrix2x3f(e_Jvrg.block<3, 2>(0, 0).transpose());
+  e_J->m_JvgT = EigenMatrix2x3f(e_Jvrg.block<3, 2>(0, 0).transpose());//z固定不动,只取前两列
   e_e->m_ep = e_ep;
   e_J->m_Jp.setZero();
   e_J->m_Jp.block<3, 3>(0, 0) = e_Jpp1;
@@ -1512,8 +1546,8 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
 void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
                                   EigenError *e_e, EigenJacobian::RelativeKF *e_J,
                                   const float eps) const {
-  const Rotation3D Rg = C1.m_T;
-  EigenGetErrorJacobian(C1, C2, pu, Rg, e_e, e_J, eps);
+  const Rotation3D Rg = C1.m_Cam_pose;//Rc0w(KF)
+  EigenGetErrorJacobian(C1, C2, pu, Rg/*Rc0w(KF)*/, e_e, e_J, eps);
   e_J->m_Jr.block<3, 6>(0, 0).setZero();
   e_J->m_Jv.block<3, 6>(0, 0).setZero();
   e_J->m_Jp.block<3, 6>(0, 0).setZero();
@@ -1521,50 +1555,50 @@ void Delta::EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Poin
   e_J->m_Jbw.block<3, 6>(0, 0).setZero();
 }
 
-void Delta::EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+void Delta::EigenGetFactor(const float gyr, const Camera &C1/*前一帧状态*/, const Camera &C2/*后一帧状态*/, const Point3D &pu/*tc0_i*/,
                            EigenFactor::Global *e_A, const float eps) const {
   EigenError e_e;
   EigenJacobian::Global e_J;
-  EigenGetErrorJacobian(C1, C2, pu, &e_e, &e_J, eps);
-  EigenGetFactor(w, m_W, e_J, e_e, e_A);
+  EigenGetErrorJacobian(C1/*前一帧状态*/, C2/*后一帧状态*/, pu/*tc0_i*/, &e_e, &e_J, eps);
+  EigenGetFactor(gyr, m_W, e_J, e_e, e_A);
 }
 
-void Delta::EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+void Delta::EigenGetFactor(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                            const Rotation3D &Rg, EigenFactor::RelativeLF *e_A,
                            const float eps) const {
   EigenError e_e;
   EigenJacobian::RelativeLF e_J;
   EigenGetErrorJacobian(C1, C2, pu, Rg, &e_e, &e_J, eps);
-  EigenGetFactor(w, m_W, e_J, e_e, e_A);
+  EigenGetFactor(gyr, m_W, e_J, e_e, e_A);
 }
 
-void Delta::EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+void Delta::EigenGetFactor(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                            EigenFactor::RelativeKF *e_A, const float eps) const {
   EigenError e_e;
   EigenJacobian::RelativeKF e_J;
   EigenGetErrorJacobian(C1, C2, pu, &e_e, &e_J, eps);
-  EigenGetFactor(w, m_W, e_J, e_e, e_A);
+  EigenGetFactor(gyr, m_W, e_J, e_e, e_A);
 }
 
-void Delta::EigenGetFactor(const float w, const Weight &W, const EigenJacobian::Global &e_J,
+void Delta::EigenGetFactor(const float gyr, const Weight &W, const EigenJacobian::Global &e_J,
                            const EigenError &e_e, EigenFactor::Global *e_A) {
 #ifdef CFG_IMU_FULL_COVARIANCE
   EigenMatrix15x30f e_J_;
   EigenVector15f e_e_;
   e_J.Get(&e_J_);
   e_e.Get(&e_e_);
-  const EigenWeight e_W(w, W);
+  const EigenWeight e_W(gyr, W);
   const EigenMatrix30x15f e_JTW = EigenMatrix30x15f(e_J_.transpose() * e_W);
   const EigenMatrix30x30f e_A_ = EigenMatrix30x30f(e_JTW * e_J_);
-  const EigenVector30f e_b = EigenVector30f(e_JTW * e_e_);
-  const float e_F = e_e_.dot(e_W * e_e_);
+  const EigenVector30f e_b = EigenVector30f(e_JTW * e_e_);//Jt*W*e
+  const float e_F = e_e_.dot(e_W * e_e_);//costfun
   e_A->Set(e_A_, e_b, e_F);
 #else
-  const EigenMatrix3x3f e_Wr = EigenMatrix3x3f(w * EigenMatrix3x3f(W.m_Wr));
-  const EigenMatrix3x3f e_Wv = EigenMatrix3x3f(w * EigenMatrix3x3f(W.m_Wv));
-  const EigenMatrix3x3f e_Wp = EigenMatrix3x3f(w * EigenMatrix3x3f(W.m_Wp));
-  const float wba = w * W.m_wba;
-  const float wbw = w * W.m_wbw;
+  const EigenMatrix3x3f e_Wr = EigenMatrix3x3f(gyr * EigenMatrix3x3f(W.m_Wr));
+  const EigenMatrix3x3f e_Wv = EigenMatrix3x3f(gyr * EigenMatrix3x3f(W.m_Wv));
+  const EigenMatrix3x3f e_Wp = EigenMatrix3x3f(gyr * EigenMatrix3x3f(W.m_Wp));
+  const float wba = gyr * W.m_wba;
+  const float wbw = gyr * W.m_wbw;
   const EigenMatrix3x30f e_WJr = EigenMatrix3x30f(e_Wr * e_J.m_Jr);
   const EigenMatrix3x30f e_WJv = EigenMatrix3x30f(e_Wv * e_J.m_Jv);
   const EigenMatrix3x30f e_WJp = EigenMatrix3x30f(e_Wp * e_J.m_Jp);
@@ -1583,16 +1617,16 @@ void Delta::EigenGetFactor(const float w, const Weight &W, const EigenJacobian::
 #endif
 }
 
-void Delta::EigenGetFactor(const float w, const Weight &W, const EigenJacobian::RelativeLF &e_J,
+void Delta::EigenGetFactor(const float gyr, const Weight &W, const EigenJacobian::RelativeLF &e_J,
                            const EigenError &e_e, EigenFactor::RelativeLF *e_A) {
-  EigenGetFactor(w, W, EigenJacobian::Global(e_J), e_e, (EigenFactor::Global *) e_A);
+  EigenGetFactor(gyr, W, EigenJacobian::Global(e_J), e_e, (EigenFactor::Global *) e_A);
 #ifdef CFG_IMU_FULL_COVARIANCE
   EigenMatrix15x2f e_Jg;
   EigenMatrix15x30f e_Jc;
   EigenVector15f e_e_;
   e_J.Get(&e_Jg, &e_Jc);
   e_e.Get(&e_e_);
-  const EigenWeight e_W(w, W);
+  const EigenWeight e_W(gyr, W);
   const EigenMatrix2x15f e_JgTW = EigenMatrix2x15f(e_Jg.transpose() * e_W);
   const EigenMatrix2x2f e_Agg = EigenMatrix2x2f(e_JgTW * e_Jg);
   const EigenMatrix2x30f e_Agc = EigenMatrix2x30f(e_JgTW * e_Jc);
@@ -1601,8 +1635,8 @@ void Delta::EigenGetFactor(const float w, const Weight &W, const EigenJacobian::
   e_Agc.Get(e_A->m_Agc1, e_A->m_Agm1, e_A->m_Agc2, e_A->m_Agm2);
   e_A->m_bg = e_bg;
 #else
-  const EigenMatrix3x3f e_Wv = EigenMatrix3x3f(w * EigenMatrix3x3f(W.m_Wv));
-  const EigenMatrix3x3f e_Wp = EigenMatrix3x3f(w * EigenMatrix3x3f(W.m_Wp));
+  const EigenMatrix3x3f e_Wv = EigenMatrix3x3f(gyr * EigenMatrix3x3f(W.m_Wv));
+  const EigenMatrix3x3f e_Wp = EigenMatrix3x3f(gyr * EigenMatrix3x3f(W.m_Wp));
   const EigenMatrix3x31f e_WJv = EigenMatrix3x31f(e_Wv * EigenMatrix3x31f(e_J.m_Jv, e_e.m_ev));
   const EigenMatrix3x31f e_WJp = EigenMatrix3x31f(e_Wp * EigenMatrix3x31f(e_J.m_Jp, e_e.m_ep));
   const EigenMatrix2x31f e_Agc = EigenMatrix2x31f(e_J.m_JvgT * e_WJv + e_J.m_JpgT * e_WJp);
@@ -1622,7 +1656,7 @@ Delta::EigenError Delta::EigenGetError(const EigenErrorJacobian &e_Je, const Eig
   return e_e;
 }
 
-float Delta::EigenGetCost(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+float Delta::EigenGetCost(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                           const EigenVector6f &e_xc1, const EigenVector9f &e_xm1,
                           const EigenVector6f &e_xc2, const EigenVector9f &e_xm2,
                           const float eps) const {
@@ -1634,9 +1668,9 @@ float Delta::EigenGetCost(const float w, const Camera &C1, const Camera &C2, con
   EigenVector15f e_e_;
   e_e.Get(&e_e_);
   const EigenWeight e_W(m_W);
-  const float F = w * (e_W * e_e_).dot(e_e_);
+  const float F = gyr * (e_W * e_e_).dot(e_e_);
 #else
-  const float F = w * ((EigenMatrix3x3f(m_W.m_Wr) * e_e.m_er).dot(e_e.m_er) +
+  const float F = gyr * ((EigenMatrix3x3f(m_W.m_Wr) * e_e.m_er).dot(e_e.m_er) +
                        (EigenMatrix3x3f(m_W.m_Wv) * e_e.m_ev).dot(e_e.m_ev) +
                        (EigenMatrix3x3f(m_W.m_Wp) * e_e.m_ep).dot(e_e.m_ep) +
                        m_W.m_wba * e_e.m_eba.squaredNorm() +

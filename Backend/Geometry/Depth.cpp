@@ -149,22 +149,22 @@ float ComputeError(const int N, const Measurement *zs, const InverseGaussian &d)
   }
   return sqrtf(Se2 / N);
 }
-
-bool Triangulate(const float w, const int N, const Measurement *zs, InverseGaussian *d,
-                 AlignedVector<float> *work, const bool initialized,
-                 float *eAvg) {
+//三角化,通过r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1),min F(Uc0) = 0.5*||r(Uc0)||^2（马氏距离下）求解左目特征点的深度
+bool Triangulate(const float w/*1*/, const int N/*0 or 1*/, const Measurement *zs/*地图点的左右目观测*/, InverseGaussian *d/*特征点对应的逆深度*/,
+                 AlignedVector<float> *work/*J部分*/, const bool initialized,
+                 float *eAvg/*平均误差*/) {
   if (N == 0) {
     return false;
   }
   if (!initialized) {
-    d->Initialize();
+    d->Initialize();//初始化深度,初始深度为5m
   }
   float a, b, x;
 #ifdef DEPTH_TRI_DOG_LEG
   float F, Fa, Fp;
   const int Nx2 = N + N;
-  LA::AlignedVectorXf J, e, ep, _w;
-  work->Resize((J.BindSize(Nx2) * 3 + (DEPTH_TRI_ROBUST ? _w.BindSize(N) : 0)) / sizeof(float));
+  LA::AlignedVectorXf J, e, ep/*理论下降值*/, _w;
+  work->Resize((J.BindSize(Nx2) * 3 + (DEPTH_TRI_ROBUST ? _w.BindSize(N) : 0)) / sizeof(float));//扩容
   J.Bind(work->Data(), Nx2);
   e.Bind(J.BindNext(), Nx2);
   ep.Bind(e.BindNext(), Nx2);
@@ -181,7 +181,7 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
 #ifdef DEPTH_TRI_VERBOSE
   const float f = 500.0f;
 #if DEPTH_TRI_VERBOSE == 1
-  UT::Print("e = %f", f * ComputeError(N, zs, *d));
+  UT::Print("e = %f", f * ComputeError(N, feat_measures, *d));
 #else if DEPTH_TRI_VERBOSE == 2
   const InverseGaussian d0 = *d;
 #endif
@@ -193,14 +193,18 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
   for (int iIter = 0; iIter < DEPTH_TRI_MAX_ITERATIONS; ++iIter) {
     a = b = 0.0f;
     for (int i = 0; i < N; ++i) {
-      const Measurement &z = zs[i];
+      const Measurement &z = zs[i];/*地图点的左右目观测*/
 #ifdef DEPTH_TRI_DOG_LEG
       LA::Vector2f &Ji = Jis[i], &ei = eis[i];
 #endif
-      d->Project(*z.m_t, z.m_Rx, ei, Ji);
-      ei -= z.m_z;
-      LA::SymmetricMatrix2x2f::Ab(z.m_W, Ji, WJi);
-      if (DEPTH_TRI_ROBUST) {
+        // 投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+        // Pc0 = Rc0c1 * Pc1 + tc0c1 ==>>  (1/Uc0) * Pnc0 = Rc0c1 * (1/Uc1) * Pnc1 + tc0c1
+        // ==>> Rc0c1 *Pnc1* (Uc0/Uc1) = Pnc0 - Uc0 * tc0c1
+        // ==> 对Pnc0 - Uc0 * tc0c1进行归一化,因为之前对Pnc1也做了（Rc0c1 *Pnc1)归一化坐标,存在z.m_z里
+      d->Project(*z.m_t/*-tc0_c1*/, z.m_Rx/* 左目的无畸变归一化坐标*/, ei, Ji/*残差*/);
+      ei -= z.m_z;// r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1),min F(Uc0) = ||r(Uc0)||^2（马氏距离下）
+      LA::SymmetricMatrix2x2f::Ab(z.m_W, Ji, WJi);//WJi = z.m_W *Ji
+      if (DEPTH_TRI_ROBUST) {//huber核函数
         const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, ei);
         const float wi = ME::Weight<ME::FUNCTION_HUBER>(r2);
         WJi *= wi;
@@ -212,44 +216,44 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
         UT::Print("%d %f\n", i, wi);
 #endif
       }
-      a += WJi.Dot(Ji);
-      b += WJi.Dot(ei);
+      a += WJi.Dot(Ji);//WJi.t *Ji 更新H矩阵(WJi的作为是马氏距离归一化),优化变量是逆深度,所以是1×1
+      b += WJi.Dot(ei);//WJi.t * r 更新-b
 #if 0
 //#if 1
-      UT::Print("%d %f %f\n", i, a, b);
+      UT::Print("%d %f %f\n", i, acc, b);
 #endif
     }
     if (a <= eps) {
       return false;
     }
-    d->s2() = 1.0f / a;
-    x = -d->s2() * b;
+    d->s2() = 1.0f / a;//H^-1,协方差更新
+    x = -d->s2() * b;// x = H^-1*-(-b) = H^-1*b 求出G-N法的增量
 #ifdef DEPTH_TRI_DOG_LEG
     const float xGN = x;
     F = 0.0f;
     for (int i = 0; i < N; ++i) {
-      F += LA::SymmetricMatrix2x2f::MahalanobisDistance(zs[i].m_W, eis[i]);
+      F += LA::SymmetricMatrix2x2f::MahalanobisDistance(zs[i].m_W, eis[i]);//归一化一下(马氏距离)
     }
-    const float dBkp = d->u();
+    const float dBkp = d->u();//优化变量的备份,用来回滚
     bool update = true, converge = false;
-    for (int iIterDL = 0; iIterDL < DEPTH_TRI_DL_MAX_ITERATIONS; ++iIterDL) {
-      if (fabs(xGN) <= delta) {
+    for (int iIterDL = 0; iIterDL < DEPTH_TRI_DL_MAX_ITERATIONS; ++iIterDL) {//这里也没用dogleg啊,用的还是GN
+      if (fabs(xGN) <= delta) {//信赖域内,那么就是一个无约束问题
         x = xGN;
       } else {
         x = x > 0.0f ? delta : -delta;
       }
-      d->u() = x + d->u();
+      d->u() = x + d->u();//加上增量
 
-      J.GetScaled(x, ep);
+      J.GetScaled(x, ep);//Jx = ep
       ep += e;
-      Fa = Fp = 0.0f;
+      Fa /*实际下降*/= Fp/*理论下降*/ = 0.0f;
       for (int i = 0; i < N; ++i) {
-        const Measurement &z = zs[i];
-        LA::Vector2f &ei = epis[i];
-        const float Fpi = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, ei);
+        const Measurement &z = zs[i];/*地图点的左右目观测*/
+        LA::Vector2f &ei = epis[i];//Jx
+        const float Fpi = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, ei);//理论下降J*deltax再归一化一下
         d->Project(*z.m_t, z.m_Rx, ei);
         ei -= z.m_z;
-        const float Fai = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, ei);
+        const float Fai = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, ei);//实际下降的
         if (DEPTH_TRI_ROBUST) {
           Fp += Fpi * _w[i];
           Fa += Fai * _w[i];
@@ -259,19 +263,19 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
         }
       }
       const float dFa = F - Fa, dFp = F - Fp;
-      const float rho = dFa > 0.0f && dFp > 0.0f ? dFa / dFp : -1.0f;
-      if (rho < DEPTH_TRI_DL_GAIN_RATIO_MIN) {
+      const float rho = dFa > 0.0f && dFp > 0.0f ? dFa / dFp : -1.0f;//实际下降/理论下降
+      if (rho < DEPTH_TRI_DL_GAIN_RATIO_MIN) {//<0.25,如果大于0说明近似的不好,需要减小信赖域,减小近似的范围。如果<0就说明是错误的近似,那么就拒绝这次的增量
         delta *= DEPTH_TRI_DL_RADIUS_FACTOR_DECREASE;
         if (delta < DEPTH_TRI_DL_RADIUS_MIN) {
           delta = DEPTH_TRI_DL_RADIUS_MIN;
         }
-        d->u() = dBkp;
+        d->u() = dBkp;//放弃更新,回滚
         update = false;
         converge = false;
         continue;
-      } else if (rho > DEPTH_TRI_DL_GAIN_RATIO_MAX) {
+      } else if (rho > DEPTH_TRI_DL_GAIN_RATIO_MAX) {//rho > 0.75,可以扩大信赖域半径
         delta = std::max(delta, DEPTH_TRI_DL_RADIUS_FACTOR_INCREASE * static_cast<float>(fabs(x)));
-        if (delta > DEPTH_TRI_DL_RADIUS_MAX) {
+        if (delta > DEPTH_TRI_DL_RADIUS_MAX) {//信赖域上限
           delta = DEPTH_TRI_DL_RADIUS_MAX;
         }
       }
@@ -293,14 +297,14 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
     if (iIter == 0) {
       UT::PrintSeparator();
       UT::Print("%se = %f  z = %f\n", std::string(str.size(), ' ').c_str(),
-                f * ComputeError(N, zs, d0), 1.0f / d0.u());
+                f * ComputeError(N, feat_measures, d0), 1.0f / d0.u());
     }
-    UT::Print("%se = %f  z = %f  x = %f\n", str.c_str(), f * ComputeError(N, zs, *d),
+    UT::Print("%se = %f  z = %f  x = %f\n", str.c_str(), f * ComputeError(N, feat_measures, *d),
               1.0f / d->u(), x);
 #endif
   }
 #if defined DEPTH_TRI_VERBOSE && DEPTH_TRI_VERBOSE == 1
-  UT::Print(" --> %f  z = %f  s = %f", f * ComputeError(N, zs, *d), 1.0f / d->u(), sqrtf(d->s2()));
+  UT::Print(" --> %f  z = %f  s = %f", f * ComputeError(N, feat_measures, *d), 1.0f / d->u(), sqrtf(d->s2()));
   if (!d->Valid()) {
     UT::Print("  FAIL");
   }
@@ -308,7 +312,7 @@ bool Triangulate(const float w, const int N, const Measurement *zs, InverseGauss
 #endif
   d->s2() = DEPTH_VARIANCE_EPSILON + d->s2() * w;
   if (eAvg) {
-    *eAvg = ComputeError(N, zs, *d);
+    *eAvg = ComputeError(N, zs, *d);//计算平均误差,这次不是马氏距离了,是欧式距离
   }
   return d->Valid();
 }

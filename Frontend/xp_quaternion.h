@@ -19,12 +19,12 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-
+#include <iostream>
 namespace XP {
-
+//JPL格式的四元数,具体看Indirect Kalman Filter for 3D Attitude Estimation
 class XpQuaternion : public Eigen::Vector4f {
   // "Indirect Kalman Filter for 3D Attitude Estimation"
-  // x y z w
+  // x y z gyr
  public:
   // REQUIRED BY EIGEN
   typedef Eigen::Vector4f Base;
@@ -121,7 +121,9 @@ class XpQuaternion : public Eigen::Vector4f {
   XpQuaternion mul(const XpQuaternion& rhs) const;
 };
 
-inline Eigen::Matrix4f XpComposeOmega(const Eigen::Vector3f& w) {
+//omege(w) = [[w]x  , w]
+//           [-w.t() , 0]
+inline Eigen::Matrix4f XpComposeOmega(const Eigen::Vector3f& w) {//第4维是qw,所以需要换个个儿
   Eigen::Matrix4f Ohm;
   Ohm(0, 0) = 0;     Ohm(0, 1) = -w(2);  Ohm(0, 2) = w(1);   Ohm(0, 3) = w(0);
   Ohm(1, 0) = w(2);  Ohm(1, 1) = 0;      Ohm(1, 2) = -w(0);  Ohm(1, 3) = w(1);
@@ -130,12 +132,15 @@ inline Eigen::Matrix4f XpComposeOmega(const Eigen::Vector3f& w) {
   return Ohm;
 }
 
+//这里应该指的是Indirect Kalaman Filter for 3D Attitude Estimation的第11页
+//他这里的RK4用的四元数的导数是JPL格式推出来的
 // page 11
 // Note we use Vector4f to represent quaternion instead of quaternion
 // because it is better do not normalize q during integration
 inline Eigen::Vector4f XpQuaternionDerivative(
     const Eigen::Vector4f &q,
     const Eigen::Vector3f &omega) {
+
   return -0.5 * XpComposeOmega(omega) * q;
 }
 

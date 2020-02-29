@@ -34,7 +34,7 @@ class Timer {
     m_start = m_avg = 0.0;
     m_times.assign(N, 0.0);
   }
-  inline void Start() { m_start = GetTime(); }
+  inline void Start() { m_start = GetTime(); }//得到电脑unix时间戳
   inline void Stop(const bool finish = false) {
     m_times[m_idx] = GetTime() - m_start + m_times[m_idx];
     if (finish) {
@@ -99,7 +99,7 @@ class Timer {
  private:
   bool m_first;
   int m_idx;
-  double m_start, m_avg;
-  std::vector<double> m_times;
+  double m_start/*记录启动时间*/, m_avg;
+  std::vector<double> m_times;//记录的是间隔时间
 };
 #endif  // UTILITY_TIMER_H_

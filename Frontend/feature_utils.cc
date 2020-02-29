@@ -36,9 +36,12 @@ using std::vector;
 // #define VERIFY_NEON
 
 namespace XP {
+
+    //对图片进行max_level+1层金字塔构建
 void build_pyramids(const cv::Mat& img, int max_level,
                     std::vector<cv::Mat>* _pyramids,
-                    uchar* const pyra_buf_ptr) {
+                    uchar* const pyra_buf_ptr)
+{
   CHECK_NOTNULL(_pyramids);
   std::vector<cv::Mat>& pyramids = *_pyramids;
   pyramids.resize(max_level + 1);
@@ -53,14 +56,16 @@ void build_pyramids(const cv::Mat& img, int max_level,
     // fixed buffer provided
     // the pyramids kept in the fixed buffer in this way:
     // level n |  level n-1 |  level 1  |  level 0
-    // so we can use them in a very cache-friendly way
+    // so we can use them in acc very cache-friendly way
     // and no need to call malloc
-    for (int lvl = 0; lvl <= max_level; ++lvl) {
-      int offset = 0;
+    for (int lvl = 0; lvl <= max_level; ++lvl)
+    {
+      int offset = 0;//地址偏移量
       // compute pyramid start address
       for (int i = lvl + 1; i <= max_level; ++i) {
         offset += size >> (2 * i);
       }
+
       if (lvl != 0) {
         pyramids[lvl] = fast_pyra_down(pyramids[lvl - 1], pyra_buf_ptr + offset);
       } else {
@@ -103,101 +108,109 @@ inline cv::Mat fast_mask_pyra_down(const cv::Mat& mask) {
 }
 
 // 1. refine_kp_in_larger_img takes the keypoints in the small image (higher pyramid level),
-//    and search in a local region in the large image (lower pyramid level).  The refined
+//    and search in acc local region in the large image (lower pyramid level).  The refined
 //    keypoint location is computed as the weighted average of local points by harris response.
 // 2. The response of the refined keypoint is passed from the response from the original detection.
 //    May NOT be harris response though.
+
+//输入：当前金子塔层下一层的图片,当前金字塔层提取到的特征点,细化到下一层以后的特征点
 inline bool refine_kp_in_larger_img(const cv::Mat& img_in_smooth,
                                     const std::vector<cv::KeyPoint>& kp_in_small_img,
-                                    std::vector<cv::KeyPoint>* refined_kp_in_large_img_ptr) {
-  CHECK_NOTNULL(refined_kp_in_large_img_ptr);
-  std::vector<cv::KeyPoint>& refined_kp_in_large_img = *refined_kp_in_large_img_ptr;
-  std::vector<cv::KeyPoint> local_kps;
-  constexpr int harris_block_size = 7;  // 5 does not give correct results
-  refined_kp_in_large_img.clear();
-  refined_kp_in_large_img.reserve(kp_in_small_img.size());
-  constexpr int compress_ratio = 2;
-
-  for (int kp_small_idx = 0 ; kp_small_idx < kp_in_small_img.size(); ++kp_small_idx) {
-    const cv::KeyPoint& key_pnt_small = kp_in_small_img[kp_small_idx];
-    local_kps.clear();
-    local_kps.reserve(compress_ratio * 2 * compress_ratio * 2);
-    for (int y = key_pnt_small.pt.y * compress_ratio - compress_ratio + 1;
-         y < key_pnt_small.pt.y * compress_ratio + compress_ratio; y++) {
-      for (int x = key_pnt_small.pt.x * compress_ratio - compress_ratio + 1;
-           x < key_pnt_small.pt.x * compress_ratio + compress_ratio; x++) {
-        if (y > harris_block_size / 2 && x > harris_block_size / 2
-            && y < img_in_smooth.rows - harris_block_size / 2
-            && x < img_in_smooth.cols - harris_block_size / 2) {
-          cv::KeyPoint local_kp = key_pnt_small;
-          local_kp.pt.x = x;
-          local_kp.pt.y = y;
-          local_kps.push_back(local_kp);
+                                    std::vector<cv::KeyPoint>* refined_kp_in_large_img_ptr)
+{
+    CHECK_NOTNULL(refined_kp_in_large_img_ptr);
+    std::vector<cv::KeyPoint>& refined_kp_in_large_img = *refined_kp_in_large_img_ptr;
+    std::vector<cv::KeyPoint> local_kps;
+    constexpr int harris_block_size = 7;  // 5 does not give correct results
+    refined_kp_in_large_img.clear();
+    refined_kp_in_large_img.reserve(kp_in_small_img.size());
+    constexpr int compress_ratio = 2;
+//遍历所有det_pyra_level层检测到的特征点
+    for (int kp_small_idx = 0 ; kp_small_idx < kp_in_small_img.size(); ++kp_small_idx)
+    {
+        //按缩放比例推到下一层上算出一个特征点大概所在的位置,有一个compress_ratio的浮动范围，都存在local_kps
+        const cv::KeyPoint& key_pnt_small = kp_in_small_img[kp_small_idx];
+        local_kps.clear();
+        local_kps.reserve(compress_ratio * 2 * compress_ratio * 2);
+        for (int y = key_pnt_small.pt.y * compress_ratio - compress_ratio + 1;
+             y < key_pnt_small.pt.y * compress_ratio + compress_ratio; y++) {
+            for (int x = key_pnt_small.pt.x * compress_ratio - compress_ratio + 1;
+                 x < key_pnt_small.pt.x * compress_ratio + compress_ratio; x++)
+            {
+                if (y > harris_block_size / 2 && x > harris_block_size / 2
+                    && y < img_in_smooth.rows - harris_block_size / 2
+                    && x < img_in_smooth.cols - harris_block_size / 2) {
+                    cv::KeyPoint local_kp = key_pnt_small;
+                    local_kp.pt.x = x;
+                    local_kp.pt.y = y;
+                    local_kps.push_back(local_kp);
+                }
+            }
         }
-      }
-    }
 
-    // If the local keypoints (in large image) are NOT empty, we compute the weighted average
-    // of the point location and response.
-    if (local_kps.size() > 0) {
-      ORBextractor::HarrisResponses(img_in_smooth, harris_block_size, 0.04f, &local_kps);
-      float score_total = 0;
-      float x_weighted_sum = 0;
-      float y_weighted_sum = 0;
-      float highest_score = - std::numeric_limits<float>::max();
-      int best_local_kp_id = -1;
-      for (size_t i = 0; i < local_kps.size(); i++) {
-        if (local_kps[i].response > 0) {
-          // ignore points whose harris response is less than 0
-          score_total += local_kps[i].response;
-          x_weighted_sum += local_kps[i].pt.x * local_kps[i].response;
-          y_weighted_sum += local_kps[i].pt.y * local_kps[i].response;
-          if (local_kps[i].response > highest_score) {
-            highest_score = local_kps[i].response;
-            best_local_kp_id = i;
-          }
-        }
+        // If the local keypoints (in large image) are NOT empty, we compute the weighted average
+        // of the point location and response.
+        //这个区域内算一个最大响应的local_kps点,用加权坐标作为最后的特征点。
+        if (local_kps.size() > 0) {
+            ORBextractor::HarrisResponses(img_in_smooth, harris_block_size, 0.04f, &local_kps);
+            float score_total = 0;
+            float x_weighted_sum = 0;
+            float y_weighted_sum = 0;
+            float highest_score = - std::numeric_limits<float>::max();
+            int best_local_kp_id = -1;
+            for (size_t i = 0; i < local_kps.size(); i++)
+            {
+                if (local_kps[i].response > 0) {
+                    // ignore points whose harris response is less than 0
+                    score_total += local_kps[i].response;
+                    x_weighted_sum += local_kps[i].pt.x * local_kps[i].response;
+                    y_weighted_sum += local_kps[i].pt.y * local_kps[i].response;
+                    if (local_kps[i].response > highest_score) {
+                        highest_score = local_kps[i].response;
+                        best_local_kp_id = i;
+                    }
+                }
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-        VLOG(3) << "local_kp.response " << local_kps[i].response
+                VLOG(3) << "local_kp.response " << local_kps[i].response
                 << " local_kp.pt " << local_kps[i].pt
                 << " score_total " << score_total;
 #endif
-      }
-      if (best_local_kp_id < 0) {
+            }
+            if (best_local_kp_id < 0) {
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-        VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
+                VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
                 << "] fails: no positive harris response";
 #endif
-        continue;
-      }
-      cv::KeyPoint best_local_kp = local_kps[best_local_kp_id];  // copy scale score etc.
-      // use weighted average
-      if (highest_score > 1e-9) {
-        best_local_kp.pt.x = round(x_weighted_sum / score_total);
-        best_local_kp.pt.y = round(y_weighted_sum / score_total);
+                continue;
+            }
+            cv::KeyPoint best_local_kp = local_kps[best_local_kp_id];  // copy scale score etc.
+            // use weighted average
+            if (highest_score > 1e-9) {
+                best_local_kp.pt.x = round(x_weighted_sum / score_total);
+                best_local_kp.pt.y = round(y_weighted_sum / score_total);
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-        VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
+                VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
                 << "]: pt = " << best_local_kp.pt;
 #endif
-        refined_kp_in_large_img.push_back(best_local_kp);
-      } else {
+                refined_kp_in_large_img.push_back(best_local_kp);
+            } else {
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-        VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
+                VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
                 << "] fails: weak harris response = " << highest_score;
 #endif
-      }
-    } else {
-      auto kp = key_pnt_small;
-      kp.pt.x *= compress_ratio;
-      kp.pt.y *= compress_ratio;
+            }
+        } else {
+            auto kp = key_pnt_small;
+            kp.pt.x *= compress_ratio;
+            kp.pt.y *= compress_ratio;
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-      VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
+            VLOG(3) << "refine best_local_kp for kp_small[" << kp_small_idx
                 << "] direct pass through (local_kps is empty)";
 #endif
-      refined_kp_in_large_img.push_back(kp);
+            refined_kp_in_large_img.push_back(kp);
+        }
     }
-  }
-  return true;
+    return true;
 }
 
 // The design concept is to trace rays along the diagonal of FOV, say
@@ -205,71 +218,78 @@ inline bool refine_kp_in_larger_img(const cv::Mat& img_in_smooth,
 // Then take the average of the farthest ray that is still projected inside the image
 // as the cropping FOV.
 // However, we limit the FOV upper bound to 160 degrees (for fisheye case).
+// 使用的还是原始的内参和畸变参数
+// 输出单目mask和视场角
 bool generate_cam_mask(const cv::Matx33f& K,
                        const cv::Mat_<float>& dist_coeffs,
                        const cv::Size& mask_size,
                        cv::Mat_<uchar>* cam_mask,
-                       float* fov_deg) {
-  CHECK_GT(mask_size.width, 0);
-  CHECK_GT(mask_size.height, 0);
-  CHECK_EQ(cam_mask->rows, 0);
-  cam_mask->create(mask_size);
-  cam_mask->setTo(0xff);
+                       float* fov_deg)
+{
+    CHECK_GT(mask_size.width, 0);
+    CHECK_GT(mask_size.height, 0);
+    CHECK_EQ(cam_mask->rows, 0);
+    cam_mask->create(mask_size);
+    cam_mask->setTo(0xff);
 
-  const float theta = std::atan2(mask_size.height, mask_size.width);
-  std::vector<int> viewable_degs = {0, 0};
-  for (int i = 0; i < 2; ++i) {
-    int direction = i * 2 - 1;
-    for (int deg = 30; deg < 90; deg += 5) {
-      float d = std::tan(deg * M_PI / 180.f);
-      float a = direction * d * cos(theta);
-      float b = direction * d * sin(theta);
-      std::vector<cv::Vec3f> ray(1);
-      std::vector<cv::Point2f> dist_pt;
-      ray[0] = cv::Vec3f(a, -b, 1);
-      cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
-      if (dist_pt[0].x > 0 &&
-          dist_pt[0].y > 0 &&
-          dist_pt[0].x < mask_size.width &&
-          dist_pt[0].y < mask_size.height) {
-        viewable_degs[i] = deg;
-      } else {
-        break;
-      }
+    const float theta = std::atan2(mask_size.height, mask_size.width);
+    std::vector<int> viewable_degs = {0, 0};
+    for (int i = 0; i < 2; ++i)
+    {
+        int direction = i * 2 - 1;
+        //30-90之间采样
+        for (int deg = 30; deg < 90; deg += 5)
+        {
+            float d = std::tan(deg * M_PI / 180.f);//相机坐标系是一般是右下前,这里射线假设z是1,采样的是fov的一半的射线角度
+            float a = direction * d * cos(theta);
+            float b = direction * d * sin(theta);
+            std::vector<cv::Vec3f> ray(1);
+            std::vector<cv::Point2f> dist_pt;
+            ray[0] = cv::Vec3f(a, -b, 1);
+            cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+            if (dist_pt[0].x > 0 &&
+                dist_pt[0].y > 0 &&
+                dist_pt[0].x < mask_size.width &&
+                dist_pt[0].y < mask_size.height) {
+                viewable_degs[i] = deg;//算出最大的一半的fov角度
+            } else {
+                break;
+            }
+        }
     }
-  }
 
-  if (viewable_degs[0] == 0 || viewable_degs[1] == 0) {
-    // FOV cannot be estimated.  Return an empty mask.
-    LOG(ERROR) << "Cannot find proper FOV to generate camera mask";
-    return false;
-  }
-
-  *fov_deg = viewable_degs[0] + viewable_degs[1];
-  if (*fov_deg > 160) {
-    *fov_deg = 160;  // cap FOV to 160 degree
-  }
-  float half_fov = *fov_deg / 2;
-  float d = std::tan(half_fov * M_PI / 180.f);
-  std::vector<cv::Vec3f> ray(1);
-  std::vector<cv::Point2f> dist_pt;
-  ray[0] = cv::Vec3f(d, 0, 1);
-  cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
-  cam_mask->create(mask_size);
-  cam_mask->setTo(0xff);
-  const int r = static_cast<int>(dist_pt[0].x - K(0, 2));
-  const int cx = static_cast<int>(K(0, 2));
-  const int cy = static_cast<int>(K(1, 2));
-  for (int i = 0; i < mask_size.height; ++i) {
-    for (int j = 0; j < mask_size.width; ++j) {
-      int rx = j - cx;
-      int ry = i - cy;
-      if (rx * rx + ry * ry > r * r) {
-        (*cam_mask)(i, j) = 0x00;
-      }
+    if (viewable_degs[0] == 0 || viewable_degs[1] == 0) {
+        // FOV cannot be estimated.  Return an empty mask.
+        LOG(ERROR) << "Cannot find proper FOV to generate camera mask";
+        return false;
     }
-  }
-  return true;
+
+    *fov_deg = viewable_degs[0] + viewable_degs[1];//左右各能看到多少度，加起来就是视场角
+    //视场角最多160度
+    if (*fov_deg > 160) {
+        *fov_deg = 160;  // cap FOV to 160 degree
+    }
+    float half_fov = *fov_deg / 2;
+    float d = std::tan(half_fov * M_PI / 180.f);
+    std::vector<cv::Vec3f> ray(1);
+    std::vector<cv::Point2f> dist_pt;
+    ray[0] = cv::Vec3f(d, 0, 1);//计算XOZ面的最大的半径,投影到像素平面上以后减去原点的x,就是半径的距离，以此作为mask的半径
+    cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+    cam_mask->create(mask_size);
+    cam_mask->setTo(0xff);
+    const int r = static_cast<int>(dist_pt[0].x - K(0, 2));
+    const int cx = static_cast<int>(K(0, 2));
+    const int cy = static_cast<int>(K(1, 2));
+    for (int i = 0; i < mask_size.height; ++i) {
+        for (int j = 0; j < mask_size.width; ++j) {
+            int rx = j - cx;
+            int ry = i - cy;
+            if (rx * rx + ry * ry > r * r) {
+                (*cam_mask)(i, j) = 0x00;
+            }
+        }
+    }
+    return true;
 }
 
 namespace internal {
@@ -279,56 +299,70 @@ struct {
   }
 } kp_compare;
 }  // namespace internal
+//
 
-bool detect_orb_features(const cv::Mat& img_in_smooth,
-                         const cv::Mat_<uchar>& mask,
-                         int request_feat_num,
+//step1在第1层金字塔上提取fast点,算Harris响应
+//step2对提取的点进行过滤,让特征点enforce_uniformity_radius范围点无其他点
+//step3计算方向,然后将点从1层到第0层细化坐标
+//step4将在1层Harris响应小的过滤以后,进行点管理并且计算描述子
+bool detect_orb_features(const cv::Mat& img_in_smooth,//相机图片
+                         const cv::Mat_<uchar>& mask,//图像掩码
+                         int request_feat_num,//最大提取的特征数目
                          int pyra_level,  // Total pyramid levels, including the base image
-                         int fast_thresh,
+                         int fast_thresh,//fast角点提取阈值
                          bool use_fast,  // or TomasShi
                          int enforce_uniformity_radius,  // less than 0 means no enforcement
-                         std::vector<cv::KeyPoint>* key_pnts_ptr,
-                         cv::Mat* orb_feat_ptr,
-                         FeatureTrackDetector* feat_track_detector,
-                         float refine_harris_threshold) {
-  CHECK_GT(pyra_level, 0);
-  // Only detect feature at det_pyra_level, and then look for refined corner position at level 0.
-  // For now, all the features are *refined* to pyramid0 as octave is 0 for all detected features
-  // ORBextractor runs detection at det_pyra_level with levels orb_pyra_levels = 1, which means
-  // no multi-pyramids within ORBextractor.
-  // TODO(mingyu): Pre-compute the pyramids if needed to avoid duplicate computation when calling
-  //               multiple times in vio_mapper
-  const int det_pyra_level = pyra_level - 1;
-  const int compress_ratio = 1 << det_pyra_level;
-  vector<cv::Mat> img_pyramids(pyra_level);
-  vector<cv::Mat_<uchar>> mask_pyramids(pyra_level);
-  img_pyramids[0] = img_in_smooth;
-  mask_pyramids[0] = mask;
-  for (int i = 1; i < pyra_level; i++) {
-    img_pyramids[i] = fast_pyra_down(img_pyramids[i - 1]);
-    mask_pyramids[i] = fast_mask_pyra_down(mask_pyramids[i - 1]);
-  }
-  // TODO(mingyu): Reduce more_points_ratio as it seems too conservative.
-  float more_points_ratio = 1.5;  // because refinement may reduce points number
-  enforce_uniformity_radius = enforce_uniformity_radius >> det_pyra_level;
-  if (enforce_uniformity_radius > 5) {
-    more_points_ratio = 3;  // hueristic
-    fast_thresh /= 2;  // usually its set to be 10 - 20
-  }
+                         std::vector<cv::KeyPoint>* key_pnts_ptr,//所有特征点
+                         cv::Mat* orb_feat_ptr,//orb描述子
+                         FeatureTrackDetector* feat_track_detector,//是否要做点管理
+                         float refine_harris_threshold)
+{
+    CHECK_GT(pyra_level, 0);
+    //
+    // Only detect feature at det_pyra_level, and then look for refined corner position at level 0.
+    // For now, all the features are *refined* to pyramid0 as octave is 0 for all detected features
+    // ORBextractor runs detection at det_pyra_level with levels orb_pyra_levels = 1, which means
+    // no multi-pyramids within ORBextractor.
+    // TODO(mingyu): Pre-compute the pyramids if needed to avoid duplicate computation when calling
+    //               multiple times in vio_mapper
+    //倒数第二层提取特征点,在第0层细化角点
+    const int det_pyra_level = pyra_level - 1;//提取角点的金字塔是哪一层
+    const int compress_ratio = 1 << det_pyra_level;//倒数第二层需要压缩的比例
+    vector<cv::Mat> img_pyramids(pyra_level);//所有金字塔层数的图片
+    vector<cv::Mat_<uchar>> mask_pyramids(pyra_level);//所有金字塔层的掩码
+    //第0层,原始图片
+    img_pyramids[0] = img_in_smooth;
+    mask_pyramids[0] = mask;
+    //降采样
+    for (int i = 1; i < pyra_level; i++) {
+        img_pyramids[i] = fast_pyra_down(img_pyramids[i - 1]);
+        mask_pyramids[i] = fast_mask_pyra_down(mask_pyramids[i - 1]);
+    }
+    // TODO(mingyu): Reduce more_points_ratio as it seems too conservative.
+    float more_points_ratio = 1.5;  // because refinement may reduce points number
+    enforce_uniformity_radius = enforce_uniformity_radius >> det_pyra_level;//对应的提取特征点的金字塔层的mask范围也要有一个缩放
 
-  std::vector<std::vector<cv::KeyPoint>> kp_in_pyramids(pyra_level);
-  constexpr int orb_pyra_levels = 1;  // The pyramid levels used in ORBextractor
-  // [NOTE] We need the score (keypoint.response) computed as harris score instead
-  //        of FAST.  It's slower but more discriminative to sort / refine keypoints.
-  ORBextractor orb(request_feat_num * more_points_ratio, 2, orb_pyra_levels,
-                   ORBextractor::HARRIS_SCORE,
-                   fast_thresh,
-                   use_fast);
-  orb.detect(img_pyramids[det_pyra_level],
-             mask_pyramids[det_pyra_level],
-             &kp_in_pyramids[det_pyra_level]);
+    if (enforce_uniformity_radius > 5) {
+        more_points_ratio = 3;  // hueristic
+        fast_thresh /= 2;  // usually its set to be 10 - 20//10这个阈值已经够低了吧,感觉没必要再除2了
+    }
+
+    std::vector<std::vector<cv::KeyPoint>> kp_in_pyramids(pyra_level);//每层金字塔的特征点
+    constexpr int orb_pyra_levels = 1;  // The pyramid levels used in ORBextractor
+    // [NOTE] We need the score (keypoint.response) computed as harris score instead
+    //        of FAST.  It's slower but more discriminative to sort / refine keypoints.
+
+    //keypoint.response用的是harris分数，而不是FAST
+    ORBextractor orb(request_feat_num * more_points_ratio, 2, orb_pyra_levels,
+                     ORBextractor::HARRIS_SCORE,
+                     fast_thresh,
+                     use_fast);
+    //提取fast(但是是用harris响应值),但没有计算256位的描述子,注意,这里只在det_pyra_level这层提取了特征点
+    orb.detect(img_pyramids[det_pyra_level],
+               mask_pyramids[det_pyra_level],
+               &kp_in_pyramids[det_pyra_level]);
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-  VLOG(1) << "Before uniformaty check ORBextractor gets "
+    VLOG(1) << "Before uniformaty check ORBextractor gets "
           << kp_in_pyramids[det_pyra_level].size() << " pnts from "
           << " level = " << det_pyra_level
           << " mask_pyramids[" << det_pyra_level << "].size "
@@ -342,68 +376,75 @@ bool detect_orb_features(const cv::Mat& img_in_smooth,
     }
   }
 #endif
-  if (enforce_uniformity_radius > 5 &&
-      kp_in_pyramids[det_pyra_level].size() > 1) {
-    // Copied from scale-space-layer-inl.h
-    // Basically, this weight_LUT can suppress at most a radius of 15 pixels.  In pracice,
-    // it is possible to see features that are 2 to 4 pixels apart without being suppressed.
-    cv::Mat weight_LUT = cv::Mat::zeros(2 * 16 - 1, 2 * 16 - 1, CV_32F);
-    for (int x = 0; x < 2 * 16 - 1; ++x) {
-      for (int y = 0; y < 2 * 16 - 1; ++y) {
-        weight_LUT.at<float>(y, x) =
-            std::max(1 - static_cast<float>((15 - x) * (15 - x) + (15 - y) * (15 - y))
-                / static_cast<float>(15 * 15), 0.f);
-      }
+  //需要控制点周围没有别的点时
+    if (enforce_uniformity_radius > 5 &&
+        kp_in_pyramids[det_pyra_level].size() > 1)
+    {
+        // Copied from scale-space-layer-inl.h
+        // Basically, this weight_LUT can suppress at most acc radius of 15 pixels.  In pracice,
+        // it is possible to see features that are 2 to 4 pixels apart without being suppressed.
+        //最多可抑制15像素的半径
+        cv::Mat weight_LUT = cv::Mat::zeros(2 * 16 - 1, 2 * 16 - 1, CV_32F);
+        for (int x = 0; x < 2 * 16 - 1; ++x) {
+            for (int y = 0; y < 2 * 16 - 1; ++y) {
+                weight_LUT.at<float>(y, x) =
+                        std::max(1 - static_cast<float>((15 - x) * (15 - x) + (15 - y) * (15 - y))
+                                     / static_cast<float>(15 * 15), 0.f);
+            }
+        }
+
+        vector<brisk::ScoreCalculator<float>::PointWithScore> points;
+        points.resize(kp_in_pyramids[det_pyra_level].size());
+        for (size_t i = 0; i < kp_in_pyramids[det_pyra_level].size(); i++) {
+            points[i].x = kp_in_pyramids[det_pyra_level][i].pt.x;
+            points[i].y = kp_in_pyramids[det_pyra_level][i].pt.y;
+            points[i].score = kp_in_pyramids[det_pyra_level][i].response;
+        }
+        // TODO(mingyu): Implement acc simple minded binary mask instead of using weighted mask
+        // TODO(mingyu): Rewrite XpEnforceKeyPointUniformity to take vector of cv::KeyPoint directly
+        //排序并排除过于靠近的feature点
+        XpEnforceKeyPointUniformity(weight_LUT, enforce_uniformity_radius,
+                                    img_pyramids[det_pyra_level].rows,
+                                    img_pyramids[det_pyra_level].cols,
+                                    request_feat_num, points);
+        kp_in_pyramids[det_pyra_level].clear();
+        kp_in_pyramids[det_pyra_level].reserve(points.size());
+        for (const auto& pnt_and_score : points) {
+            cv::KeyPoint kp;
+            kp.pt.x = pnt_and_score.x;
+            kp.pt.y = pnt_and_score.y;
+            kp.response = pnt_and_score.score;  // brisk score here
+            // hueristics: 12, 18, 24, 36, etc.
+            // We choose 12 here (for octave 0) to match the brisk detector.
+            kp.size = 12;
+            kp_in_pyramids[det_pyra_level].push_back(kp);
+        }
+        // Compute orientation only when orb descriptors are requested.
+        // Copied from ORBextractor.cc
+        //如果要计算描述子的话才用到,计算方向,pnt_and_score里没储存这个
+        if (orb_feat_ptr != nullptr)
+        {
+            vector<int> umax;
+            constexpr int HALF_PATCH_SIZE = 15;
+            umax.resize(HALF_PATCH_SIZE + 1);
+            int v, v0, vmax = cvFloor(HALF_PATCH_SIZE * std::sqrt(2.f) / 2 + 1);
+            int vmin = cvCeil(HALF_PATCH_SIZE * std::sqrt(2.f) / 2);
+            const double hp2 = HALF_PATCH_SIZE * HALF_PATCH_SIZE;
+            for (v = 0; v <= vmax; ++v) {
+                umax[v] = cvRound(std::sqrt(hp2 - v * v));
+            }
+            // Make sure we are symmetric
+            for (v = HALF_PATCH_SIZE, v0 = 0; v >= vmin; --v) {
+                while (umax[v0] == umax[v0 + 1]) ++v0;
+                umax[v] = v0;
+                ++v0;
+            }
+            ORBextractor::computeOrientation(img_pyramids[det_pyra_level],
+                                             umax, &kp_in_pyramids[det_pyra_level]);
+        }
     }
-    vector<brisk::ScoreCalculator<float>::PointWithScore> points;
-    points.resize(kp_in_pyramids[det_pyra_level].size());
-    for (size_t i = 0; i < kp_in_pyramids[det_pyra_level].size(); i++) {
-      points[i].x = kp_in_pyramids[det_pyra_level][i].pt.x;
-      points[i].y = kp_in_pyramids[det_pyra_level][i].pt.y;
-      points[i].score = kp_in_pyramids[det_pyra_level][i].response;
-    }
-    // TODO(mingyu): Implement a simple minded binary mask instead of using weighted mask
-    // TODO(mingyu): Rewrite XpEnforceKeyPointUniformity to take vector of cv::KeyPoint directly
-    XpEnforceKeyPointUniformity(weight_LUT, enforce_uniformity_radius,
-                                img_pyramids[det_pyra_level].rows,
-                                img_pyramids[det_pyra_level].cols,
-                                request_feat_num, points);
-    kp_in_pyramids[det_pyra_level].clear();
-    kp_in_pyramids[det_pyra_level].reserve(points.size());
-    for (const auto& pnt_and_score : points) {
-      cv::KeyPoint kp;
-      kp.pt.x = pnt_and_score.x;
-      kp.pt.y = pnt_and_score.y;
-      kp.response = pnt_and_score.score;  // brisk score here
-      // hueristics: 12, 18, 24, 36, etc.
-      // We choose 12 here (for octave 0) to match the brisk detector.
-      kp.size = 12;
-      kp_in_pyramids[det_pyra_level].push_back(kp);
-    }
-    // Compute orientation only when orb descriptors are requested.
-    // Copied from ORBextractor.cc
-    if (orb_feat_ptr != nullptr) {
-      vector<int> umax;
-      constexpr int HALF_PATCH_SIZE = 15;
-      umax.resize(HALF_PATCH_SIZE + 1);
-      int v, v0, vmax = cvFloor(HALF_PATCH_SIZE * std::sqrt(2.f) / 2 + 1);
-      int vmin = cvCeil(HALF_PATCH_SIZE * std::sqrt(2.f) / 2);
-      const double hp2 = HALF_PATCH_SIZE * HALF_PATCH_SIZE;
-      for (v = 0; v <= vmax; ++v) {
-        umax[v] = cvRound(std::sqrt(hp2 - v * v));
-      }
-      // Make sure we are symmetric
-      for (v = HALF_PATCH_SIZE, v0 = 0; v >= vmin; --v) {
-        while (umax[v0] == umax[v0 + 1]) ++v0;
-        umax[v] = v0;
-        ++v0;
-      }
-      ORBextractor::computeOrientation(img_pyramids[det_pyra_level],
-                                       umax, &kp_in_pyramids[det_pyra_level]);
-    }
-  }
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-  VLOG(1) << "After uniformity ORBextractor gets "
+    VLOG(1) << "After uniformity ORBextractor gets "
           << kp_in_pyramids[det_pyra_level].size() << " pnts from "
           << " level = " << det_pyra_level;
   if (VLOG_IS_ON(4)) {
@@ -416,17 +457,20 @@ bool detect_orb_features(const cv::Mat& img_in_smooth,
                 small_debug);
   }
 #endif
-  // Refine the corner response.  Push keypoints from higher pyramids to pyramid 0.
-  // Look for the corner with the highest harris response.
-  // If a kp in small img has weak response in large img, it will be dumped.
-  // [NOTE] This operation IGNORES and OVERWRITES existing keypoints in lower pyramids if any!
-  for (int it_pyra = det_pyra_level; it_pyra > 0; it_pyra--) {
-    refine_kp_in_larger_img(img_pyramids[it_pyra - 1],
-                            kp_in_pyramids[it_pyra],
-                            &kp_in_pyramids[it_pyra - 1]);
-    CHECK_GE(kp_in_pyramids[it_pyra].size(), kp_in_pyramids[it_pyra - 1].size());
+    // Refine the corner response.  Push keypoints from higher pyramids to pyramid 0.
+    // Look for the corner with the highest harris response.
+    // If acc kp in small img has weak response in large img, it will be dumped.
+    // [NOTE] This operation IGNORES and OVERWRITES existing keypoints in lower pyramids if any!
+    //将第det_pyra_level层金字塔的特征点的角点位置向下一层细化,慢慢细化到0层，在源码里其实就是向下细化一次
+    for (int it_pyra = det_pyra_level; it_pyra > 0; it_pyra--)
+    {
+        //输入：当前金字塔的图片,当前金字塔层提取到的特征点,细化到下一层以后的特征点
+        refine_kp_in_larger_img(img_pyramids[it_pyra - 1],
+                                kp_in_pyramids[it_pyra],
+                                &kp_in_pyramids[it_pyra - 1]);
+        CHECK_GE(kp_in_pyramids[it_pyra].size(), kp_in_pyramids[it_pyra - 1].size());
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-    if (VLOG_IS_ON(4)) {
+        if (VLOG_IS_ON(4)) {
       cv::Mat small_debug = img_pyramids[it_pyra - 1].clone();
       for (const auto& kp : kp_in_pyramids[it_pyra - 1]) {
         small_debug.at<uchar>(kp.pt.y, kp.pt.x) = 0xff;
@@ -436,93 +480,103 @@ bool detect_orb_features(const cv::Mat& img_in_smooth,
                   small_debug);
     }
 #endif
-  }
-
-  // The original pattern bit after rotation can exceed half-window size(16), 17, or 18.
-  // We set feat_half_size to 20 here to keep the KeyPoint away from
-  // the possible dangerous place (see the code below) before extracting ORB descriptors.
-  // The feat_half_size is large enough to satisfy the harris margin even after moving up
-  // one pyramid level to within_bound_kps_small.
-  const int feat_half_size = 20;  // 20 pixels at pyramid 0
-  std::vector<cv::KeyPoint> within_bound_kps;
-  std::vector<cv::KeyPoint> within_bound_kps_small;
-  within_bound_kps.reserve(kp_in_pyramids[0].size());
-  within_bound_kps.reserve(kp_in_pyramids[0].size());
-  for (const auto& kp : kp_in_pyramids[0]) {
-    if (kp.pt.x > feat_half_size &&
-        kp.pt.y > feat_half_size &&
-        kp.pt.x < img_in_smooth.cols - feat_half_size &&
-        kp.pt.y < img_in_smooth.rows - feat_half_size) {
-      within_bound_kps.push_back(kp);
-      within_bound_kps_small.push_back(cv::KeyPoint(kp.pt / 2, kp.size));  // default response is 0
     }
-  }
-  CHECK_EQ(within_bound_kps.size(), within_bound_kps_small.size());
 
-  // Check the harris response at pyramid1 (match the behavior in propagate_with_optical_flow,
-  // and remove the corners with weak responses.
-  // Note that the default response value in within_bound_kps_small is 0.
-  // TODO(mingyu): Refactor the code to re-use the harris response computed earlier.
-  if (refine_harris_threshold > 0) {
-    cv::Mat img_in_smooth_small =
-        (pyra_level == 1) ? fast_pyra_down(img_pyramids[0]) : img_pyramids[1];
-    ORBextractor::HarrisResponses(img_in_smooth_small, 7, 0.04f, &within_bound_kps_small);
-  } else {
-    // Keep the default 0 response in within_bound_kps_small.
-  }
+    // The original pattern bit after rotation can exceed half-window size(16), 17, or 18.
+    // We set feat_half_size to 20 here to keep the KeyPoint away from
+    // the possible dangerous place (see the code below) before extracting ORB descriptors.
+    // The feat_half_size is large enough to satisfy the harris margin even after moving up
+    // one pyramid level to within_bound_kps_small.
+    const int feat_half_size = 20;  // 20 pixels at pyramid 0
+    std::vector<cv::KeyPoint> within_bound_kps;
+    std::vector<cv::KeyPoint> within_bound_kps_small;//第0层转到了第1层金字塔以后算Harris响应的点
+    within_bound_kps.reserve(kp_in_pyramids[0].size());
+    within_bound_kps.reserve(kp_in_pyramids[0].size());
+    for (const auto& kp : kp_in_pyramids[0])
+    {
+        if (kp.pt.x > feat_half_size &&
+            kp.pt.y > feat_half_size &&
+            kp.pt.x < img_in_smooth.cols - feat_half_size &&
+            kp.pt.y < img_in_smooth.rows - feat_half_size) {
+            within_bound_kps.push_back(kp);
+            within_bound_kps_small.push_back(cv::KeyPoint(kp.pt / 2, kp.size));  // default response is 0
+        }
+    }
+    CHECK_EQ(within_bound_kps.size(), within_bound_kps_small.size());
 
-  // Fill in key_pnts_ptr
-  CHECK_NOTNULL(key_pnts_ptr);
-  key_pnts_ptr->clear();
-  if (request_feat_num > within_bound_kps.size()) {
-    key_pnts_ptr->reserve(within_bound_kps.size());
-  } else {
-    key_pnts_ptr->reserve(request_feat_num);
-    // TODO(mingyu): This sort is dummy as XpEnforceUniformity has already sorted.
-    std::sort(within_bound_kps.begin(), within_bound_kps.end(), internal::kp_compare);
-  }
+    // Check the harris response at pyramid1 (match the behavior in propagate_with_optical_flow,
+    // and remove the corners with weak responses.
+    // Note that the default response value in within_bound_kps_small is 0.
+    // TODO(mingyu): Refactor the code to re-use the harris response computed earlier.
+    //检测第1层的金子塔层中这些特征点的响应,去除掉弱响应的点
+    if (refine_harris_threshold > 0)
+    {
+        cv::Mat img_in_smooth_small =
+                (pyra_level == 1) ? fast_pyra_down(img_pyramids[0]) : img_pyramids[1];
+        ORBextractor::HarrisResponses(img_in_smooth_small, 7, 0.04f, &within_bound_kps_small);
+    } else {
+        // Keep the default 0 response in within_bound_kps_small.
+    }
+
+    // Fill in key_pnts_ptr
+    CHECK_NOTNULL(key_pnts_ptr);
+    key_pnts_ptr->clear();
+    //key_pnts_ptr的扩容,如果没达到需要的点个数,就扩容成本来点个数,否则就使用最大需要点个数
+    if (request_feat_num > within_bound_kps.size()) {
+        key_pnts_ptr->reserve(within_bound_kps.size());
+    } else {
+        key_pnts_ptr->reserve(request_feat_num);
+        // TODO(mingyu): This sort is dummy as XpEnforceUniformity has already sorted.
+        std::sort(within_bound_kps.begin(), within_bound_kps.end(), internal::kp_compare);
+    }
 
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-  VLOG(2) << "request_feat_num = " << request_feat_num
+    VLOG(2) << "request_feat_num = " << request_feat_num
           << " within_bound_kps.size() = " << within_bound_kps.size();
 #endif
-  for (int i = 0, count = 0; count < request_feat_num && i < within_bound_kps.size(); ++i) {
-    if (within_bound_kps_small[i].response < refine_harris_threshold) {
+    //遍历所有提取到的特征点(已经转到了第0层金字塔的坐标系下)
+    for (int i = 0, count = 0; count < request_feat_num && i < within_bound_kps.size(); ++i)
+    {
+        if (within_bound_kps_small[i].response < refine_harris_threshold)//响应太小就跳过
+        {
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-      VLOG(2) << "within_bound[" << i << "].response = " << within_bound_kps_small[i].response
+            VLOG(2) << "within_bound[" << i << "].response = " << within_bound_kps_small[i].response
               << " < thres = " << refine_harris_threshold;
 #endif
-      continue;
-    }
+            continue;
+        }
 
-    cv::KeyPoint& kp = within_bound_kps[i];
-    if (feat_track_detector) {
-      kp.class_id = feat_track_detector->add_new_feature_track(kp.pt);
-    } else {
-      kp.class_id = -1;  // Feature track is NOT used.
-    }
+        cv::KeyPoint& kp = within_bound_kps[i];
+        if (feat_track_detector) //// 注意,新点的点管理都是在这里做的,如果需要做点轨迹管理的话
+        {
+            //新的特征点被观测到会给它一个全局的id,然后会生成一个关于它的点管理,insert进点管理数据结构feature_tracks_map_中
+            kp.class_id = feat_track_detector->add_new_feature_track(kp.pt);
+        } else {
+            kp.class_id = -1;  // Feature track is NOT used.
+        }
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-    VLOG(2) << "kps[" << count << "] = within_bound[" << i << "] id = " << kp.class_id
+        VLOG(2) << "kps[" << count << "] = within_bound[" << i << "] id = " << kp.class_id
             << " response: " << within_bound_kps_small[i].response;
 #endif
 
-    // TODO(mingyu): use 0 as we have refined to pyra0 or use the real octave at detection
-    kp.octave = 0;
-    key_pnts_ptr->push_back(kp);
-    ++count;
-  }
+        // TODO(mingyu): use 0 as we have refined to pyra0 or use the real octave at detection
+        kp.octave = 0;
+        key_pnts_ptr->push_back(kp);//认为是可以提取出来的点了
+        ++count;
+    }
 
-  // get orb
-  if (orb_feat_ptr != nullptr) {
-    // detect orb at pyra 0
-    // since orb radius is 15, which is alraedy pretty big
+    // get orb
+    //之所以在这里算也是为了加速吧,留在提取特征点那步之后算会有一些点是被剔除的,浪费时间
+    if (orb_feat_ptr != nullptr) {
+        // detect orb at pyra 0
+        // since orb radius is 15, which is alraedy pretty big
 #ifdef __ARM_NEON__
-    ORBextractor::computeDescriptorsN512(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
+        ORBextractor::computeDescriptorsN512(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
 #else
-    ORBextractor::computeDescriptors(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
+        ORBextractor::computeDescriptors(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
 #endif
-  }
-  return true;
+    }
+    return true;
 }
 
 bool detect_harris_features(
@@ -874,7 +928,7 @@ bool SlaveImgFeatureDetector::detect_features_on_slave_img(
 #ifndef __FEATURE_UTILS_NO_DEBUG__
       CHECK_GE(second_best_search_dist_id, 0);
 #endif
-      // if the sampled pos are dense, a couple of samples may get close to the true position
+      // if the sampled pos are dense, acc couple of samples may get close to the true position
       // So they all have low pixel diff values, which should not be discouraged.
       if (second_best_search_dist_id > best_search_dist_id + 1
           || second_best_search_dist_id < best_search_dist_id - 1) {
@@ -994,8 +1048,8 @@ vector<vector<cv::DMatch> > neon_orb_match(
     int trainIdx1 = -1;
     int trainIdx2 = -1;
 #ifdef __ARM_NEON__
-    // const unsigned char *a = desc_query.ptr<unsigned char>();
-    const unsigned char *a = desc_query.data + it_query * 32;
+    // const unsigned char *acc = desc_query.ptr<unsigned char>();
+    const unsigned char *acc = desc_query.data + it_query * 32;
     for (int it_orb_this_rig = 0; it_orb_this_rig < orb_desc_training.rows; ++it_orb_this_rig) {
       if (matching_mask.at<uchar>(it_query, it_orb_this_rig) == 0x00) {
         continue;
@@ -1006,7 +1060,7 @@ vector<vector<cv::DMatch> > neon_orb_match(
       const unsigned char *b = orb_desc_training.data + it_orb_this_rig * 32;
       uint32x4_t bits = vmovq_n_u32(0);
       for (size_t i = 0; i < 32; i += 16) {
-          uint8x16_t A_vec = vld1q_u8(a + i);
+          uint8x16_t A_vec = vld1q_u8(acc + i);
           uint8x16_t B_vec = vld1q_u8(b + i);
           uint8x16_t AxorB = veorq_u8(A_vec, B_vec);
           uint8x16_t bitsSet = vcntq_u8(AxorB);
@@ -1052,8 +1106,8 @@ vector<vector<cv::DMatch> > neon_orb_match_nn(const cv::Mat& desc_query,
     int d1 = 256;
     int trainIdx1 = -1;
 #ifdef __ARM_NEON__
-    // const unsigned char *a = desc_query.ptr<unsigned char>();
-    const unsigned char *a = desc_query.data + it_query * 32;
+    // const unsigned char *acc = desc_query.ptr<unsigned char>();
+    const unsigned char *acc = desc_query.data + it_query * 32;
     for (int it_orb_this_rig = 0; it_orb_this_rig < orb_desc_training.rows; ++it_orb_this_rig) {
       if (matching_mask.at<uchar>(it_query, it_orb_this_rig) == 0x00) {
         continue;
@@ -1064,7 +1118,7 @@ vector<vector<cv::DMatch> > neon_orb_match_nn(const cv::Mat& desc_query,
       const unsigned char *b = orb_desc_training.data + it_orb_this_rig * 32;
       uint32x4_t bits = vmovq_n_u32(0);
       for (size_t i = 0; i < 32; i += 16) {
-        uint8x16_t A_vec = vld1q_u8(a + i);
+        uint8x16_t A_vec = vld1q_u8(acc + i);
         uint8x16_t B_vec = vld1q_u8(b + i);
         uint8x16_t AxorB = veorq_u8(A_vec, B_vec);
         uint8x16_t bitsSet = vcntq_u8(AxorB);

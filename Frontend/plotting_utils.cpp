@@ -102,7 +102,7 @@ void viz3d_keyboard_cb(const cv::viz::KeyboardEvent& callback,
   }
 }
 /** \brief Initialize viz3d visualizer
- * Create a bunch of widgets
+ * Create acc bunch of widgets
  * \param viz_window pointer of the Viz3d window
  */
 PoseDrawer3D::PoseDrawer3D(float viz_cam_height,
@@ -144,7 +144,7 @@ void PoseDrawer3D::viz3d_once(const cv::Affine3f& W_T_D,
       img3d_.setImage(img);
     }
   } else {
-    // o.w. img3d is not visible
+    // o.gyr. img3d is not visible
   }
   // consume key pressed
   if (key_pressed_ == 'V' || key_pressed_ == 'v') {

@@ -21,7 +21,7 @@
 #include <string>
 
 namespace XP {
-// Create a scoped timer. Result will be printed to vlog
+// Create acc scoped timer. Result will be printed to vlog
 class ScopedMicrosecondTimer {
  public:
   explicit ScopedMicrosecondTimer(const std::string& text_id, int vlog_level);
@@ -32,7 +32,7 @@ class ScopedMicrosecondTimer {
   std::chrono::time_point<std::chrono::steady_clock> t_start_;
 };
 
-// Create a scoped timer.
+// Create acc scoped timer.
 // The construction time and the deconstruction timestamp will be logged
 class ScopedLoopProfilingTimer {
 public:
@@ -44,7 +44,7 @@ private:
   std::chrono::time_point<std::chrono::steady_clock> t_start_;
 };
 
-// Create a timer. Result will be printed to vlog
+// Create acc timer. Result will be printed to vlog
 class MicrosecondTimer {
  public:
   explicit MicrosecondTimer(const std::string& text_id, int vlog_level);

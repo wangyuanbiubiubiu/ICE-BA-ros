@@ -18,9 +18,10 @@
 
 #include "Camera.h"
 #include "Depth.h"
-
+#include <eigen3/Eigen/Dense>
+//#define CFG_DEBUG_EIGEN
 namespace FTR {
-
+//地图点首次被观测到时的观测信息的数据结构
 class Source {
  public:
   inline void Set(const float *x) {
@@ -38,13 +39,13 @@ class Source {
         ;
   }
  public:
-  Point2D m_x;
+  Point2D m_x;//被首次观测到时,在那个关键帧中左目的无畸变归一化坐标
 #ifdef CFG_STEREO
-  Point2D m_xr;
-  LA::SymmetricMatrix2x2f m_Wr;
+  Point2D m_xr;//被首次观测到时,在那个关键帧中右目的无畸变归一化坐标,左乘了Rc0_c1以后进行了归一化
+  LA::SymmetricMatrix2x2f m_Wr;//右目特征点的信息矩阵
 #endif
 };
-
+//地图点的观测信息
 class Measurement {
  public:
   class Match {
@@ -55,7 +56,7 @@ class Measurement {
     inline bool operator == (const Match &izm) const { return m_iz1 == izm.m_iz1 && m_iz2 == izm.m_iz2; }
     inline void Set(const int iz1, const int iz2) { m_iz1 = iz1; m_iz2 = iz2; }
    public:
-    int m_iz1, m_iz2;
+    int m_iz1/*所在帧的这个地图点观测存储的id*/, m_iz2/*与所在帧共视的这个地图点观测存储的id*/;
   };
  public:
   inline Measurement() {}
@@ -93,12 +94,12 @@ class Measurement {
   inline bool Invalid() const { return m_ix == -1; }
   inline void Invalidate() { m_ix = -1; }
  public:
-  union { int m_iKF, m_id, m_ix; };
-  Point2D m_z;
-  LA::SymmetricMatrix2x2f m_W;
-#ifdef CFG_STEREO
-  Point2D m_zr;
-  LA::SymmetricMatrix2x2f m_Wr;
+  union { int m_iKF, m_id, m_ix/*这个地图点在它首次被观测到的这个关键帧中的局部id*/; };
+  Point2D m_z;//左目没有畸变的归一化坐标
+  LA::SymmetricMatrix2x2f m_W;//畸变部分信息矩阵
+#ifdef CFG_STEREO//左右两目的观测是互斥的
+  Point2D m_zr;//右目的无畸变的归一化坐标(左乘了Rc0_c1以后进行了归一化)
+  LA::SymmetricMatrix2x2f m_Wr;//畸变部分信息矩阵
 #endif
 };
 
@@ -199,9 +200,11 @@ class Error {
         ;
   }
  public:
-  LA::Vector2f m_e;
+  LA::Vector2f m_e;//左目的观测和当前左目的归一化的残差
 #ifdef CFG_STEREO
-  LA::Vector2f m_er;
+        // 投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+        //m_er= 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1) //具体看Project注释
+  LA::Vector2f m_er;//左目的观测和当前右目的归一化的残差
 #endif
 };
 namespace ErrorJacobian {
@@ -210,8 +213,8 @@ class D {
   inline bool Valid() const { return m_e.Valid(); }
   inline bool Invalid() const { return m_e.Invalid(); }
   inline void Invalidate() { m_e.Invalidate(); }
- public:
-  LA::Vector2f m_Jd, m_e;
+ public:   //投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+  LA::Vector2f m_Jd/*重投影误差对关键帧逆深度的雅克比*/, m_e;//重投影误差r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1),cost_F(Uc0) = ||r(Uc0)||^2（马氏距离下）
 };
 class X {
  public:
@@ -226,13 +229,13 @@ class DCZ : public D {
  public:
   inline void MakeZero() { memset(this, 0, sizeof(DCZ)); }
  public:
-  LA::AlignedMatrix2x6f m_Jcz;
+  LA::AlignedMatrix2x6f m_Jcz;//重投影误差对投影后的帧pose的雅克比
 };
 class DCXZ : public DCZ {
  public:
   inline void MakeZero() { memset(this, 0, sizeof(DCXZ)); }
  public:
-  LA::AlignedMatrix2x6f m_Jcx;
+  LA::AlignedMatrix2x6f m_Jcx;//重投影误差对投影前的帧的pose的雅克比
 };
 class XC : public X {
  public:
@@ -243,7 +246,7 @@ class XC : public X {
 }  // namespace ErrorJacobian
 class Reduction {
  public:
-  Error m_e;
+  Error m_e;//重投影误差
   float m_F, m_dF;
 };
 namespace Factor {
@@ -307,7 +310,7 @@ class DD {
     amb.m_b = A.m_b - b.m_b;
   }
  public:
-  float m_a, m_b;
+  float m_a/*Huu^-1*/, m_b/*逆深度的-H^-1*b*/;
 };
 class XX {
  public:
@@ -418,8 +421,8 @@ class DDC {
     return m_adc.AssertZero(verbose, str + ".m_adc") &&
            m_add.AssertZero(verbose, str + ".m_add");
   }
-  static inline void aTb(const float *a, const xp128f &b0, const xp128f &b1,
-                         Camera::Factor::Unitary::CC &aTb) {
+  static inline void aTb(const float *a/*这个地图点子轨迹的逆深度和这帧pose的H*/, const xp128f &b0/*ST_Huu * Hpose_u前4维*/,
+                         const xp128f &b1/*ST_Huu * Hpose_u后2维和-b*/, Camera::Factor::Unitary::CC &aTb) {
     xp128f t1, t2;
     t1.vdup_all_lane(a[0]);
     aTb.m_data[0] = t1 * b0;
@@ -457,22 +460,27 @@ class DDC {
   }
  public:
   union {
-    struct { DC m_adc; DD m_add; };
-    LA::AlignedVector6f m_adcA;
+    struct { DC m_adc/*投影前posex逆深度的H*/; DD m_add/*逆深度的先验因子H,b,左目观测和双目观测的因子是不同的*/; };
+    LA::AlignedVector6f m_adcA;/*投影前posex逆深度的H*/
     LA::AlignedVector7f m_adcd;
     xp128f m_data[2];
   };
 };
-class Stereo {
+
+
+//投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+//r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1)
+// cost_F(Uc0) = ||r(Uc0)||^2（马氏距离下）
+class Stereo {//双目观测因子
  public:
   class U {
    public:
     inline void Initialize() { m_A.MakeZero(); }
-    inline void Accumulate(const ErrorJacobian::D &Je, const float w, const LA::SymmetricMatrix2x2f &W) {
+    inline void Accumulate(const ErrorJacobian::D &Je/*雅克比和残差*/, const float w/*当前信息矩阵*/, const LA::SymmetricMatrix2x2f &W/*右目特征点的信息矩阵*/) {
       LA::SymmetricMatrix2x2f::Ab(W, Je.m_Jd, m_WJ);
       m_WJ *= w;
-      m_A.m_a = m_WJ.Dot(Je.m_Jd) + m_A.m_a;
-      m_A.m_b = m_WJ.Dot(Je.m_e) + m_A.m_b;
+      m_A.m_a = m_WJ.Dot(Je.m_Jd) + m_A.m_a;//增量H矩阵
+      m_A.m_b = m_WJ.Dot(Je.m_e) + m_A.m_b;//增量b矩阵
     }
     inline void Set(const ErrorJacobian::D &Je, const float w, const LA::SymmetricMatrix2x2f &W) {
       LA::SymmetricMatrix2x2f::Ab(W, Je.m_Jd, m_WJ);
@@ -481,15 +489,15 @@ class Stereo {
       m_A.m_b = m_WJ.Dot(Je.m_e);
     }
    public:
-    LA::Vector2f m_WJ;
-    DD m_A;
+    LA::Vector2f m_WJ;//W*J
+    DD m_A;//存储了H,-b
   };
  public:
   inline void MakeZero() { memset(this, 0, sizeof(Stereo)); }
  public:
-  ErrorJacobian::D m_Je;
-  float m_w, m_F;
-  DD m_add;
+  ErrorJacobian::D m_Je;//存储雅克比和残差
+  float m_w/*信息矩阵*/, m_F;//costfun
+  DD m_add;//逆深度x逆深度的H|-b部分
 };
 class Depth : public Stereo {
  public:
@@ -507,7 +515,7 @@ class A {
   inline bool operator == (const A &_A) const { return m_Sadd == _A.m_Sadd; }
   inline void MakeZero() { m_Sadd.MakeZero(); }
  public:
-  DD m_Sadd;
+  DD m_Sadd;//和地图点观测有关的,逆深度和逆深度的H,逆深度的-b
 };
 class M {
  public:
@@ -515,12 +523,12 @@ class M {
   inline void operator += (const M &_M) { m_mdd += _M.m_mdd; }
   inline float BackSubstitute() const { return m_mdd.m_b; }
  public:
-  DD m_mdd;
+  DD m_mdd;//和地图点观测有关的,逆深度和逆深度的H,逆深度的-b
 };
 }  // namespace Source
-class L {
+class L {///*当前帧中对每个地图点观测的重投影误差e,J(对当前帧的pose,对关键帧点的逆深度),cost*/
  public:
-  ErrorJacobian::DCZ m_Je;
+  ErrorJacobian::DCZ m_Je;//重投影误差对与投影前后的pose,对投影前这点在坐标系中逆深度的雅克比
 #ifdef CFG_STEREO
   ErrorJacobian::DCZ m_Jer;
 #endif
@@ -530,7 +538,7 @@ class L {
 #ifdef CFG_STEREO
       float m_wr;
 #endif
-      float m_F;
+      float m_F;//costfun 鲁邦核作用下的马氏距离残差
     };
     xp128f m_data;
   };
@@ -549,21 +557,21 @@ class A1 {
   }
  public:
   union {
-    DC m_adcz;
-    LA::AlignedVector6f m_adczA;
+    DC m_adcz;//逆深度和普通帧pose的H
+    LA::AlignedVector6f m_adczA;//H投影后pose_u *Huu^-1
   };
 };
-class A2 {
+class A2 {//m_add里的m_a就存的是逆深度和逆深度的H,逆深度的-b，A->m_Aczz里的m_A存储普通帧pose和普通帧pose的H,m_b存储普通帧pose的-b
  public:
   union {
     struct {
-      DD m_add;
-      Camera::Factor::Unitary::CC m_Aczz;
+      DD m_add;//里面的m_a存的是逆深度和逆深度的H部分
+      Camera::Factor::Unitary::CC m_Aczz;//m_A存储普通帧pose和普通帧pose的H,m_b存储普通帧pose的-b
     };
     xp128f m_data[8];
   };
 };
-class A3 : public DDC {
+class A3 : public DDC {//m_adcA:/*这个地图点的逆深度和普通帧pose的H*/ m_add:逆深度和逆深度的H,逆深度的-b
  public:
   inline A3() {}
   inline A3(const DD &add, const DC &adc) {
@@ -587,12 +595,12 @@ class U {
   inline void Initialize() {
     m_A.MakeZero();
   }
-  inline void Accumulate(const ErrorJacobian::DCZ &Je, const float w, const LA::SymmetricMatrix2x2f &W) {
-    m_J.Set(Je.m_Jd, Je.m_Jcz);
-    m_Je.Set(m_J, Je.m_e);
-    W.GetScaled(w, m_W);
-    LA::AlignedMatrix2x7f::AB(m_W, m_J, m_WJ);
-    LA::AlignedMatrix7x8f::AddATBToUpper(m_WJ, m_Je, m_A);
+  inline void Accumulate(const ErrorJacobian::DCZ &Je/*重投影误差J,残差*/, const float w/*robust_info*/, const LA::SymmetricMatrix2x2f &W/*残差协方差*/) {
+    m_J.Set(Je.m_Jd, Je.m_Jcz);/*重投影误差对投影前所在帧的逆深度,投影后所在帧pose的雅克比*/
+    m_Je.Set(m_J, Je.m_e);//前2x7存储m_J,后2x1存储重投影误差
+    W.GetScaled(w, m_W);//鲁邦核加权
+    LA::AlignedMatrix2x7f::AB(m_W, m_J, m_WJ);//m_WJ = m_W*m_J
+    LA::AlignedMatrix7x8f::AddATBToUpper(m_WJ, m_Je, m_A);//m_A(H|-b) = (m_W*m_J).t*m_Je(J|e)  //构造H|-b矩阵m_W反正也是对称矩阵,.t无所谓了
   }
   inline void Set(const ErrorJacobian::DCZ &Je, const float w, const LA::SymmetricMatrix2x2f &W) {
     m_J.Set(Je.m_Jd, Je.m_Jcz);
@@ -602,25 +610,31 @@ class U {
     LA::AlignedMatrix7x8f::ATBToUpper(m_WJ, m_Je, m_A);
   }
  public:
-  LA::AlignedMatrix2x7f m_J, m_WJ;
-  LA::AlignedMatrix2x8f m_Je;
-  LA::AlignedMatrix7x8f m_A;
-  LA::SymmetricMatrix2x2f m_W;
+  LA::AlignedMatrix2x7f m_J/*重投影误差对投影前所在帧的逆深度,投影后所在帧pose的雅克比*/, m_WJ;// m_WJ = m_W*m_J
+  LA::AlignedMatrix2x8f m_Je;//前2x7存储m_J,后2x1存储重投影误差
+  LA::AlignedMatrix7x8f m_A;//这个因子的H|-b
+  LA::SymmetricMatrix2x2f m_W;//鲁邦核加权过的信息矩阵
 };
 inline void Marginalize(const xp128f &mdd, const A1 &A, M1 *M) {
   A.m_adczA.GetScaled(mdd, M->m_adczA);
 }
-inline void Marginalize(const DD &Smdd, const LA::AlignedVector6f &adcz,
+inline void Marginalize(const DD &Smdd/*含有这个lf中这个地图点的观测的子轨迹的∑ST_Huu^-1,∑ST_Huu^-1 * -ST_bu的和*/, const LA::AlignedVector6f &adcz,/*这个地图点子轨迹的逆深度和这帧pose的H*/
                         LA::AlignedVector6f *Smdcz, M2 *M) {
-  adcz.GetScaled(Smdd.m_a, *Smdcz);
+  adcz.GetScaled(Smdd.m_a, *Smdcz);//Smdcz =Hpose_u *∑ST_Huu^-1|∑ST_Huu^-1 * -ST_bu
   Smdcz->v45xx()[3] = Smdd.m_b;
-  DDC::aTb(adcz, Smdcz->v0123(), Smdcz->v45xx(), M->m_Mczz);
+
+  //M->m_Mczz.m_A = adcz * Smdd.m_a * adcz.t(Hpose_u *∑ST_Huu^-1 * Hpose_u.t )
+  //  M->m_Mczz.m_b = adcz * Smdd.m_b (Hpose_u *∑ST_Huu^-1 * -ST_bu )
+  DDC::aTb(adcz/*Hpose_u*/, Smdcz->v0123()/*ST_Huu * Hpose_u前4维*/, Smdcz->v45xx()/*ST_Huu * Hpose_u后2维和-b*/, M->m_Mczz);
 }
-inline void Marginalize(const float Smdd, const A3 &A1, const A3 &A2,
-                        LA::ProductVector6f *Smdcz2, Camera::Factor::Binary::CC *Mczm) {
-  A2.m_adcA.GetScaled(Smdd, *Smdcz2);
+inline void Marginalize(const float Smdd/*LF,_LF这两帧所有共视的的子轨迹的∑ST_Huu^-1,∑ST_Huu^-1*-ST_bu*/,
+        const A3 &A1/*H中当前遍历的这帧LFposex逆深度*/, const A3 &A2,/*H中与LF共识的_LF的posex逆深度*/
+                        LA::ProductVector6f *Smdcz2, Camera::Factor::Binary::CC *Mczm)
+{
+  A2.m_adcA.GetScaled(Smdd, *Smdcz2);//Smdcz2 = H_LFp_u *∑ST_Huu^-1
   Smdcz2->Update();
-  LA::AlignedMatrix6x6f::abT(A1.m_adc, *Smdcz2, *Mczm);
+//Mczm = A1.m_adc*Smdcz2.t = HLFp_u*∑ST_Huu^-1*H_LFp_u.t
+  LA::AlignedMatrix6x6f::abT(A1.m_adc/*HLFp_u*/, *Smdcz2, *Mczm);
 }
 }  // namespace FixSource
 namespace Full {
@@ -629,21 +643,21 @@ class A {
  public:
   inline void MakeZero() { m_Sadx.MakeZero(); }
  public:
-  DDC m_Sadx;
+  DDC m_Sadx;//和地图点观测有关的H,b
 };
 class M1 {
  public:
   inline void MakeZero() { memset(this, 0, sizeof(M1)); }
   inline float BackSubstitute(const LA::AlignedVector6f *xc = NULL) const {
-    const float bd = m_mdx.m_add.m_b;
+    const float bd = m_mdx.m_add.m_b;//Huu^-1*-bu
     if (xc) {
-      return bd + m_mdx.m_adcA.Dot(*xc);
+      return bd + m_mdx.m_adcA.Dot(*xc);//求bmm - Hmp * delta_Xp+m; m就是地图点
     } else {
       return bd;
     }
   }
  public:
-  DDC m_mdx;
+  DDC m_mdx;//
 };
 class M2 {
  public:
@@ -651,14 +665,14 @@ class M2 {
  public:
   Camera::Factor::Unitary::CC m_Mcxx;
 };
-inline void Marginalize(const xp128f &mdd, const DDC &Sadx, M1 *_M1, M2 *_M2) {
-  Sadx.GetScaled(mdd, _M1->m_mdx);
+inline void Marginalize(const xp128f &mdd/*这个点对应的Huu^-1*/, const DDC &Sadx/*和地图点观测相关的H,b*/, M1 *_M1, M2 *_M2) {
+  Sadx.GetScaled(mdd, _M1->m_mdx);//_M1->m_mdx.m_adc = Hpose_u * Huu^-1|Huu^-1*-bu
 #ifdef CFG_DEBUG
 //#if 0
   UT_ASSERT(mdd[0] == 1.0f / Sadx.m_add.m_a);
 #endif
-  _M1->m_mdx.m_add.m_a = mdd[0];
-  DDC::aTb(_M1->m_mdx.m_adc, Sadx, _M2->m_Mcxx);
+  _M1->m_mdx.m_add.m_a = mdd[0];//_M1->m_mdx.m_add.m_a = Huu^-1
+  DDC::aTb(_M1->m_mdx.m_adc, Sadx, _M2->m_Mcxx);// _M2->m_Mcxx = Hpose_u * Huu^-1 * Hpose_u.t|Hpose_u * Huu^-1*-bu
 }
 }  // namespace Source
 class L {
@@ -681,10 +695,10 @@ class L {
 class A1 : public FixSource::A1 {};
 class A2 {
  public:
-  DDC m_adx;
-  Camera::Factor::Unitary::CC m_Acxx;
-  Camera::Factor::Binary::CC m_Acxz;
-  Camera::Factor::Unitary::CC m_Aczz;
+  DDC m_adx;//m_adc是逆深度 x pose,m_add是逆深度x逆深度
+  Camera::Factor::Unitary::CC m_Acxx;//投影前pose x 投影前pose的H 和投影前pose的-b
+  Camera::Factor::Binary::CC m_Acxz;//投影前pose x 投影后pose
+  Camera::Factor::Unitary::CC m_Aczz;//投影后pose x 投影后pose的H 和投影后pose的-b
 };
 class M1 : public FixSource::M1 {};
 class M2 : public FixSource::M2 {
@@ -695,7 +709,7 @@ class U {
  public:
   inline void Initialize() { m_A.MakeZero(); }
   inline void Accumulate(const ErrorJacobian::DCXZ &Je, const float w, const LA::SymmetricMatrix2x2f &W) {
-    m_J.Set(Je.m_Jd, Je.m_Jcx, Je.m_Jcz);
+    m_J.Set(Je.m_Jd, Je.m_Jcx, Je.m_Jcz);//按照逆深度,投影前pose,投影后pose排列
     m_Je.Set(m_J, Je.m_e);
     W.GetScaled(w, m_W);
     LA::AlignedMatrix2x13f::AB(m_W, m_J, m_WJ);
@@ -714,18 +728,19 @@ class U {
   LA::AlignedMatrix13x14f m_A;
   LA::SymmetricMatrix2x2f m_W;
 };
-inline void Marginalize(const xp128f &mdd, const Source::M1 &Mx, const A1 &Az, M1 *Mz1,
+inline void Marginalize(const xp128f &mdd/*Huu^-1*/, const Source::M1 &Mx/*m_mdx.m_adc保存H投影前pose_u * Huu^-1*/,
+        const A1 &Az/*m_adcz存储H的投影后pose x 逆深度部分*/, M1 *Mz1,
                         M2 *Mz2, LA::ProductVector6f *adcz) {
 #ifdef CFG_DEBUG
   UT_ASSERT(mdd[0] == Mx.m_mdx.m_add.m_a);
 #endif
-  Az.m_adczA.GetScaled(mdd, Mz1->m_adczA);
-  adcz->Set(Az.m_adczA);
-  LA::AlignedMatrix6x6f::abT(Mx.m_mdx.m_adc, *adcz, Mz2->m_Mcxz);
+  Az.m_adczA.GetScaled(mdd, Mz1->m_adczA);//Mz1->m_adczA = H投影后pose_u *Huu^-1
+  adcz->Set(Az.m_adczA);//adcz = H投影后pose_u
+  LA::AlignedMatrix6x6f::abT(Mx.m_mdx.m_adc, *adcz, Mz2->m_Mcxz);//Mz2->m_Mcxz = H投影前pose_u * Huu^-1 * H投影后pose_u
 
-  const xp128f t = xp128f::get(Mz1->m_adcz.v4(), Mz1->m_adcz.v5(),
-                               Mx.m_mdx.m_add.m_a, Mx.m_mdx.m_add.m_b);
-  DDC::aTb(Az.m_adcz, Mz1->m_adczA.v0123(), t, Mz2->m_Mczz);
+  const xp128f t = xp128f::get(Mz1->m_adcz.v4(), Mz1->m_adcz.v5(),//
+                               Mx.m_mdx.m_add.m_a/*Huu^-1*/, Mx.m_mdx.m_add.m_b/*Huu^-1*-bu*/);
+  DDC::aTb(Az.m_adcz, Mz1->m_adczA.v0123(), t, Mz2->m_Mczz);// Mz2->m_Mczz = H投影后pose_u *Huu^-1 * H投影后pose_u |H投影后pose_u *Huu^-1 *-bu
 }
 static inline void Marginalize(const M1 &Mz, const LA::ProductVector6f &adcz,
                                Camera::Factor::Binary::CC &Mczm) {
@@ -754,23 +769,23 @@ inline void DebugSetMeasurement(const Rigid3D *T12, const Source &x1,
 #endif
 }
 #endif
-inline void GetError(const Rigid3D &T12, const Source &x1, const Depth::InverseGaussian &d1,
-                     const Point2D &z2, LA::Vector2f &e2) {
+inline void GetError(const Rigid3D &T12/*Tc0(当前帧)_c0(关键帧)*/, const Source &x1/*地图点在关键帧中的观测*/, const Depth::InverseGaussian &d1/*地图点的逆深度*/,
+                     const Point2D &z2/*当前帧对这个地图点的观测*/, LA::Vector2f &e2) {
 #ifdef CFG_DEBUG
-  UT_ASSERT(z2.Valid());
+  UT_ASSERT(z2.Valid());//重投影误差对关键帧pose的雅克比
 #endif
   d1.Project(T12, x1.m_x, e2);
   e2 -= z2;
 }
-inline void GetError(const Rigid3D *T12, const Source &x1,
-                     const Depth::InverseGaussian &d1, const Measurement &z2,
+inline void GetError(const Rigid3D *T12/*Tc0(当前帧)_c0(关键帧)*/, const Source &x1,/*地图点在关键帧中的观测*/
+                     const Depth::InverseGaussian &d1/*地图点的逆深度*/, const Measurement &z2,/*当前帧对这个地图点的观测*/
                      Error &e2) {
 #ifdef CFG_STEREO
   if (z2.m_z.Valid()) {
-    GetError(T12[0], x1, d1, z2.m_z, e2.m_e);
+    GetError(T12[0]/*Tc0(当前帧)_c0(关键帧)*/, x1/*地图点在关键帧中的观测*/, d1/*地图点的逆深度*/, z2.m_z/*当前帧左目对这个地图点的观测*/, e2.m_e);
   }
   if (z2.m_zr.Valid()) {
-    GetError(T12[1], x1, d1, z2.m_zr, e2.m_er);
+    GetError(T12[1]/*Tc1(当前帧)_c0(关键帧)*/, x1, d1, z2.m_zr/*当前帧右目对这个地图点的观测*/, e2.m_er);
   }
 #else
   GetError(*T12, x1, d1, z2.m_z, e2.m_e);
@@ -873,11 +888,33 @@ inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::
 #ifdef CFG_DEBUG
   UT_ASSERT(z2.Valid());
 #endif
-  d1.Project(T12, x1.m_x, Je2.m_e, Je2.m_Jd);
+  d1.Project(T12, x1.m_x, Je2.m_e/*残差*/, Je2.m_Jd/*残差对深度的*/);//只算了重投影误差对于深度的雅克比
   Je2.m_e -= z2;
 }
-inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::InverseGaussian &d1,
-                             const Rigid3D &T2, const Point2D &z2, ErrorJacobian::DCZ &Je2
+
+//其实也可以理解为投影前和投影后,因为有些时候是用关键帧之间的共视来做
+//Pcl = Rclw * (Rckw.t*Pck + twck - twcl) cl是局部普通帧,ck是当前关键帧
+//上面就是一个将点P从ck坐标系转到cl的过程，而残差 r= Pcl的归一化坐标 - 观测的归一化坐标
+//优化变量是Rclw,twcl,Rckw,twck,d_ck d_ck为关键帧中的逆深度
+//根据链式法则,div(r)/div(x) = (div(r)/div(Pcl)) * (div(Pcl)/div(x))
+//div(r)/div(Pcl) = row0:[1/z 0 -x/z^2] row1:[0 1/z -y/z^2] Pcl:{x,y,z}
+//因为它的增量形式是用so3先转jpl四元数再转成的R,所以这里是exp[-th]x，推导就简写一点,只写分子了
+//div(Pcl)/div(Rclw) = Rclw * exp[-th]x * (Rckw.t*Pck + twck - twcl)
+//                 = Rclw * [(Rckw.t*Pck + twck - twcl)]x
+//div(Pcl)/div(twcl) = -Rclw
+//div(Pcl)/div(Rckw) = Rclw * ((Rckw*exp[-th]x).t*Pck + twck - twcl)
+//                 = Rclw * exp[th]x *Rckw.t * Pck
+//                 = - Rclw * [Rckw.t * Pck]x
+//div(Pcl)/div(twck) = Rclw
+//div(Pcl)/div(d_ck) = (div(Pcl)/ div(Pck)) * (div(Pck)/ div(d_ck)) (这里也可以按我d1.Project的推导过程,结果是一样的
+//                   = -(Rclw * Rckw.t) *(1/d_ck^2 * Pck归一化) = - (1/d_ck) * Rclw * Rckw.t * Pck
+
+//相乘就是下列的结果,Je2.m_Jcx = EigenMatrix2x6f(e_Jxpkf, e_Jxrkf);//存的关键帧的雅克比,通用来说存的是重投影误差对1pose雅克比
+//相乘就是下列的结果,Je2.m_Jcz = EigenMatrix2x6f(e_Jxpcl, e_Jxrcl);//存的普通帧的雅克比,通用来说存的是重投影误差对2pose雅克比
+//                   Je2.m_Jd就是重投影误差对于逆深度的雅克比
+// 这种情况是固定了地图点所在的关键帧,所以并没有求对应的雅克比
+inline void GetErrorJacobian(const Rigid3D &T12/*Tc0(LF)_c0(KF)*/, const Source &x1/*关键帧对这个地图点的观测*/, const Depth::InverseGaussian &d1,/*KF中这点逆深度*/
+                             const Rigid3D &T2/*当前帧Tc0w*/, const Point2D &z2/*当前帧左目观测*/, ErrorJacobian::DCZ &Je2
 #ifdef CFG_STEREO
                            , const Point3D *br = NULL
 #endif
@@ -886,15 +923,15 @@ inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::
   UT_ASSERT(z2.Valid());
 #endif
   float d2;
-  d1.Project(T12, x1.m_x, Je2.m_e, d2, Je2.m_Jd);
+  d1.Project(T12/*Tc0(LF)_c0(KF)*/, x1.m_x/*关键帧对这个地图点的左目观测*/, Je2.m_e/*投影以后的归一化坐标*/, d2/*LF中这点的逆深度*/, Je2.m_Jd/*投影以后的归一化残差关于kf逆深度的雅克比*/);
   //const bool vp = fabs(d2) > DEPTH_EPSILON;
   //const bool vp = fabs(d2) > DEPTH_PROJECTION_MIN;
   //const bool vp = d2 > DEPTH_PROJECTION_MIN;
   const bool vp = d2 > DEPTH_PROJECTION_MIN && d2 < DEPTH_PROJECTION_MAX;
-  if (vp) {
-    const xp128f _d2 = xp128f::get(d2);
-    const xp128f _x2 = xp128f::get(Je2.m_e.x());
-    const xp128f _y2 = xp128f::get(Je2.m_e.y());
+  if (vp) {//如果投影以后的逆深度符合要求,就计算残差对于普通帧
+    const xp128f _d2 = xp128f::get(d2);//lf的u,逆深度
+    const xp128f _x2 = xp128f::get(Je2.m_e.x());//lf.x()
+    const xp128f _y2 = xp128f::get(Je2.m_e.y());//lf.y()
     Je2.m_Jcz.m_00_01_02_03() = _d2 * (_y2 * T2.r_20_21_22_x() - T2.r_10_11_12_x());
     Je2.m_Jcz.m_00_01_02_03().vstore_unalign(Je2.m_Jcz[1]);
     Je2.m_Jcz.m_00_01_02_03() = _d2 * (_x2 * T2.r_20_21_22_x() - T2.r_00_01_02_x());
@@ -924,8 +961,9 @@ inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::
     //Je2.m_Jd.MakeZero();
     Je2.m_Jcz.MakeZero();
   }
-  Je2.m_e -= z2;
+  Je2.m_e -= z2;//计算归一化重投影误差
 }
+//注释可以看上方的代码,优化地图点所在的关键帧pose,观测到这个地图点的帧以及这个点在关键帧中的逆深度
 inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::InverseGaussian &d1,
                              const Rigid3D &T2, const Point2D &z2, ErrorJacobian::DCXZ &Je2
 #ifdef CFG_STEREO
@@ -1004,32 +1042,35 @@ inline void GetErrorJacobian(const Rigid3D &T12, const Source &x1, const Depth::
   }
   Je2.m_e -= z2;
 }
-
+//当 GetFactor<ME_FUNCTION, Factor::Depth, Factor::Depth::U>时,只求重投影误差关于逆深度的雅克比,即固定地图点所在关键帧pose和观测到这个地图点的帧的pose
+//当 GetFactor<ME_FUNCTION, Factor::FixSource::L, Factor::FixSource::U>,只求重投影误差对于投影后的pose,投影前的逆深度的雅克比,即固定地图点所在关键帧pose
+//当 GetFactor<ME_FUNCTION, Factor::Full::L, Factor::Full::U> 全部进行优化
 template<int ME_FUNCTION, class LINEARIZATION, class FACTOR>
-inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
-                      const Depth::InverseGaussian &d1, const Rigid3D &T2,
-                      const Measurement &z2, LINEARIZATION *L, FACTOR *A,
+inline void GetFactor(const float w, const Rigid3D *T12/*Tc(投影后)_c0(投影前的)*/, const Source &x1,/*投影前的对这个地图点的观测*/
+                      const Depth::InverseGaussian &d1/*投影前的中这点逆深度*/, const Rigid3D &T2,/*投影后的帧Tc0w*/
+                      const Measurement &z2/*投影后的对这个地图点的观测*/, LINEARIZATION *L, FACTOR *A/*因子*/,
 #ifdef CFG_STEREO
-                      const Point3D &br,
+                      const Point3D &br,/*-tc0_c1*/
 #endif
                       const float r2Max = FLT_MAX) {
 #ifdef CFG_STEREO
   L->m_F = 0.0f;
   A->Initialize();
-  if (z2.m_z.Valid()) {
-    GetErrorJacobian(T12[0], x1, d1, T2, z2.m_z, L->m_Je);
-    const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(z2.m_W, L->m_Je.m_e);
+  if (z2.m_z.Valid()) {//如果投影后的观测有左目的观测时,
+    GetErrorJacobian(T12[0]/*Tc0(投影后的)_c0(投影前的)*/, x1/*投影前的帧对这个地图点的观测*/, d1/*投影前的中这点逆深度*/,
+            T2/*投影后的Tc0w*/, z2.m_z/*投影后的帧左目观测*/, L->m_Je/*储存重投影误差对于投影后的pose,投影前的逆深度(不同的因子这里可能不一样)的雅克比和残差*/);
+    const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(z2.m_W, L->m_Je.m_e);//马氏距离下的残差
     if (r2 > r2Max) {
       L->m_w = 0.0f;
     } else {
-      L->m_w = w * ME::Weight<ME_FUNCTION>(r2);
+      L->m_w = w * ME::Weight<ME_FUNCTION>(r2);//robust_info
     }
-    L->m_F += L->m_w * r2;
-    A->Accumulate(L->m_Je, L->m_w, z2.m_W);
+    L->m_F += L->m_w * r2;//鲁邦核作用以后的costfun
+    A->Accumulate(L->m_Je/*重投影误差J,残差*/, L->m_w/*robust_info*/, z2.m_W/*残差协方差*/);//A中计算H|-b就是后续迭代要用到的数据
   } else {
     L->m_Je.Invalidate();
   }
-  if (z2.m_zr.Valid()) {
+  if (z2.m_zr.Valid()) {//右目也是一样的
     GetErrorJacobian(T12[1], x1, d1, T2, z2.m_zr, L->m_Jer, &br);
     const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(z2.m_Wr, L->m_Jer.m_e);
     if (r2 > r2Max) {
@@ -1048,49 +1089,61 @@ inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
   if (r2 > r2Max) {
     L->m_w = 0.0f;
   } else {
-    L->m_w = w * ME::Weight<ME_FUNCTION>(r2);
+    L->m_w = gyr * ME::Weight<ME_FUNCTION>(r2);
   }
   L->m_F = L->m_w * r2;
   A->Set(L->m_Je, L->m_w, z2.m_W);
 #endif
 }
 template<int ME_FUNCTION>
-inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
-                      const Depth::InverseGaussian &d1, const Rigid3D &T2,
-                      const Measurement &z2, Factor::Depth *A, Factor::Depth::U *U,
+inline void GetFactor(const float w, const Rigid3D *T12/*Tc(投影后)_c0(投影前)*/, const Source &x1,/*投影前的帧对这个地图点的观测*/
+                      const Depth::InverseGaussian &d1/*逆深度*/, const Rigid3D &T2,/*投影后的帧Tc0w*/
+                      const Measurement &z2/*投影后的帧对这个地图点的观测*/, Factor::Depth *A, Factor::Depth::U *U,
 #ifdef CFG_STEREO
                       const Point3D &br,
 #endif
-                      const float r2Max = FLT_MAX) {
-  GetFactor<ME_FUNCTION, Factor::Depth, Factor::Depth::U>(w, T12, x1, d1, T2, z2, A, U,
+                      const float r2Max = FLT_MAX) {//只求了
+  GetFactor<ME_FUNCTION, Factor::Depth, Factor::Depth::U>(w, T12, x1, d1, T2, z2, A/*存J,e,cost*/, U,/*这个地图点重投影误差的因子存了Hb等*/
 #ifdef CFG_STEREO
                                                           br,
 #endif
                                                           r2Max);
-  A->m_add = U->m_A;
+  A->m_add = U->m_A;//逆深度x逆深度的H|-b部分
 }
 template<int ME_FUNCTION>
-inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
-                      const Depth::InverseGaussian &d1, const Rigid3D &T2,
-                      const Measurement &z2, Factor::FixSource::L *L,
+inline void GetFactor(const float w, const Rigid3D *T12/*Tc(LF)_c0(KF)*/, const Source &x1,/*关键帧对这个地图点的观测*/
+                      const Depth::InverseGaussian &d1/*逆深度*/, const Rigid3D &T2,/*当前帧Tc0w*/
+                      const Measurement &z2/*当前帧对这个地图点的观测*/, Factor::FixSource::L *L,
                       Factor::FixSource::A1 *A1, Factor::FixSource::A2 *A2,
                       Factor::FixSource::U *U,
 #ifdef CFG_STEREO
-                      const Point3D &br,
+                      const Point3D &br,/*-tc0_c1*/
 #endif
-                      const float r2Max = FLT_MAX) {
-  GetFactor<ME_FUNCTION, Factor::FixSource::L, Factor::FixSource::U>(w, T12, x1, d1, T2, z2, L, U,
+                      const float r2Max = FLT_MAX) {//先把H,-b求了,注释看下方
+  GetFactor<ME_FUNCTION, Factor::FixSource::L, Factor::FixSource::U>(w, T12, x1, d1, T2, z2, L/*存J,e,cost*/, U/*这个地图点从关键帧投影到普通帧上的重投影误差的因子存了Hb等*/,
 #ifdef CFG_STEREO
                                                                      br,
 #endif
                                                                      r2Max);
-  U->m_A.Get(A2->m_add.m_a, A1->m_adcz, A2->m_add.m_b, A2->m_Aczz.m_A, A2->m_Aczz.m_b);
+  //通用性的来说,就是现在有1,2两帧,将1里的地图点x1投到2里以后得到x2,同时有观测的z2,残差e = x2 - z2
+  // costfun = robust(|e|马氏距离下的),优化变量是R2w,tw2,d_1 d_1为1帧中的逆深度
+  // 用dogleg的话首先要求GN的解,所以 J.t*Wrobust*W*J*deltax = -J.t*Wrobust*W*e =》 Hx = b,这里只求了-b
+  //H是逆深度 p r 这么排列的,所以左上角是逆深度的块,右下角是pose的块
+  // 那么A2->m_add里的m_a就存的是逆深度和逆深度的H,逆深度的-b，A2->m_Aczz里的m_A存储普通帧pose和普通帧pose的H,m_b存储普通帧pose的-b
+  // A1->m_adcz存的逆深度和普通帧pose的H
+  U->m_A.Get(A2->m_add.m_a, A1->m_adcz, A2->m_add.m_b, A2->m_Aczz.m_A, A2->m_Aczz.m_b);//将H各个部分分别存储起来,具体看注释
 }
+
+//这种情况就是投影前后pose全部优化,逆深度也优化
 template<int ME_FUNCTION>
-inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
-                      const Depth::InverseGaussian &d1, const Rigid3D &T2,
-                      const Measurement &z2, Factor::Full::L *L, Factor::Full::A1 *A1,
-                      Factor::Full::A2 *A2, Factor::Full::U *U,
+inline void GetFactor(const float w, const Rigid3D *T12/*Tc(投影后)_c0(投影前)*/, const Source &x1,/*投影前的帧对这个地图点的观测*/
+                      const Depth::InverseGaussian &d1/*逆深度*/, const Rigid3D &T2,/*投影后的帧Tc0w*/
+                      const Measurement &z2/*投影后的帧对这个地图点的观测*/,
+                      Factor::Full::L *L,/*投影后关键帧中对这个地图点观测的重投影误差e,J(对投影前后的pose,对关键帧点的逆深度),cost*/
+                      Factor::Full::A1 *A1,//m_adcz存储H的投影后pose x 逆深度部分
+                      Factor::Full::A2 *A2, //m_adx.m_add是逆深度x逆深度的H|-b,m_adx.m_adc是投影后pose x 逆深度的H,
+                      //m_Acxx是投影前pose x 投影前pose的H|-b,m_Aczz是投影后pose x 投影后pose的H|-b,m_Acxz是投影前pose x 投影后pose的H
+                      Factor::Full::U *U,/*这个地图点从观测关键帧投影到投影后关键帧上的重投影误差的因子,存了H|-b,信息矩阵*/
 #ifdef CFG_STEREO
                       const Point3D &br,
 #endif
@@ -1100,6 +1153,15 @@ inline void GetFactor(const float w, const Rigid3D *T12, const Source &x1,
                                                            br,
 #endif
                                                            r2Max);
+//        A2->m_adx.m_add.m_a//逆深度x逆深度
+//        A2->m_adx.m_adc//投影前pose x 逆深度
+//        A1->m_adcz//投影后pose x 逆深度
+//        A2->m_adx.m_add.m_b//逆深度的-b
+//        A2->m_Acxx.m_A//投影前pose x 投影前pose
+//        A2->m_Acxz//投影前pose x 投影后pose
+//        A2->m_Acxx.m_b//投影前pose的-b
+//        A2->m_Aczz.m_A//投影后pose x 投影后pose
+//        A2->m_Aczz.m_b//投影后pose的-b
   U->m_A.Get(A2->m_adx.m_add.m_a, A2->m_adx.m_adc, A1->m_adcz, A2->m_adx.m_add.m_b,
              A2->m_Acxx.m_A, A2->m_Acxz, A2->m_Acxx.m_b, A2->m_Aczz.m_A, A2->m_Aczz.m_b);
 }
@@ -1146,14 +1208,15 @@ inline void GetReduction(const Factor::Depth &A, const Rigid3D *T12, const Sourc
   Ra.m_dF = A.m_F - (Ra.m_F = GetCost(A, z2, Ra.m_e));
   Rp.m_dF = A.m_F - (Rp.m_F = GetCost(A, z2, Rp.m_e));
 }
-inline void GetReduction(const Factor::FixSource::L &L, const Rigid3D *T12, const Source &x1,
-                         const Depth::InverseGaussian &d1, const Measurement &z2,
-                         const LA::ProductVector6f *xcz, const float *xd,
+inline void GetReduction(const Factor::FixSource::L &L/*当前帧中对每个地图点观测的重投影误差e,J(对当前帧的pose,对关键帧点的逆深度),cost*/,
+        const Rigid3D *T12/*Tc(LF)_c0(KF)*/, const Source &x1,/*关键帧对这个地图点的观测*/
+                         const Depth::InverseGaussian &d1/*逆深度*/, const Measurement &z2,/*当前帧对这个地图点的观测*/
+                         const LA::ProductVector6f *xcz/*pose部分增量*/, const float *xd,/*逆深度部分的增量*/
                          Reduction &Ra, Reduction &Rp) {
-  GetError(T12, x1, d1, z2, Ra.m_e);
-  GetError(L, xcz, xd, Rp.m_e);
-  Ra.m_dF = L.m_F - (Ra.m_F = GetCost(L, z2, Ra.m_e));
-  Rp.m_dF = L.m_F - (Rp.m_F = GetCost(L, z2, Rp.m_e));
+  GetError(T12, x1, d1, z2, Ra.m_e);//重新算一下重投影误差
+  GetError(L, xcz/*pose部分增量*/, xd/*逆深度部分的增量*/, Rp.m_e/*理论上的残差*/);//理论下降Jc*dcx + Jd*d_d
+  Ra.m_dF = L.m_F/*之前的cost*/ - (Ra.m_F = GetCost(L, z2, Ra.m_e)/*更新以后的cost*/);//实际下降
+  Rp.m_dF = L.m_F - (Rp.m_F = GetCost(L, z2, Rp.m_e));//理论下降
 }
 inline void GetReduction(const Factor::Full::L &L, const Rigid3D *T12, const Source &x1,
                          const Depth::InverseGaussian &d1, const Measurement &z2,
@@ -1172,28 +1235,29 @@ inline void DebugSetMeasurement(const Point3D &br, const Depth::InverseGaussian 
   d.Project(br, x.m_x, x.m_xr);
 }
 #endif
-inline void GetError(const Point3D &br, const Depth::InverseGaussian &d, const Source &x,
-                     LA::Vector2f &e) {
-  d.Project(br, x.m_x, e);
+inline void GetError(const Point3D &br/*-tc0_c1*/, const Depth::InverseGaussian &d/*当前MP对应的c0深度*/, const Source &x,/*MP对应的观测信息*/
+                     LA::Vector2f &e/*重投影误差*/) {
+  d.Project(br/*-tc0_c1*/, x.m_x/*Pc0归一化坐标*/, e/*重投影误差*/);
+    // r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1)
   e -= x.m_xr;
 }
 inline void GetError(const Factor::Stereo &A, const float xd, LA::Vector2f &e) {
   GetError(A.m_Je, xd, e);
 }
-inline void GetErrorJacobian(const Point3D &br, const Depth::InverseGaussian &d, const Source &x,
-                             ErrorJacobian::D &Je) {
-  d.Project(br, x.m_x, Je.m_e, Je.m_Jd);
-  Je.m_e -= x.m_xr;
+inline void GetErrorJacobian(const Point3D &br/*-tc0_c1*/, const Depth::InverseGaussian &d/*逆深度*/, const Source &x/*观测*/,
+                             ErrorJacobian::D &Je/*残差*/) {
+  d.Project(br/*-tc0_c1*/, x.m_x/* 左目的无畸变归一化坐标*/, Je.m_e, Je.m_Jd);
+  Je.m_e -= x.m_xr;//
 }
 template<int ME_FUNCTION>
-inline void GetFactor(const float w, const Point3D &br, const Depth::InverseGaussian &d, const Source &x,
+inline void GetFactor(const float w/*特征点的权重*/, const Point3D &br/*-tc0_c1*/, const Depth::InverseGaussian &d/*逆深度*/, const Source &x/*观测*/,
                       Factor::Stereo *A, Factor::Stereo::U *U) {
-  GetErrorJacobian(br, d, x, A->m_Je);
-  const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(x.m_Wr, A->m_Je.m_e);
-  A->m_w = w * ME::Weight<ME_FUNCTION>(r2);
-  A->m_F = A->m_w * r2;
-  U->Initialize();
-  U->Accumulate(A->m_Je, A->m_w, x.m_Wr);
+  GetErrorJacobian(br/*-tc0_c1*/, d/*逆深度*/, x/*观测*/, A->m_Je/*雅克比和残差*/);
+  const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(x.m_Wr, A->m_Je.m_e);//马氏距离下的残差
+  A->m_w = w * ME::Weight<ME_FUNCTION>(r2);//鲁邦核加权后的信息矩阵
+  A->m_F = A->m_w * r2;//cost_FUN(Uc0) = ||归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1)|| 马氏
+  U->Initialize();//m_A置0
+  U->Accumulate(A->m_Je/*雅克比和残差*/, A->m_w/*信息矩阵*/, x.m_Wr/*右目特征点的信息矩阵*/);//增量构建Hb
   A->m_add = U->m_A;
 }
 inline float GetCost(const Factor::Stereo &A, const Source &x, const LA::Vector2f &e) {
@@ -1288,12 +1352,12 @@ class EigenFactor {
   class DC : public Eigen::Matrix<float, 1, 6> {
    public:
     inline DC() : Eigen::Matrix<float, 1, 6>() {}
-    inline DC(const Eigen::Matrix<float, 1, 6> &a) : Eigen::Matrix<float, 1, 6>(a) {}
-    inline DC(const Factor::DC &a) : Eigen::Matrix<float, 1, 6>(EigenVector6f(a).transpose()) {}
-    inline void operator = (const Eigen::Matrix<float, 1, 6> &a) { *((Eigen::Matrix<float, 1, 6> *) this) = a; }
-    inline void operator = (const Factor::DC &a) { *this = EigenVector6f(a).transpose(); }
-    inline void operator += (const Factor::DC &a) { *((Eigen::Matrix<float, 1, 6> *) this) += DC(a); }
-    inline void operator += (const DC &a) { *((Eigen::Matrix<float, 1, 6> *) this) += a; }
+    inline DC(const Eigen::Matrix<float, 1, 6> &acc) : Eigen::Matrix<float, 1, 6>(acc) {}
+    inline DC(const Factor::DC &acc) : Eigen::Matrix<float, 1, 6>(EigenVector6f(acc).transpose()) {}
+    inline void operator = (const Eigen::Matrix<float, 1, 6> &acc) { *((Eigen::Matrix<float, 1, 6> *) this) = acc; }
+    inline void operator = (const Factor::DC &acc) { *this = EigenVector6f(acc).transpose(); }
+    inline void operator += (const Factor::DC &acc) { *((Eigen::Matrix<float, 1, 6> *) this) += DC(acc); }
+    inline void operator += (const DC &acc) { *((Eigen::Matrix<float, 1, 6> *) this) += acc; }
     EigenVector6f GetTranspose() const { return EigenVector6f(*this); }
     LA::Vector6f GetVector6f() const { return GetTranspose().GetVector6f(); }
   };
@@ -1305,20 +1369,20 @@ class EigenFactor {
       m_add.Set(add, bd);
       m_adc = adc;
     }
-    inline void operator = (const Factor::DDC &a) {
-      m_add = a.m_add;
-      m_adc = a.m_adc;
+    inline void operator = (const Factor::DDC &acc) {
+      m_add = acc.m_add;
+      m_adc = acc.m_adc;
     }
-    inline void operator += (const DDC &a) {
-      m_add += a.m_add;
-      m_adc += a.m_adc;
+    inline void operator += (const DDC &acc) {
+      m_add += acc.m_add;
+      m_adc += acc.m_adc;
     }
     inline void MakeZero() { m_add.MakeZero(); m_adc.setZero(); }
-    inline bool AssertEqual(const Factor::DDC &a,
+    inline bool AssertEqual(const Factor::DDC &acc,
                             const int verbose = 1, const std::string str = "", 
                             const float epsAbs = 0.0f, const float epsRel = 0.0f) const {
-      return m_add.AssertEqual(a.m_add, verbose, str + ".m_add", epsAbs, epsRel) &&
-             Factor::DC::Get(m_adc.GetVector6f()).AssertEqual(a.m_adc, verbose, str + ".m_adc",
+      return m_add.AssertEqual(acc.m_add, verbose, str + ".m_add", epsAbs, epsRel) &&
+             Factor::DC::Get(m_adc.GetVector6f()).AssertEqual(acc.m_adc, verbose, str + ".m_adc",
                                                               epsAbs, epsRel);
     }
    public:
@@ -1484,7 +1548,7 @@ EigenErrorJacobian EigenGetErrorJacobian(const Rigid3D &C1, const Source &x1, co
 #endif
                                        );
 template<int ME_FUNCTION>
-inline EigenFactor EigenGetFactor(const float w, const Rigid3D &C1, const Source &x1,
+inline EigenFactor EigenGetFactor(const float gyr, const Rigid3D &C1, const Source &x1,
                                   const Depth::InverseGaussian &d1, const Rigid3D &C2,
                                   const Measurement &z2, const bool cx, const bool cz
 #ifdef CFG_STEREO
@@ -1499,7 +1563,7 @@ inline EigenFactor EigenGetFactor(const float w, const Rigid3D &C1, const Source
     const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C1, x1, d1, C2, z2.m_z, cx, cz);
     const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_W);
     const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-    const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+    const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
     const EigenMatrix2x13f e_J = EigenMatrix2x13f(e_Je.m_Jd, e_Je.m_Jcx, e_Je.m_Jcz);
     const EigenMatrix2x13f e_WJ = EigenMatrix2x13f(_w * e_W * e_J);
     F += _w * r2;
@@ -1509,7 +1573,7 @@ inline EigenFactor EigenGetFactor(const float w, const Rigid3D &C1, const Source
     const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C1, x1, d1, C2, z2.m_zr, cx, cz, &br);
     const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_Wr);
     const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-    const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+    const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
     const EigenMatrix2x13f e_J = EigenMatrix2x13f(e_Je.m_Jd, e_Je.m_Jcx, e_Je.m_Jcz);
     const EigenMatrix2x13f e_WJ = EigenMatrix2x13f(_w * e_W * e_J);
     F += _w * r2;
@@ -1519,7 +1583,7 @@ inline EigenFactor EigenGetFactor(const float w, const Rigid3D &C1, const Source
   const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C1, x1, d1, C2, z2.m_z, cx, cz);
   const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_W);
   const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-  const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+  const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
   const EigenMatrix2x13f e_J = EigenMatrix2x13f(e_Je.m_Jd, e_Je.m_Jcx, e_Je.m_Jcz);
   const EigenMatrix2x13f e_WJ = EigenMatrix2x13f(_w * e_W * e_J);
   const float F = _w * r2;
@@ -1529,7 +1593,7 @@ inline EigenFactor EigenGetFactor(const float w, const Rigid3D &C1, const Source
   return EigenFactor(F, e_A);
 }
 template<int ME_FUNCTION>
-inline float EigenGetCost(const float w, const Rigid3D &C1, const Source &x1,
+inline float EigenGetCost(const float gyr, const Rigid3D &C1, const Source &x1,
                           const Depth::InverseGaussian &d1, const Rigid3D &C2,
                           const Measurement &z2, const EigenVector6f *e_xcx,
                           const EigenVector6f *e_xcz, const float xd
@@ -1544,7 +1608,7 @@ inline float EigenGetCost(const float w, const Rigid3D &C1, const Source &x1,
                                                           e_xcx != NULL, e_xcz != NULL);
     const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_W);
     const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-    const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+    const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
     EigenVector2f e_e = e_Je.m_e;
     if (e_xcx) {
       e_e += e_Je.m_Jcx * *e_xcx;
@@ -1560,7 +1624,7 @@ inline float EigenGetCost(const float w, const Rigid3D &C1, const Source &x1,
                                                           e_xcx != NULL, e_xcz != NULL, &br);
     const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_Wr);
     const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-    const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+    const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
     EigenVector2f e_e = EigenVector2f(e_Je.m_e + e_Je.m_Jd * xd);
     if (e_xcx) {
       e_e += e_Je.m_Jcx * *e_xcx;
@@ -1575,7 +1639,7 @@ inline float EigenGetCost(const float w, const Rigid3D &C1, const Source &x1,
                                                         e_xcx != NULL, e_xcz != NULL);
   const EigenMatrix2x2f e_W = EigenMatrix2x2f(z2.m_W);
   const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-  const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+  const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
   EigenVector2f e_e = EigenVector2f(e_Je.m_e + e_Je.m_Jd * xd);
   if (e_xcx) {
     e_e += e_Je.m_Jcx * *e_xcx;
@@ -1592,24 +1656,24 @@ EigenErrorJacobian::Stereo EigenGetErrorJacobian(const Point3D &br,
                                                  const Depth::InverseGaussian &d,
                                                  const Source &x);
 template<int ME_FUNCTION>
-inline EigenFactor::Stereo EigenGetFactor(const float w, const Point3D &br, 
+inline EigenFactor::Stereo EigenGetFactor(const float gyr, const Point3D &br,
                                           const Depth::InverseGaussian &d, const Source &x) {
   const EigenErrorJacobian::Stereo e_Je = EigenGetErrorJacobian(br, d, x);
   const EigenMatrix2x2f e_W = EigenMatrix2x2f(x.m_Wr);
   const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-  const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+  const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
   const EigenVector2f e_WJ(_w * e_W * e_Je.m_Jd);
   const float add = e_WJ.dot(e_Je.m_Jd), bd = e_WJ.dot(e_Je.m_e);
   const float F = _w * r2;
   return EigenFactor::Stereo(F, add, bd);
 }
 template<int ME_FUNCTION>
-inline float EigenGetCost(const float w, const Point3D &br, const Depth::InverseGaussian &d,
+inline float EigenGetCost(const float gyr, const Point3D &br, const Depth::InverseGaussian &d,
                           const Source &x, const float xd) {
   const EigenErrorJacobian::Stereo e_Je = EigenGetErrorJacobian(br, d, x);
   const EigenMatrix2x2f e_W = EigenMatrix2x2f(x.m_Wr);
   const float r2 = (e_W * e_Je.m_e).dot(e_Je.m_e);
-  const float _w = w * ME::Weight<ME_FUNCTION>(r2);
+  const float _w = gyr * ME::Weight<ME_FUNCTION>(r2);
   const EigenVector2f e_e = EigenVector2f(e_Je.m_e + e_Je.m_Jd * xd);
   return _w * (e_W * e_e).dot(e_e);
 }

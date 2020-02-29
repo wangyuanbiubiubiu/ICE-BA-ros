@@ -39,7 +39,7 @@ extern float FTR_UNDIST_DL_GAIN_RATIO_MIN;
 extern float FTR_UNDIST_DL_GAIN_RATIO_MAX;
 
 extern float IMU_GRAVITY_MAGNITUDE;
-extern  bool IMU_GRAVITY_EXCLUDED;
+extern  bool IMU_GRAVITY_EXCLUDED;//不考虑重力
 extern float IMU_VARIANCE_ACCELERATION_NOISE;
 extern float IMU_VARIANCE_ACCELERATION_BIAS_WALK;
 extern float IMU_VARIANCE_GYROSCOPE_NOISE;
@@ -60,7 +60,7 @@ extern float DEPTH_MAX;
 extern float DEPTH_RANGE;
 extern float DEPTH_INITIAL;
 extern float DEPTH_VARIANCE_INITIAL;
-extern float DEPTH_VARIANCE_WALK;
+extern float DEPTH_VARIANCE_WALK;//地图点深度随时间变化的不确定性
 extern float DEPTH_VARIANCE_CONVERGE;
 extern float DEPTH_VARIANCE_EPSILON;
 extern float DEPTH_MIN_INLIER_RATIO;
@@ -82,13 +82,13 @@ extern float DEPTH_TRI_DL_GAIN_RATIO_MIN;
 extern float DEPTH_TRI_DL_GAIN_RATIO_MAX;
 
 extern   int BA_MAX_ITERATIONS;
-extern float BA_WEIGHT_FEATURE;
+extern float BA_WEIGHT_FEATURE;//特征点的权重
 extern float BA_WEIGHT_FEATURE_KEY_FRAME;
-extern float BA_WEIGHT_PRIOR_CAMERA_INITIAL;
+extern float BA_WEIGHT_PRIOR_CAMERA_INITIAL;//相机的先验权重
 extern float BA_WEIGHT_PRIOR_CAMERA_RELATIVE_CONSTRAINT;
 extern float BA_WEIGHT_PRIOR_CAMERA_POSE;
 extern float BA_WEIGHT_PRIOR_CAMERA_MOTION;
-extern float BA_WEIGHT_PRIOR_DEPTH;
+extern float BA_WEIGHT_PRIOR_DEPTH;//先验深度的权重 0.0f
 extern float BA_WEIGHT_IMU;
 extern float BA_WEIGHT_FIX_ORIGIN;
 extern float BA_WEIGHT_FIX_POSITION_Z;
@@ -175,7 +175,7 @@ extern float BA_PCG_MAX_CONVERGE_PROBABILITY;
 extern float BA_ANGLE_EPSILON;
 
 extern  int LBA_MAX_SLIDING_TRACK_LENGTH;
-extern  int LBA_MAX_LOCAL_FRAMES;
+extern  int LBA_MAX_LOCAL_FRAMES;//滑窗size
 extern bool LBA_RESET_DEPTH_INFORMATION;
 extern  int LBA_PROPAGATE_CAMERA;
 extern  int LBA_PCG_CONDITIONER_BAND;

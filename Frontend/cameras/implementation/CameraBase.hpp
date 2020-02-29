@@ -66,7 +66,7 @@ bool CameraBase::removeMask() {
   return true;
 }
 
-// Was a nonzero mask set?
+// Was acc nonzero mask set?
 bool CameraBase::hasMask() const {
   return (mask_.data);
 }

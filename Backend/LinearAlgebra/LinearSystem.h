@@ -73,7 +73,7 @@ template<typename TYPE> inline bool MarginalizeLDL(const int N, TYPE **A, TYPE *
       ai[k] *= mii;
     }
     b[i] *= mii;
-    const TYPE bi = b[i];
+    const TYPE bi = b[i];//这里就是边缘化的一些操作了
     for (int j = 0; j < im; ++j) {
       const TYPE aij = at1[j];
       TYPE *aj = A[j];

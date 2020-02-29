@@ -18,43 +18,43 @@
 //#define CFG_DEBUG
 //#endif
 #include "GlobalBundleAdjustor.h"
-
 #if defined WIN32 && defined CFG_DEBUG && defined CFG_GROUND_TRUTH
 //#define GBA_DEBUG_GROUND_TRUTH_MEASUREMENT
 #endif
-
+//三种情况,1：GN极值点在域内直接变成无约束条件 2:GN和pU点都在域外,那么就在给pU点的步长一个比例因子(域半径/自己的步长^2（因为用的是最小2乘）),让它刚好落在域半径上
+//3:GN在域外,pU点在域内,那么增量就是GN极值点和pU点的连线与信赖域的交点
 void GlobalBundleAdjustor::SolveDogLeg() {
-  if (m_x2GN <= m_delta2 || BA_DL_MAX_ITERATIONS == 0) {
+  if (m_x2GN <= m_delta2 || BA_DL_MAX_ITERATIONS == 0) {//如果G-N的极值在信赖域内,那么就是一个无约束问题,就直接用GN法求出的增量就可以
     m_xsDL.Set(m_xsGN);
     m_x2DL = m_x2GN;
     m_beta = 1.0f;
-  } else if (m_x2GD >= m_delta2) {
-    if (m_delta2 == 0.0f) {
+  } else if (m_x2GD >= m_delta2) {//如果G-N和pU点求的最优点都在信赖域外
+    if (m_delta2 == 0.0f) {//信赖域为0,直接用pU点求得最优值
       m_xsDL.Set(m_xsGD);
       m_x2DL = m_x2GD;
     } else {
-      m_xsGD.GetScaled(sqrtf(m_delta2 / m_x2GD), m_xsDL);
+      m_xsGD.GetScaled(sqrtf(m_delta2 / m_x2GD), m_xsDL);//乘比例因子
       m_x2DL = m_delta2;
     }
     m_beta = 0.0f;
-  } else {
-    LA::AlignedVectorXf::AmB(m_xsGN, m_xsGD, m_xsDL);
+  } else {//GN在域外,pU点在域内,那么增量就是GN极值点和pU点的连线与信赖域的交点
+    LA::AlignedVectorXf::AmB(m_xsGN, m_xsGD, m_xsDL);//方向 m_xsDL = m_xsGN - m_xsGD
     const float d = m_xsGD.Dot(m_xsDL), dx2 = m_xsDL.SquaredLength();
     //m_beta = static_cast<float>((-d + sqrt(static_cast<double>(d) * d +
     //                            (m_delta2 - m_x2GD) * static_cast<double>(dx2))) / dx2);
-    m_beta = (-d + sqrtf(d * d + (m_delta2 - m_x2GD) * dx2)) / dx2;
+    m_beta = (-d + sqrtf(d * d + (m_delta2 - m_x2GD) * dx2)) / dx2;//算得是在域外那段连线的长度
     m_xsDL *= m_beta;
     m_xsDL += m_xsGD;
     m_x2DL = m_delta2;
   }
   const int pc = 6, pm = 9;
   const int Nc = m_Cs.Size(), Nm = m_CsLM.Size(), Ncp = Nc * pc, Nmp = Nm * pm, Ncmp = Ncp + Nmp;
-  ConvertCameraUpdates(m_xsDL.Data(), &m_xp2s, &m_xr2s);
-  ConvertMotionUpdates(m_xsDL.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);
-  ConvertDepthUpdates(m_xsDL.Data() + Ncmp, &m_xds);
+  ConvertCameraUpdates(m_xsDL.Data(), &m_xp2s, &m_xr2s);//计算一下pose增量的欧式距离
+  ConvertMotionUpdates(m_xsDL.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);//计算一下motion增量的欧式距离
+  ConvertDepthUpdates(m_xsDL.Data() + Ncmp/*逆深度部分的求解*/, &m_xds);//更新逆深度的增量
 }
 
-void GlobalBundleAdjustor::SolveGradientDescent() {
+void GlobalBundleAdjustor::SolveGradientDescent() {//这部分LBA的一样,看LBA这部分的注释
   m_xsGD.Resize(0);
   const int pc = 6, pm = 9;
   const int Nc = m_Cs.Size(), Nm = m_CsLM.Size(), Nd = m_xds.Size();
@@ -184,11 +184,11 @@ void GlobalBundleAdjustor::SolveGradientDescent() {
   }
 #endif
 }
-
+//计算一下所有因子的实际下降和理论下降,然后计算rho = 实际/理论
 void GlobalBundleAdjustor::ComputeReduction() {
-  m_dFa = m_dFp = 0.0f;
+    m_dFa /*实际下降的cost*/= m_dFp/*理论下降的cost*/ = 0.0f;
   if (m_update) {
-    ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data(), &m_xcsP);
+    ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data()/*dogleg求出的增量*/, &m_xcsP/*delta_x中pose的部分*/);//m_xcsP更新最新的增量
     ComputeReductionFeature();
     ComputeReductionPriorCameraPose();
     ComputeReductionPriorCameraMotion();
@@ -214,12 +214,12 @@ void GlobalBundleAdjustor::ComputeReductionFeature() {
   Rigid3D Tr[2];
   FTR::Reduction Ra, Rp;
   const ubyte ucFlag = GBA_FLAG_FRAME_UPDATE_CAMERA | GBA_FLAG_FRAME_UPDATE_DEPTH;
-  const int nKFs = int(m_KFs.size());
+  const int nKFs = int(m_KFs.size());//遍历所有的关键帧
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const KeyFrame &KF = m_KFs[iKF];
-    const Rigid3D &C = m_Cs[iKF];
+    const KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    const Rigid3D &C = m_Cs[iKF];//已经更新过的相机位姿
     const LA::ProductVector6f *xc = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) ?
-                                    &m_xcsP[iKF] : NULL;
+                                    &m_xcsP[iKF] : NULL;//如果需要更新相机,就读取增量
     dFa = dFp = 0.0f;
     const int NZ = int(KF.m_Zs.size());
     for (int iZ = 0; iZ < NZ; ++iZ) {
@@ -496,38 +496,41 @@ void GlobalBundleAdjustor::ComputeReductionFixMotion() {
     }
   }
 }
-
+//备份状态以及更新状态
+//step1: 先备份状态和之前的增量(如果没更新的话)
+//step2: 遍历所有滑窗中的帧,判断状态是否要更新(r,p,v,ba,bg),要的话pose更新在m_Cs中,motion更新在m_CsLM中
+//step3: 遍历所有关键帧中的地图点,判断是否要更新逆深度，如果要更新的话,就将该地图点的逆深度和协方差进行更新
 bool GlobalBundleAdjustor::UpdateStatesPropose() {
 #ifdef CFG_VERBOSE
   int SNc = 0, SNm = 0;
 #endif
   LA::AlignedVector3f dp, dr, dv, dba, dbw, p;
   Rotation3D dR;
-  m_CsBkp.Set(m_Cs);
+  m_CsBkp.Set(m_Cs);//备份状态和前一次优化的增量
   m_CsLMBkp.Set(m_CsLM);
 #ifdef CFG_INCREMENTAL_PCG
   m_xcsBkp.Set(m_xcs);
   m_xmsLMBkp.Set(m_xmsLM);
 #endif
-  m_update = false;
-  m_converge = false;
+    m_update = false;//是否需要更新
+    m_converge = false;//是否收敛
   const int Nc = m_Cs.Size(), Nm = m_CsLM.Size();
-  const LA::Vector6f *xcsDL = (LA::Vector6f *) m_xsDL.Data();
-  const LA::Vector9f *xmsDL = (LA::Vector9f *) (xcsDL + Nc);
+    const LA::Vector6f *xcsDL = (LA::Vector6f *) m_xsDL.Data();//dogleg法的pose增量
+    const LA::Vector9f *xmsDL = (LA::Vector9f *) (xcsDL + Nc);//dogleg法的motion增量
 #ifdef CFG_INCREMENTAL_PCG
-  const LA::Vector6f *xcsGN = (LA::Vector6f *) m_xsGN.Data();
-  const LA::Vector9f *xmsGN = (LA::Vector9f *) (xcsGN + Nc);
+    const LA::Vector6f *xcsGN = (LA::Vector6f *) m_xsGN.Data();//GN法的pose增量
+    const LA::Vector9f *xmsGN = (LA::Vector9f *) (xcsGN + Nc);//GN法的motion增量
 #endif
-  for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {
-    Rigid3D &C = m_Cs[ic];
-    const bool ur = m_xr2s[ic] >= BA_UPDATE_ROTATION, up = m_xp2s[ic] >= BA_UPDATE_POSITION;
+  for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {//遍历每个关键帧的pose增量,如果大于阈值,则认为需要更新增量,更新到p,r上
+    Rigid3D &C = m_Cs[ic];//关键帧的位姿 //pose部分的更新
+    const bool ur = m_xr2s[ic] >= BA_UPDATE_ROTATION, up = m_xp2s[ic] >= BA_UPDATE_POSITION;//r,p是否需要更新
     if (ur || up) {
       xcsDL[ic].Get(dp, dr);
       //dp.z() = 0.0f;
       dR.SetRodrigues(dr, BA_ANGLE_EPSILON);
       C.GetPosition(p);
-      C = Rotation3D(C) * dR;
-      p += dp;
+      C = Rotation3D(C) * dR; //Rwc * exp(delta_r)
+      p += dp; //twc + delta_t
       C.SetPosition(p);
       m_ucs[ic] |= GBA_FLAG_FRAME_UPDATE_CAMERA;
 #ifdef CFG_INCREMENTAL_PCG
@@ -539,9 +542,9 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
         ++SNc;
 #endif
     } else {
-      m_ucs[ic] &= ~GBA_FLAG_FRAME_UPDATE_CAMERA;
+      m_ucs[ic] &= ~GBA_FLAG_FRAME_UPDATE_CAMERA;//m_ucs更新这个关键帧:不用更新相机
 #ifdef CFG_INCREMENTAL_PCG
-      m_xcs[ic] = xcsGN[ic];
+      m_xcs[ic] = xcsGN[ic];//pose的增量用GN的
 #endif
     }
     if (im < 0) {
@@ -549,29 +552,29 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
     }
     Camera &_C = m_CsLM[im];
     if (ur || up) {
-      _C.m_T = C;
+      _C.m_Cam_pose = C;
       _C.m_p = p;
     }
     ubyte &ucm = m_ucmsLM[im];
     if (ur) {
-      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;
+      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;//m_ucmsLM更新这个关键帧:需要更新旋转
     } else {
-      ucm &= ~GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;
+      ucm &= ~GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;//m_ucmsLM更新这个关键帧:不需要更新旋转
     }
     if (up) {
-      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
+      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;//m_ucmsLM更新这个关键帧:需要更新位置
     } else {
-      ucm &= ~GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
+      ucm &= ~GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;//m_ucmsLM更新这个关键帧:不需要更新位置
     }
-    const LA::Vector9f &xmDL = xmsDL[im];
+    const LA::Vector9f &xmDL = xmsDL[im];//Motion部分的更新
 #ifdef CFG_INCREMENTAL_PCG
     const LA::Vector9f &xmGN = xmsGN[im];
     LA::Vector9f &xm = m_xmsLM[im];
 #endif
-    if (m_xv2s[im] >= BA_UPDATE_VELOCITY) {
+    if (m_xv2s[im] >= BA_UPDATE_VELOCITY) {//如果需要更新速度的话,就更新速度
       xmDL.Get012(dv);
       _C.m_v += dv;
-      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY;
+      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY;//m_ucmsLM更新这个关键帧:需要更新速度
 #ifdef CFG_INCREMENTAL_PCG
       xm.MakeZero012();
 #endif
@@ -585,7 +588,7 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
     if (m_xba2s[im] >= BA_UPDATE_BIAS_ACCELERATION) {
       xmDL.Get345(dba);
       _C.m_ba += dba;
-      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION;
+      ucm |= GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION;//m_ucmsLM更新这个关键帧:需要更新acc bias
 #ifdef CFG_INCREMENTAL_PCG
       xm.MakeZero345();
 #endif
@@ -620,33 +623,33 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
     }
 #endif
   }
-
+//判断是否要更新逆深度
 #ifdef CFG_VERBOSE
   int SNx = 0, SNX = 0, SNu = 0, SNU = 0;
 #endif
   m_axds.Resize(0);
-  m_dsBkp.resize(m_xds.Size());
-  for (int iKF = 0; iKF < Nc; ++iKF) {
+  m_dsBkp.resize(m_xds.Size());//就是m_ds的一个备份
+  for (int iKF = 0; iKF < Nc; ++iKF) {//遍历所有的关键帧里的新地图点
     const int id = m_iKF2d[iKF];
-    ubyte *uds = m_uds.data() + id;
+    ubyte *uds = m_uds.data() + id;//
     const KeyFrame &KF = m_KFs[iKF];
     const int Nx = static_cast<int>(KF.m_xs.size());
-    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH) {
-      m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_DEPTH;
+    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH) {//将所有关键帧置于不更新深度状态,地图点也置于不更新深度状态
+      m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_DEPTH;//
       for (int ix = 0; ix < Nx; ++ix) {
         uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_DEPTH;
       }
     }
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {//说明这个关键帧里有需要反求深度的地图点
       continue;
     }
     //m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;
     const int iX = m_iKF2X[iKF];
-    Depth::InverseGaussian *ds = m_ds.data() + id, *dsBkp = m_dsBkp.data() + iX;
-    memcpy(dsBkp, ds, Nx * sizeof(Depth::InverseGaussian));
+    Depth::InverseGaussian *ds = m_ds.data() + id/*这帧第一个新地图点的指针*/, *dsBkp = m_dsBkp.data() + iX;
+    memcpy(dsBkp, ds, Nx * sizeof(Depth::InverseGaussian));//备份一下逆深度
     const float *xds = m_xds.Data() + iX;
     for (int ix = 0; ix < Nx; ++ix) {
-      if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {
+      if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {//有反求的逆深度的点
         continue;
       }
       //uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;
@@ -655,15 +658,15 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
         ++SNx;
       }
 #endif
-      if (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {
+      if (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {//不是一个有效的观测
         continue;
       }
       const float axd = fabs(xds[ix]);
-      if (axd < BA_UPDATE_DEPTH) {
+      if (axd < BA_UPDATE_DEPTH) {//逆深度的增量太小的话也不用更新
         continue;
       }
-      Depth::InverseGaussian &d = ds[ix];
-      d.u() = xds[ix] + d.u();
+      Depth::InverseGaussian &d = ds[ix];//原始逆深度
+      d.u() = xds[ix] + d.u();//更新逆深度以及协方差
       d.s2() = DEPTH_VARIANCE_EPSILON + KF.m_Mxs1[ix].m_mdx.m_add.m_a * BA_WEIGHT_FEATURE;
       //if (!d.Valid()) {
       //  d = dsBkp[ix];
@@ -679,8 +682,8 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
       //if (!d.Valid()) {
       //  d.u() = KF.m_d.u();
       //}
-      m_axds.Push(axd);
-      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;
+      m_axds.Push(axd);//保存一下逆深度增量的绝对值
+      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;//需要更新深度
       uds[ix] |= GBA_FLAG_TRACK_UPDATE_DEPTH;
       m_update = true;
 #ifdef CFG_VERBOSE
@@ -716,12 +719,12 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
 
 bool GlobalBundleAdjustor::UpdateStatesDecide() {
   const int Nc = m_Cs.Size(), Nm = m_CsLM.Size();
-  if (m_update && m_rho < BA_DL_GAIN_RATIO_MIN) {
+  if (m_update && m_rho < BA_DL_GAIN_RATIO_MIN) {//rho < 0.25 如果大于0说明近似的不好,需要减小信赖域,减小近似的范围。如果<0就说明是错误的近似,那么就拒绝这次的增量
     m_delta2 *= BA_DL_RADIUS_FACTOR_DECREASE;
     if (m_delta2 < BA_DL_RADIUS_MIN) {
       m_delta2 = BA_DL_RADIUS_MIN;
     }
-    m_Cs.Swap(m_CsBkp);
+    m_Cs.Swap(m_CsBkp);//回滚,不接受此次更新
     m_CsLM.Swap(m_CsLMBkp);
 #ifdef CFG_INCREMENTAL_PCG
     m_xcs.Swap(m_xcsBkp);
@@ -756,7 +759,7 @@ bool GlobalBundleAdjustor::UpdateStatesDecide() {
     m_update = false;
     m_converge = false;
     return false;
-  } else if (m_rho > BA_DL_GAIN_RATIO_MAX) {
+  } else if (m_rho > BA_DL_GAIN_RATIO_MAX) {//rho > 0.75,可以扩大信赖域半径
     //m_delta2 *= BA_DL_RADIUS_FACTOR_INCREASE;
     m_delta2 = std::max(m_delta2, BA_DL_RADIUS_FACTOR_INCREASE * m_x2DL);
     if (m_delta2 > BA_DL_RADIUS_MAX) {
@@ -764,13 +767,13 @@ bool GlobalBundleAdjustor::UpdateStatesDecide() {
     }
   }
   for (int ic = 0; ic < Nc; ++ic) {
-    if (m_ucs[ic] & GBA_FLAG_FRAME_UPDATE_CAMERA) {
+    if (m_ucs[ic] & GBA_FLAG_FRAME_UPDATE_CAMERA) {//当需要更新状态时,GM_FLAG_FRAME_UPDATE_CAMERAflag设成1
       m_Ucs[ic] |= GM_FLAG_FRAME_UPDATE_CAMERA;
     }
     if (!(m_ucs[ic] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
       continue;
     }
-    m_ucs[ic] &= ~GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;
+    m_ucs[ic] &= ~GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;//将m_ucs和uds里GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION都取消
     const int id = m_iKF2d[ic];
     ubyte *uds = m_uds.data() + id;
     const int Nx = static_cast<int>(m_KFs[ic].m_xs.size());
@@ -791,7 +794,7 @@ bool GlobalBundleAdjustor::UpdateStatesDecide() {
     m_dsKF[ic] = AverageDepths(m_ds.data() + id, Nx);
 #endif
   }
-  for (int ic1 = Nc - Nm, ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;
+  for (int ic1 = Nc - Nm, ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;//imu约束连接的前后两帧
        ic1 = ic2++, im1 = im2++) {
     const KeyFrame &KF2 = m_KFs[ic2];
     if (!KF2.m_us.Empty() && (m_ucmsLM[im1] & GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE)) {
@@ -800,7 +803,7 @@ bool GlobalBundleAdjustor::UpdateStatesDecide() {
       if (im1 == 83)
         UT::DebugStart();
 #endif
-      IMU::Delta &D = m_DsLM[im2];
+      IMU::Delta &D = m_DsLM[im2];//imu预积分也要重新用更新后的状态量预积分一下
       IMU::PreIntegrate(m_KFs[ic2].m_us, m_KFs[ic1].m_T.m_t, m_KFs[ic2].m_T.m_t, m_CsLM[im1], &D,
                         &m_work, true, D.m_u1.Valid() ? &D.m_u1 : NULL,
                         D.m_u2.Valid() ? &D.m_u2 : NULL, BA_ANGLE_EPSILON);
@@ -825,24 +828,24 @@ bool GlobalBundleAdjustor::UpdateStatesDecide() {
 
 void GlobalBundleAdjustor::ConvertCameraUpdates(const float *xcs, LA::AlignedVectorXf *xp2s,
                                                 LA::AlignedVectorXf *xr2s) {
-  const int pc = 6;
-  const int Nc = m_Cs.Size(), Ncp = Nc * pc;
+  const int pc = 6;//pose优化变量的size
+  const int Nc = m_Cs.Size(), Ncp = Nc * pc;//相机优化变量的总size
   m_x2s.Set(xcs, Ncp);
-  m_x2s.MakeSquared();
-  const LA::Vector6f *xc2s = (LA::Vector6f *) m_x2s.Data();
+  m_x2s.MakeSquared();//pose变量增量^2
+  const LA::Vector6f *xc2s = (LA::Vector6f *) m_x2s.Data();//边缘化以后求解出的pose部分的优化变量增量^2
   xp2s->Resize(Nc);
   xr2s->Resize(Nc);
   float *_xp2s = xp2s->Data(), *_xr2s = xr2s->Data();
   for (int ic = 0; ic < Nc; ++ic) {
     const LA::Vector6f &xc2 = xc2s[ic];
-    _xp2s[ic] = xc2.v0() + xc2.v1() + xc2.v2();
-    _xr2s[ic] = xc2.v3() + xc2.v4() + xc2.v5();
+    _xp2s[ic] = xc2.v0() + xc2.v1() + xc2.v2();//位置部分每个优化变量增量的^2
+    _xr2s[ic] = xc2.v3() + xc2.v4() + xc2.v5();//朝向部分每个优化变量增量的^2
   }
 }
 
 void GlobalBundleAdjustor::ConvertCameraUpdates(const LA::Vector6f *xcs,
                                                 AlignedVector<LA::ProductVector6f> *xcsP) {
-  const int Nc = m_Cs.Size();
+  const int Nc = m_Cs.Size();//所有左相机的size
   xcsP->Resize(Nc);
   LA::ProductVector6f *_xcsP = xcsP->Data();
   for (int ic = 0; ic < Nc; ++ic) {
@@ -867,7 +870,7 @@ void GlobalBundleAdjustor::ConvertCameraUpdates(const AlignedVector<LA::AlignedV
     xcsA[ic].Get(xcs[ic]);
   }
 }
-
+//motion部分状态的更新,和ConvertCameraUpdates基本一致的
 void GlobalBundleAdjustor::ConvertMotionUpdates(const float *xms, LA::AlignedVectorXf *xv2s,
                                                 LA::AlignedVectorXf *xba2s,
                                                 LA::AlignedVectorXf *xbw2s) {
@@ -887,16 +890,16 @@ void GlobalBundleAdjustor::ConvertMotionUpdates(const float *xms, LA::AlignedVec
     _xbw2s[im] = xm2.v6() + xm2.v7() + xm2.v8();
   }
 }
-
-void GlobalBundleAdjustor::ConvertCameraMotionResiduals(const LA::AlignedVectorX<PCG_TYPE> &rs,
-                                                        const LA::AlignedVectorX<PCG_TYPE> &zs,
-                                                        PCG_TYPE *Se2, PCG_TYPE *e2Max) {
+//r.t*z
+void GlobalBundleAdjustor::ConvertCameraMotionResiduals(const LA::AlignedVectorX<PCG_TYPE> &rs,/*残差*/
+                                                        const LA::AlignedVectorX<PCG_TYPE> &zs,/*梯度*/
+                                                        PCG_TYPE *Se2/*rs.t*zs*/, PCG_TYPE *e2Max/*rs.t*zs*/) {
   const int N = rs.Size();
 #ifdef CFG_DEBUG
-  UT_ASSERT(zs.Size() == N);
+  UT_ASSERT(feat_measures.Size() == N);
 #endif
   m_e2s.Resize(N);
-  SIMD::Multiply(N, rs.Data(), zs.Data(), m_e2s.Data());
+  SIMD::Multiply(N, rs.Data(), zs.Data(), m_e2s.Data());//m_e2s = rs.t*zs
   *Se2 = 0;
   *e2Max = 0;
   if (GBA_PCG_CONDITIONER_BAND <= 1) {
@@ -938,13 +941,13 @@ void GlobalBundleAdjustor::ConvertCameraMotionResiduals(const LA::AlignedVectorX
     }
 #endif
   } else {
-    *Se2 = *e2Max = m_e2s.Sum();
+    *Se2 = *e2Max = m_e2s.Sum();//m_e2s = rs.t*zs
 #ifdef CFG_DEBUG
     UT_ASSERT(*Se2 >= 0.0f);
 #endif
   }
 }
-
+//更新逆深度部分的增量
 void GlobalBundleAdjustor::ConvertDepthUpdates(const float *xs, LA::AlignedVectorXf *xds) {
   int i = 0;
   const int Nd = m_xds.Size();
@@ -976,7 +979,7 @@ void GlobalBundleAdjustor::ConvertDepthUpdates(const float *xs, LA::AlignedVecto
 
 void GlobalBundleAdjustor::PushDepthUpdates(const LA::AlignedVectorXf &xds,
                                             LA::AlignedVectorXf *xs) {
-  const int nKFs = int(m_KFs.size());
+  const int nKFs = int(m_KFs.size());//遍历所有的关键帧
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const int iX = m_iKF2X[iKF];
     if (iX == -1) {

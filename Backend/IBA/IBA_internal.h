@@ -23,11 +23,11 @@
 class ViewerIBA;
 
 namespace IBA {
-
+//ICEBA后端
 class Internal {
 
  public:
-
+//对于地图点的观测
   class FeatureMeasurement {
    public:
     inline bool operator < (const FeatureMeasurement &z) const {
@@ -41,27 +41,29 @@ class Internal {
       return m_id < id;
     }
    public:
-    int m_id;
-    ::Point2D m_z;
-    LA::SymmetricMatrix2x2f m_W;
+    int m_id;//地图点在所有关键帧地图点中的全局id
+    ::Point2D m_z;//左目没有畸变的归一化坐标,或者右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)
+    LA::SymmetricMatrix2x2f m_W;//畸变部分信息矩阵
     ubyte m_right;
   };
 
+  //地图点索引数据结构
   class MapPointIndex {
    public:
     inline MapPointIndex() {}
     inline MapPointIndex(const int iFrm, const int idx, const int ix) :
-                         m_iFrm(iFrm), m_idx(idx), m_ix(ix) {}
+            m_iFrm(iFrm), m_G_idx(idx), m_L_idx(ix) {}
     inline bool operator < (const MapPointIndex &idx) const {
-      return m_iFrm < idx.m_iFrm || (m_iFrm == idx.m_iFrm && m_idx < idx.m_idx);
+      return m_iFrm < idx.m_iFrm || (m_iFrm == idx.m_iFrm && m_G_idx < idx.m_G_idx);
     }
-    inline void Set(const int iFrm, const int idx, const int ix) {
+      //输入的是当前帧的id,地图点的全局id,在当前新地图点中的id
+    inline void Set(const int iFrm, const int global_idx, const int local_idx) {
       m_iFrm = iFrm;
-      m_idx = idx;
-      m_ix = ix;
+          m_G_idx = global_idx;
+          m_L_idx = local_idx;
     }
    public:
-    int m_iFrm, m_idx, m_ix;
+    int m_iFrm/*frame_id 这帧的id*/, m_G_idx/*原始:m_idx,全局id(从1开始),global_idx*/, m_L_idx;//原始:m_ix,局部id就是在这帧的新地图点中的id,local_idx
   };
 
  public:
@@ -79,7 +81,7 @@ class Internal {
 
   const LocalBundleAdjustor::InputLocalFrame& PushCurrentFrame(const CurrentFrame &CF);
   const GlobalMap::InputKeyFrame& PushKeyFrame(const KeyFrame &KF, const Camera *C = NULL);
-  void ConvertFeatureMeasurements(const std::vector<MapPointMeasurement> &zs, FRM::Frame *F);
+  void ConvertFeatureMeasurements(const std::vector<MapPointMeasurement> &cur_feat_measures, FRM::Frame *F);
 #ifdef CFG_GROUND_TRUTH
   void PushDepthMeasurementsGT(const FRM::Frame &F);
 #endif
@@ -97,18 +99,22 @@ class Internal {
   friend GlobalBundleAdjustor;
   friend ViewerIBA;
 
-  LocalMap m_LM;
-  GlobalMap m_GM;
-  LocalBundleAdjustor m_LBA;
-  GlobalBundleAdjustor m_GBA;
+  LocalMap m_LM;//局部地图
+  GlobalMap m_GM; //全局地图
+  LocalBundleAdjustor m_LBA; //局部地图优化器
+  GlobalBundleAdjustor m_GBA; //全局地图优化器
   int m_debug;
   int m_nFrms;
-  std::vector<FRM::Tag> m_Ts;
-  std::vector<int> m_iKF2d, m_id2X, m_iX2d, m_id2idx, m_idx2iX;
-  std::vector<::Point2D> m_xs;
-  std::list<LocalMap::CameraLF> m_CsLF;
-  std::vector<LocalMap::CameraKF> m_CsKF;
-  std::vector<::Depth::InverseGaussian> m_ds;
+  std::vector<FRM::Tag> m_Ts;//所有非关键帧的信息,每一帧进来都会有一个Tag,当这帧同时还是关键帧时,会从m_Ts中把这帧剔除掉
+  std::vector<int> m_iKF2d/*记录的是这个关键帧来之前所有的关键帧数量,比如[1]=70，意思就是第1帧来之前有70个特征点*/,
+  m_id2iX,//原始名称:m_id2X 有三种id,一种是地图点在这个关键帧中的id
+  m_iX2id,//原始名称:m_iX2d一种是地图点在所有关键帧地图点中的全局id(id,iX都是表示的这个),也就是第几个加入到IBA里的还有一个是前端的全局id
+  m_id2idx,//还有一个是前端的全局id(idx)
+  m_idx2iX;//resize的时候会多加1位,即它的size就是接下来最新的地图点的起始id
+  std::vector<::Point2D> m_xs;//对应的m_IKF.m_Xs中地图点的左目观测归一化坐标
+  std::list<LocalMap::CameraLF> m_CsLF;//用来获取滑窗中的pose
+  std::vector<LocalMap::CameraKF> m_CsKF;//所有的关键帧pose
+  std::vector<::Depth::InverseGaussian> m_ds;//所有地图点的逆深度
   std::vector<ubyte> m_uds;
 #ifdef CFG_GROUND_TRUTH
   AlignedVector<IMU::Measurement> m_usGT;
@@ -120,22 +126,22 @@ class Internal {
   std::vector<std::vector<::Depth::Measurement> > m_zsGT;
 #endif
 
-  Camera::Calibration m_K;
-  ::Intrinsic::UndistortionMap m_UM;
+  Camera::Calibration m_K; //标定参数
+  ::Intrinsic::UndistortionMap m_UM;//左目畸变对照表,key是畸变像素坐标,value是无畸变归一化坐标
 #ifdef CFG_STEREO
-  ::Intrinsic::UndistortionMap m_UMr;
+  ::Intrinsic::UndistortionMap m_UMr;//右目畸变对照表,key是畸变像素坐标,value是无畸变归一化坐标
 #endif
   AlignedVector<Camera> m_CsGT;
   std::vector<::Depth::InverseGaussian> m_DsGT;
   std::string m_dir;
 
-  std::vector<FeatureMeasurement> m_zsSortTmp;
-  std::vector<FTR::Measurement> m_zsTmp;
-  std::vector<MapPointIndex> m_idxsSortTmp;
-  std::vector<int> m_idxsTmp;
+  std::vector<FeatureMeasurement> m_zsSortTmp;//暂时存储当前帧对于老地图点去畸变后的观测
+  std::vector<FTR::Measurement> m_zsTmp;//当前帧对老地图点的观测
+  std::vector<MapPointIndex> m_idxsSortTmp;//当前关键帧新地图点的id管理,每一个元素存储帧的id,全局地图点id,局部地图点id
+  std::vector<int> m_idxsTmp;//下标对应于m_IKF.m_Xs的下标,值对应于KF.Xs的下标
 
-  LocalBundleAdjustor::InputLocalFrame m_ILF;
-  GlobalMap::InputKeyFrame m_IKF;
+  LocalBundleAdjustor::InputLocalFrame m_ILF;//当前输入的普通帧
+  GlobalMap::InputKeyFrame m_IKF;//当前输入的关键帧
 
   std::vector<GlobalMap::InputCamera> m_ICs;
 

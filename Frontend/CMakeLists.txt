@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 2.8.11)
 project(euroc_tracking)
-
+#set(CMAKE_BUILD_TYPE "Debug")
+#set(CMAKE_CXX_FLAGS "-std=c++11 -O0 -Wall -g -march=native")
 list(FIND OpenCV_LIBS "opencv_viz" find_index)
 if (find_index GREATER -1)
     message(STATUS "Found opencv_viz")

@@ -19,19 +19,19 @@
 #include "Camera.h"
 #include "Parameter.h"
 #include "AlignedVector.h"
-
+#include <eigen3/Eigen/Dense>
 namespace IMU {
 class Measurement {
  public:
   inline const float& t() const { return m_w.r(); }
   inline       float& t()       { return m_w.r(); }
-  inline bool operator < (const float t) const { return this->t() < t; }
+  inline bool operator < (const float t) const { return this->t() < t; }//重载了<，所以是按时间戳来排序
   inline bool Valid() const { return m_a.Valid(); }
   inline bool Invalid() const { return m_a.Invalid(); }
   inline void Invalidate() { m_a.Invalidate(); }
-  static inline void Interpolate(const Measurement &u1, const Measurement &u2, const float t,
+  static inline void Interpolate(const Measurement &u1/*k时刻imu测量*/, const Measurement &u2/*k+1时刻imu测量*/, const float t/*0.5*(tk + tk+!)*/,
                                  LA::AlignedVector3f &a, LA::AlignedVector3f &w) {
-    const xp128f w1 = xp128f::get((u2.t() - t) / (u2.t() - u1.t()));
+    const xp128f w1 = xp128f::get((u2.t() - t) / (u2.t() - u1.t()));//就是插值获得它们中间时刻对应的imu测量
     const xp128f w2 = xp128f::get(1.0f - w1[0]);
     a.xyzr() = (u1.m_a.xyzr() * w1) + (u2.m_a.xyzr() * w2);
     w.xyzr() = (u1.m_w.xyzr() * w1) + (u2.m_w.xyzr() * w2);
@@ -46,7 +46,7 @@ class Measurement {
     }
   }
  public:
-  LA::AlignedVector3f m_a, m_w;
+  LA::AlignedVector3f m_a, m_w;//acc 和 gry的测量值,转到了(Rc0_i*)左相机坐标系下,其中m_w的第3维度存的是时间戳
 };
 
 class Delta {
@@ -56,15 +56,15 @@ class Delta {
     class DD {
      public:
       //LA::AlignedMatrix3x3f m_Fvr, m_Fpr, m_Fpv;
-      SkewSymmetricMatrix m_Fvr, m_Fpr;
-      xp128f m_Fpv;
+      SkewSymmetricMatrix m_Fvr/*dv/dR*/, m_Fpr/*dp/dR*/;
+      xp128f m_Fpv;/*dp/dv*/
     };
     class DB {
      public:
-      LA::AlignedMatrix3x3f m_Frbw, m_Fvba, m_Fvbw, m_Fpba, m_Fpbw;
+      LA::AlignedMatrix3x3f m_Frbw/*dR/dbw*/, m_Fvba/*dv/dba*/, m_Fvbw/*dv/dbw*/, m_Fpba/*dp/dba*/, m_Fpbw/*dp/dbw*/;
     };
    public:
-    DD m_Fdd;
+    DD m_Fdd;/*传递矩阵Rvp和Rvp部分*/
     DB m_Fdb;
   };
   class Covariance {
@@ -170,34 +170,34 @@ class Delta {
       //m_Pdb.GetTranspose(&m_Pbd);
     }
    public:
-    static inline void ABT(const Transition::DD &A, const DD &B, DD *ABT) {
-      ABT->m_Prr = B.m_Prr;
+    static inline void ABT(const Transition::DD &A/*传递矩阵*/, const DD &B/*上个时刻协方差*/, DD *ABT) {
+      ABT->m_Prr = B.m_Prr;//pvR中,R只会收到角度的扰动,为I
       ABT->m_Prv = B.m_Prv;
       ABT->m_Prp = B.m_Prp;
       //LA::AlignedMatrix3x3f::ABT(A.m_Fvr, B.m_Prr, ABT->m_Pvr);
-      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prr, ABT->m_Pvr);
-      ABT->m_Pvr += B.m_Pvr;
+      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prr, ABT->m_Pvr);//ABT->m_Pvr = [A.m_Fvr]x * B.m_Prr
+      ABT->m_Pvr += B.m_Pvr;////ABT->m_Pvr = [A.m_Fvr]x * B.m_Prr + B.m_Pvr
       //LA::AlignedMatrix3x3f::ABT(A.m_Fvr, B.m_Pvr, ABT->m_Pvv);
-      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prv, ABT->m_Pvv);
-      ABT->m_Pvv += B.m_Pvv;
+      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prv, ABT->m_Pvv);//ABT->m_Pvv = [A.m_Fvr]x * B.m_Prv
+      ABT->m_Pvv += B.m_Pvv;////ABT->m_Pvv = [A.m_Fvr]x * B.m_Prv + B.m_Pvv
       //LA::AlignedMatrix3x3f::ABT(A.m_Fvr, B.m_Ppr, ABT->m_Pvp);
-      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prp, ABT->m_Pvp);
-      ABT->m_Pvp += B.m_Pvp;
+      SkewSymmetricMatrix::AB(A.m_Fvr, B.m_Prp, ABT->m_Pvp);//ABT->m_Pvp = [A.m_Fvr]x * B.m_Prp
+      ABT->m_Pvp += B.m_Pvp;////ABT->m_Pvp = [A.m_Fvr]x * B.m_Prp + B.m_Pvp
       //LA::AlignedMatrix3x3f::ABT(A.m_Fpr, B.m_Prr, ABT->m_Ppr);
-      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prr, ABT->m_Ppr);
+      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prr, ABT->m_Ppr); //ABT->m_Ppr = [A.m_Fpr]x * B.m_Prr
       //LA::AlignedMatrix3x3f::AddABTTo(A.m_Fpv, B.m_Prv, ABT->m_Ppr);
-      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvr, ABT->m_Ppr);
-      ABT->m_Ppr += B.m_Ppr;
+      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvr, ABT->m_Ppr);// ABT->m_Ppr =[A.m_Fpr]x * B.m_Prr + A.m_Fpv*B.m_Pvr
+      ABT->m_Ppr += B.m_Ppr;////ABT->m_Ppr = [A.m_Fpr]x * B.m_Prr  + A.m_Fpv*B.m_Pvr + B.m_Ppr
       //LA::AlignedMatrix3x3f::ABT(A.m_Fpr, B.m_Pvr, ABT->m_Ppv);
-      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prv, ABT->m_Ppv);
+      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prv, ABT->m_Ppv);//ABT->m_Ppv = [A.m_Fpr]x * B.m_Prv
       //LA::AlignedMatrix3x3f::AddABTTo(A.m_Fpv, B.m_Pvv, ABT->m_Ppv);
-      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvv, ABT->m_Ppv);
-      ABT->m_Ppv += B.m_Ppv;
+      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvv, ABT->m_Ppv);// ABT->m_Ppv =  [A.m_Fpr]x * B.m_Prv + A.m_Fpv*B.m_Pvv
+      ABT->m_Ppv += B.m_Ppv;//// ABT->m_Ppv =  [A.m_Fpr]x * B.m_Prv + A.m_Fpv*B.m_Pvv + B.m_Ppv
       //LA::AlignedMatrix3x3f::ABT(A.m_Fpr, B.m_Ppr, ABT->m_Ppp);
-      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prp, ABT->m_Ppp);
+      SkewSymmetricMatrix::AB(A.m_Fpr, B.m_Prp, ABT->m_Ppp);//ABT->m_Ppp = [A.m_Fpr]x * B.m_Prp
       //LA::AlignedMatrix3x3f::AddABTTo(A.m_Fpv, B.m_Ppv, ABT->m_Ppp);
-      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvp, ABT->m_Ppp);
-      ABT->m_Ppp += B.m_Ppp;
+      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvp, ABT->m_Ppp);//ABT->m_Ppp = [A.m_Fpr]x * B.m_Prp + A.m_Fpv*B.m_Pvp
+      ABT->m_Ppp += B.m_Ppp;////ABT->m_Ppp = [A.m_Fpr]x * B.m_Prp + A.m_Fpv*B.m_Pvp + B.m_Ppp
     }
     //static inline void ABT(const Transition::DD &A, const BD &B, DB *ABT) {
     //  B.m_Pbwr.GetTranspose(ABT->m_Prbw);
@@ -210,19 +210,19 @@ class Delta {
     //  LA::AlignedMatrix3x3f::AddABTTo(A.m_Fpr, B.m_Pbwr, ABT->m_Ppbw);
     //  LA::AlignedMatrix3x3f::AddABTTo(A.m_Fpv, B.m_Pbwv, ABT->m_Ppbw);
     //}
-    static inline void AB(const Transition::DD &A, const DB &B, DB *AB) {
-      AB->m_Prbw = B.m_Prbw;
+    static inline void AB(const Transition::DD &A/*传递矩阵pRv和pRv部分*/, const DB &B/*上个时刻协方差pRv和ba,bw部分*/, DB *AB/*FP的pRv和ba,bw部分*/) {
+      AB->m_Prbw = B.m_Prbw;//没有m_Prba是因为这个总是0
       AB->m_Pvba = B.m_Pvba;
       AB->m_Pvbw = B.m_Pvbw;
-      SkewSymmetricMatrix::AddABTo(A.m_Fvr, B.m_Prbw, AB->m_Pvbw);
+      SkewSymmetricMatrix::AddABTo(A.m_Fvr, B.m_Prbw, AB->m_Pvbw);//AB->m_Pvbw = B.m_Pvbw + [A.m_Fvr]x * B.m_Prbw
       AB->m_Ppba = B.m_Ppba;
-      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvba, AB->m_Ppba);
+      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvba, AB->m_Ppba);//AB->m_Ppba = A.m_Fpv * B.m_Pvba + B.m_Ppba
       AB->m_Ppbw = B.m_Ppbw;
       SkewSymmetricMatrix::AddABTo(A.m_Fpr, B.m_Prbw, AB->m_Ppbw);
-      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvbw, AB->m_Ppbw);
+      LA::AlignedMatrix3x3f::AddsATo(A.m_Fpv, B.m_Pvbw, AB->m_Ppbw);//AB->m_Ppbw =  B.m_Ppbw +  [A.m_Fvr]x * B.m_Pvbw + A.m_Fpv * B.m_Pvbw
     }
     static inline void AddABTTo(const Transition::DB &A, const DB &B, DD *ABT) {
-      LA::AlignedMatrix3x3f::AddABTTo(A.m_Frbw, B.m_Prbw, ABT->m_Prr);
+      LA::AlignedMatrix3x3f::AddABTTo(A.m_Frbw, B.m_Prbw, ABT->m_Prr);//把传递矩阵pRv和ba,bw 与上个时刻协方差ba,bw和pRv部分 继续构造,刚才ABT里少加了这部分
       LA::AlignedMatrix3x3f::AddABTTo(A.m_Frbw, B.m_Pvbw, ABT->m_Prv);
       LA::AlignedMatrix3x3f::AddABTTo(A.m_Frbw, B.m_Ppbw, ABT->m_Prp);
       LA::AlignedMatrix3x3f::AddABTTo(A.m_Fvbw, B.m_Prbw, ABT->m_Pvr);
@@ -245,14 +245,14 @@ class Delta {
       LA::AlignedMatrix3x3f::AddsATo(Bbaba, A.m_Fpba, ABT->m_Ppba);
       LA::AlignedMatrix3x3f::AddsATo(Bbwbw, A.m_Fpbw, ABT->m_Ppbw);
     }
-    static inline void ABT(const Transition &A, const Covariance &B, DD *ABTdd, DB *ABTdb) {
-      ABT(A.m_Fdd, B.m_Pdd, ABTdd);
+    static inline void ABT(const Transition &A/*传递矩阵*/, const Covariance &B/*上个时刻协方差*/, DD *ABTdd/*FP的pRv和pRv部分*/, DB *ABTdb/*FP的pRv和ba,bw部分*/) {
+      ABT(A.m_Fdd/*传递矩阵pRv和pRv部分*/, B.m_Pdd/*上个时刻协方差pRv和pRv部分*/, ABTdd/*FP的pRv和pRv部分*/);//构造FP的pRv部分
       //ABT(A.m_Fdd, B.m_Pbd, ABTdb);
-      AB(A.m_Fdd, B.m_Pdb, ABTdb);
-      AddABTTo(A.m_Fdb, B.m_Pdb, ABTdd);
-      AddABTTo(A.m_Fdb, B.m_Pbb, ABTdb);
+      AB(A.m_Fdd/*传递矩阵pRv和pRv部分*/, B.m_Pdb/*上个时刻协方差pRv和ba,bw部分*/, ABTdb/*FP的pRv和ba,bw部分*/);
+      AddABTTo(A.m_Fdb/*传递矩阵pRv和ba,bw部分*/, B.m_Pdb/*上个时刻协方差pRv和ba,bw部分*/, ABTdd/*FP的pRv和pRv部分*/);
+      AddABTTo(A.m_Fdb/*传递矩阵pRv和ba,bw部分*/, B.m_Pbb/*上个时刻协方差pRv和pRv部分*/, ABTdb/*FP的pRv和ba,bw部分*/);
     }
-    static inline void ABTToUpper(const DD &A, const Transition::DD &B, DD *ABT) {
+    static inline void ABTToUpper(const DD &A/*FP的pRv和pRv部分*/, const Transition::DD &B/*传递矩阵pRv和pRv部分*/, DD *ABT) {
       ABT->m_Prr = A.m_Prr;
       //LA::AlignedMatrix3x3f::ABT(A.m_Prr, B.m_Fvr, ABT->m_Prv);
       SkewSymmetricMatrix::ABT(A.m_Prr, B.m_Fvr, ABT->m_Prv);
@@ -287,21 +287,21 @@ class Delta {
       LA::AlignedMatrix3x3f::AddABTToUpper(A.m_Ppba, B.m_Fpba, ABT->m_Ppp);
       LA::AlignedMatrix3x3f::AddABTToUpper(A.m_Ppbw, B.m_Fpbw, ABT->m_Ppp);
     }
-    static inline void ABTToUpper(const DD &Add, const DB &Adb, const Transition &B, DD *ABT) {
-      ABTToUpper(Add, B.m_Fdd, ABT);
-      AddABTToUpper(Adb, B.m_Fdb, ABT);
+    static inline void ABTToUpper(const DD &Add/*FP的pRv和pRv部分*/, const DB &Adb/*FP的pRv和ba,bw部分*/, const Transition &B/*传递矩阵*/, DD *ABT) {
+      ABTToUpper(Add/*FP的pRv和pRv部分*/, B.m_Fdd/*传递矩阵pRv和pRv部分*/, ABT);//在算FPF.t的pRv和pRv中pRv影响的部分
+      AddABTToUpper(Adb/*FP的pRv和ba,bw部分*/, B.m_Fdb/*FP的ba,bw和pRv部分*/, ABT);//在算FPF.t的pRv和pRv中ba,bw影响的部分
     }
-    static inline void FPFT(const Transition &F, const Covariance &P, DD *U, Covariance *FPFT) {
-      ABT(F, P, U, &FPFT->m_Pdb);
-      ABTToUpper(*U, FPFT->m_Pdb, F, &FPFT->m_Pdd);
-      FPFT->m_Pbb = P.m_Pbb;
+    static inline void FPFT(const Transition &F/*传递矩阵*/, const Covariance &P/*上个时刻协方差*/, DD *U, Covariance *FPFT/*当前时刻协方差*/) {
+      ABT(F/*传递矩阵*/, P/*上个时刻协方差*/, U/*FP的pRv和pRv部分*/, &FPFT->m_Pdb/*FP的pRv和ba,bw部分*/);//计算FP pRv这三行的值
+      ABTToUpper(*U/*FP的pRv和pRv部分*/, FPFT->m_Pdb/*FP的pRv和ba,bw部分*/, F/*传递矩阵*/, &FPFT->m_Pdd);//计算FPF.t pRv左上角的值
+      FPFT->m_Pbb = P.m_Pbb;//右下角
       FPFT->SetLowerFromUpper();
     }
    public:
-    DD m_Pdd;
-    DB m_Pdb;
+    DD m_Pdd;/*矩阵块的Rvp和Rvp部分*/
+    DB m_Pdb;/*矩阵块的Rvp和ba,bw部分*/
     //BD m_Pbd;
-    BB m_Pbb;
+    BB m_Pbb;/*矩阵块的ba,bw和ba,bw部分*/
   };
 #ifdef CFG_IMU_FULL_COVARIANCE
   class Weight {
@@ -315,9 +315,10 @@ class Delta {
       for (int i = 1; i < 15; ++i) {
         _P[i] = _P[i - 1] + 15;
       }
-      P.m_Pdd.GetUpper(_P);
-      P.m_Pdb.Get(_P, 9);
-      P.m_Pbb.GetUpper(_P, 9, 9);
+      P.m_Pdd.GetUpper(_P);//获取上三角矩阵块的Rvp和Rvp部分部分的数据
+      P.m_Pdb.Get(_P, 9);//获取上三角矩阵块的Rvp和ba,bw部分部分的数据
+      P.m_Pbb.GetUpper(_P, 9, 9);//获取上三角矩阵块的ba,bw和ba,bw部分部分的数据
+
       if (LA::LS::InverseLDL<float>(15, _P)) {
         for (int i = 0, _i = 0; i < 5; ++i) {
           float *W0 = _P[_i++], *W1 = _P[_i++], *W2 = _P[_i++];
@@ -376,7 +377,7 @@ class Delta {
       return scc;
     }
    public:
-    LA::AlignedMatrix3x3f m_W[5][5];
+    LA::AlignedMatrix3x3f m_W[5][5];//权重矩阵
   };
 #else
   class Weight {
@@ -456,7 +457,7 @@ class Delta {
       m_ebw.Print(_str + "ebw = ", e, l, true);
     }
    public:
-    LA::AlignedVector3f m_er, m_ev, m_ep, m_eba, m_ebw;
+    LA::AlignedVector3f m_er, m_ev, m_ep, m_eba, m_ebw;//motion部分的残差具体看IMU.h的注释
   };
   class Jacobian {
    public:
@@ -476,9 +477,9 @@ class Delta {
         m_Jpbw1.GetTranspose(JT.m_Jpbw1);
       }
      public:
-      LA::AlignedMatrix3x3f m_Jrbw1;
-      LA::AlignedMatrix3x3f m_Jvv1, m_Jvba1, m_Jvbw1;
-      LA::AlignedMatrix3x3f m_Jpv1, m_Jpba1, m_Jpbw1;
+      LA::AlignedMatrix3x3f m_Jrbw1;//div(e_r)/div(bwi)
+      LA::AlignedMatrix3x3f m_Jvv1/*div(e_v)/div(v_wi)*/, m_Jvba1/*div(e_v)/div(bai)*/, m_Jvbw1;/*div(e_v)/div(bwi)*/
+      LA::AlignedMatrix3x3f m_Jpv1/*div(e_p)/div(v_wi)*/, m_Jpba1/*div(e_p)/div(bai)*/, m_Jpbw1;/*div(e_p)/div(bwi)*/
     };
     class Global : public FirstMotion {
      public:
@@ -491,15 +492,15 @@ class Delta {
         m_Jpr2.GetTranspose(JT.m_Jpr2);
       }
      public:
-      LA::AlignedMatrix3x3f m_Jrr1;
-      LA::AlignedMatrix3x3f m_Jvr1;
-      LA::AlignedMatrix3x3f m_Jpp1;
-      LA::AlignedMatrix3x3f m_Jpr1;
-      LA::AlignedMatrix3x3f m_Jpr2;
+      LA::AlignedMatrix3x3f m_Jrr1;//div(e_r)/div(Rciw)
+      LA::AlignedMatrix3x3f m_Jvr1;//div(e_v)/div(Rciw)
+      LA::AlignedMatrix3x3f m_Jpp1;/*div(e_p)/div(twci)*/
+      LA::AlignedMatrix3x3f m_Jpr1;/*div(e_p)/div(Rciw)*/
+      LA::AlignedMatrix3x3f m_Jpr2;/*div(e_p)/div(Rcjw)*/
     };
     class RelativeLF : public Gravity, public Global {
      public:
-      LA::AlignedMatrix3x3f m_Jvr2, m_Jvv2;
+      LA::AlignedMatrix3x3f m_Jvr2/*div(e_v)/div(Rcjw)*/, m_Jvv2;/*div(e_v)/div(v_wj)*/
     };
     class RelativeKF : public Gravity, public FirstMotion {
      public:
@@ -512,16 +513,16 @@ class Delta {
         m_Jpr2.GetTranspose(JT.m_Jpr2);
       }
      public:
-      LA::AlignedMatrix3x3f m_Jrr2;
-      LA::AlignedMatrix3x3f m_Jvr2, m_Jvv2;
-      LA::AlignedMatrix3x3f m_Jpp2;
-      LA::AlignedMatrix3x3f m_Jpr2;
+      LA::AlignedMatrix3x3f m_Jrr2;//div(e_r)/div(Rcjw)
+      LA::AlignedMatrix3x3f m_Jvr2/*div(e_v)/div(Rcjw)*/, m_Jvv2;/*div(e_v)/div(v_wj)*/
+      LA::AlignedMatrix3x3f m_Jpp2;/*div(e_p)/div(twcj)*/
+      LA::AlignedMatrix3x3f m_Jpr2;/*div(e_p)/div(Rcjw)*/
     };
   };
   class ErrorJacobian {
    public:
-    Error m_e;
-    Jacobian::Global m_J;
+    Error m_e;//motion部分的残差
+    Jacobian::Global m_J;//motion部分的雅克比
   };
   class Factor {
    public:
@@ -551,9 +552,9 @@ class Delta {
         Camera::Factor::Unitary::MM::AmB(A.m_Amm, B.m_Amm, AmB.m_Amm);
       }
      public:
-      Camera::Factor::Unitary::CC m_Acc;
-      Camera::Factor::Unitary::CM m_Acm;
-      Camera::Factor::Unitary::MM m_Amm;
+      Camera::Factor::Unitary::CC m_Acc;//这一帧的pose自己和自己的H以及自己对应的-b
+      Camera::Factor::Unitary::CM m_Acm;//这一帧的pose和这一帧的motion的H
+      Camera::Factor::Unitary::MM m_Amm;//这一帧的motion自己和自己的H以及自己对应的-b
     };
     class Auxiliary {
      public:
@@ -561,13 +562,14 @@ class Delta {
        public:
         void Set(const Jacobian::Global &J, const Error &e, const float w, const Weight &W,
                  const float Tpv);
-        inline void Get(Unitary *A11, Unitary *A22, Camera::Factor::Binary *A12) const {
-#ifdef CFG_IMU_FULL_COVARIANCE
+        inline void Get(Unitary *A11/*H中i时刻的c,m和i时刻的c,m,以及对应的-b*/, Unitary *A22/*H中j时刻的c,m和j时刻的c,m,以及对应的-b*/
+                , Camera::Factor::Binary *A12/*H中i时刻的c,m和j时刻的c,m*/) const {
+#ifdef CFG_IMU_FULL_COVARIANCE//imu约束的H是30*30的,矩阵就四大块,左上角就是前一时刻的c,m，右下角就是后一时刻的cm，左下右上的就是前一时刻和后一时刻的
           //const LA::AlignedMatrix3x3f *A[10] = {&m_A[ 0], &m_A[ 9], &m_A[17], &m_A[24], &m_A[30],
           //                                      &m_A[35], &m_A[39], &m_A[42], &m_A[44], &m_A[45]};
-          A11->Set(m_A, m_A + 9, m_A + 17, m_A + 24, m_A + 30, m_b);
-          A22->Set(m_A + 40, m_A + 44, m_A + 47, m_A + 49, m_A + 50, m_b + 5);
-          A12->Set(m_A + 5, m_A + 14, m_A + 22, m_A + 29, m_A + 35);
+          A11->Set(m_A, m_A + 9, m_A + 17, m_A + 24, m_A + 30, m_b);//上三角部分的左上角前一帧的自己和自己对应的块以及对应的b
+          A22->Set(m_A + 40, m_A + 44, m_A + 47, m_A + 49, m_A + 50, m_b + 5);//上三角部分的右下角的后一帧的自己和自己对应的块以及对应的b
+          A12->Set(m_A + 5, m_A + 14, m_A + 22, m_A + 29, m_A + 35);//上三角部分的右上角,也就是非自己和自己的H部分
 #else
           A11->m_Acc.m_A.Set(m_Ap1p1, m_Ap1r1, m_Ar1r1);
           A11->m_Acm.Set(m_Ap1v1, m_Ap1ba1, m_Ap1bw1, m_Ar1v1, m_Ar1ba1, m_Ar1bw1);
@@ -590,11 +592,11 @@ class Delta {
 #endif
         }
        public:
-        Jacobian::Global m_JT;
+        Jacobian::Global m_JT;//m_Jrr1,m_Jrbw1,m_Jvr1,m_Jvv1,m_Jvba1,m_Jvbw1,m_Jpr1,m_Jpr2,m_Jpp1,m_Jpv1,m_Jpba1,m_Jpbw1的转置
         Weight m_W;
 #ifdef CFG_IMU_FULL_COVARIANCE
-        LA::AlignedMatrix3x3f m_JTW[10][5], m_A[55];
-        LA::AlignedVector3f m_b[10];
+        LA::AlignedMatrix3x3f m_JTW[10][5]/*存储的J.t*W*/, m_A[55];//J.t*W*J的上三角部分
+        LA::AlignedVector3f m_b[10];//J.t*e部分
 #else
         LA::AlignedMatrix3x3f m_JTWr1r, m_JTWbw1r;
         LA::AlignedMatrix3x3f m_JTWr1v, m_JTWv1v, m_JTWba1v, m_JTWbw1v;
@@ -626,7 +628,7 @@ class Delta {
 #endif
         LA::SymmetricMatrix2x2f m_Agg;
 #ifdef CFG_IMU_FULL_COVARIANCE
-        LA::AlignedMatrix2x3f m_Agc[10];
+        LA::AlignedMatrix2x3f m_Agc[10];//g和ci(pi,ri),mi(vi bai bwi)，cj(pj,rj),mj(vj baj bgj)
 #else
         LA::AlignedMatrix2x3f m_Agp1, m_Agr1, m_Agv1, m_Agba1, m_Agbw1;
         LA::AlignedMatrix2x3f m_Agp2, m_Agr2, m_Agv2;
@@ -649,11 +651,11 @@ class Delta {
         Weight m_W;
 #ifdef CFG_IMU_FULL_COVARIANCE
         LA::AlignedMatrix3x3f m_JTWc[8][5], m_Ac[36];
-        LA::AlignedVector3f m_bc[8];
+        LA::AlignedVector3f m_bc[8];//m1,c2,m2
         LA::AlignedMatrix2x3f m_JTWg[5];
-        LA::SymmetricMatrix2x2f m_Agg;
-        LA::AlignedMatrix2x3f m_Agc[8];
-        LA::Vector2f m_bg;
+        LA::SymmetricMatrix2x2f m_Agg;//e_JgTW * e_Jg
+        LA::AlignedMatrix2x3f m_Agc[8];//g和m1(v1 ba1 bw1)，c2(p1,r1),m2(v2 ba2 bg2)
+        LA::Vector2f m_bg;//g
 #else
         LA::AlignedMatrix3x3f m_JTWbw1r, m_JTWr2r;
         LA::AlignedMatrix3x3f m_JTWv1v, m_JTWba1v, m_JTWbw1v, m_JTWr2v, m_JTWv2v;
@@ -678,8 +680,9 @@ class Delta {
    public:
     ErrorJacobian m_Je;
     union {
-      struct { float m_data[21], m_F; };
-      struct { Unitary m_A11, m_A22; };
+      struct { float m_data[21], m_F/*motion部分的cost:马氏距离下的残差*/; };
+      struct { Unitary m_A11,//这里存的是前一帧自己的运动和pose之间的约束,也就是Hc1c1,Hc1m1,Hm1m1,-bc1,-bm1
+              m_A22; };//这里存的是后一帧自己的运动和pose之间的约束,也就是Hc2c2,Hc2m2,Hm2m2,-bc2,-bm2
     };
   };
   class Reduction {
@@ -756,13 +759,13 @@ class Delta {
 
 #ifdef CFG_IMU_FULL_COVARIANCE
   inline Rotation3D GetRotationState(const Camera &C1, const Camera &C2) const {
-    return Rotation3D(C1.m_T) / C2.m_T;
+    return Rotation3D(C1.m_Cam_pose) / C2.m_Cam_pose;
   }
   inline Rotation3D GetRotationMeasurement(const Camera &C1, const float eps) const {
-    return m_RT / Rotation3D(m_Jrbw * (C1.m_bw - m_bw), eps);
+    return m_RT / Rotation3D(m_Jrbw * (C1.m_bw - m_bw), eps);//m_RT*exp[-(m_Jrbw*(C1.m_bw - m_bw))]x.t 因为是jpl转的R,所以是exp[-th]
   }
   inline Rotation3D GetRotationMeasurement(const LA::AlignedVector3f &dbw, const float eps) const {
-    return m_RT / Rotation3D(m_Jrbw * dbw, eps);
+    return m_RT / Rotation3D(m_Jrbw * dbw/*w*/, eps);//消除bias gyr的影响
   }
   inline LA::AlignedVector3f GetRotationError(const Camera &C1, const Camera &C2,
                                               const float eps) const {
@@ -771,7 +774,7 @@ class Delta {
   }
 #else
   inline Rotation3D GetRotationState(const Camera &C1, const Camera &C2) const {
-    return Rotation3D(C2.m_T) / C1.m_T;
+    return Rotation3D(C2.m_Cam_pose) / C1.m_Cam_pose;
   }
   inline Rotation3D GetRotationMeasurement(const Camera &C1, const float eps) const {
     return Rotation3D(m_Jrbw * (C1.m_bw - m_bw), eps) / m_RT;
@@ -784,14 +787,14 @@ class Delta {
 #endif
 
   inline LA::AlignedVector3f GetVelocityMeasurement(const Camera &C1) const {
-    return m_v + m_Jvba * (C1.m_ba - m_ba) + m_Jvbw * (C1.m_bw - m_bw);
+    return m_v + m_Jvba * (C1.m_ba - m_ba) + m_Jvbw * (C1.m_bw - m_bw);//假设ba,bw的影响都是线性的了
   }
   inline LA::AlignedVector3f GetVelocityState(const Camera &C1, const Camera &C2) const {
-    LA::AlignedVector3f dv = C2.m_v - C1.m_v;
+    LA::AlignedVector3f dv = C2.m_v - C1.m_v;// Rc0w*(v_wj - v_wji + g*dt)
     if (!IMU_GRAVITY_EXCLUDED) {
       dv.z() += IMU_GRAVITY_MAGNITUDE * m_Tvg;
     }
-    return C1.m_T.GetAppliedRotation(dv);
+    return C1.m_Cam_pose.GetAppliedRotation(dv);
   }
   inline LA::AlignedVector3f GetVelocityError(const Camera &C1, const Camera &C2) const {
     return GetVelocityState(C1, C2) - GetVelocityMeasurement(C1);
@@ -803,8 +806,8 @@ class Delta {
     if (!IMU_GRAVITY_EXCLUDED) {
       dp.z() += IMU_GRAVITY_MAGNITUDE * m_Tpg;
     }
-    dp += C2.m_T.GetAppliedRotationInversely(pu);
-    dp = C1.m_T.GetAppliedRotation(dp);
+    dp += C2.m_Cam_pose.GetAppliedRotationInversely(pu);
+    dp = C1.m_Cam_pose.GetAppliedRotation(dp);
     dp -= pu;
     return dp;
   }
@@ -980,18 +983,266 @@ class Delta {
     e.m_ebw += xbw1;
     e.m_ebw -= xbw2;
   }
-  inline void GetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
+//#define  WYA_DEBUG
+#ifdef WYA_DEBUG
+///只是我为了debug用一下
+
+
+        template <typename Derived>
+        static Eigen::Matrix<typename Derived::Scalar, 3, 3> skewSymmetric(const Eigen::MatrixBase<Derived> &q)
+        {
+            Eigen::Matrix<typename Derived::Scalar, 3, 3> ans;
+            ans << typename Derived::Scalar(0), -q(2), q(1),
+                    q(2), typename Derived::Scalar(0), -q(0),
+                    -q(1), q(0), typename Derived::Scalar(0);
+            return ans;
+        }
+
+        static Eigen::Matrix3f ComputeJl(const Eigen::Vector3f & omega)
+        {
+
+
+            float theta;
+            Eigen::Matrix3f so3 = expAndTheta(omega, &theta);
+
+            Eigen::Matrix3f Omega = hat(omega);
+            Eigen::Matrix3f Omega_sq = Omega*Omega;
+            Eigen::Matrix3f V;
+
+            if(theta<1e-10)
+            {
+                V = so3.matrix();
+                //Note: That is an accurate expansion!
+            }
+            else
+            {
+                float theta_sq = theta*theta;
+                V = (Eigen::Matrix3f::Identity()
+                     + (1-cos(theta))/(theta_sq)*Omega
+                     + (theta-sin(theta))/(theta_sq*theta)*Omega_sq);
+            }
+            return V;
+
+        }
+
+        static Eigen::Matrix3f eigenskewSymmetric(const Eigen::Vector3f &q)
+        {
+            Eigen::Matrix3f ans;
+            ans << 0, -q(2), q(1),
+                    q(2), 0, -q(0),
+                    -q(1), q(0), 0;
+            return ans;
+        }
+
+
+        static Eigen::Matrix3f ComputeJlInv(const Eigen::Vector3f &e_w) {
+            //return EigenMatrix3x3f(Rotation3D::GetRodriguesJacobianInverse(e_w.GetAlignedVector3f()));
+            const Eigen::Matrix3f e_S = skewSymmetric(e_w);
+            const float th = sqrtf(e_w.transpose() *e_w);
+            float th_2 = 0.5*th;
+            Eigen::Vector3f a = e_w/th ;
+            const Eigen::Matrix3f a_S = skewSymmetric(a);
+            if (th < 1e-10) {
+                return Eigen::Matrix3f(Eigen::Matrix3f::Identity() + 0.5f * e_S);
+            } else {
+
+                return Eigen::Matrix3f(th_2 * (cosf(th_2)/sinf(th_2))* Eigen::Matrix3f::Identity()
+                                    + (1-(th_2 * (cosf(th_2)/sinf(th_2))))*a*a.transpose() - (th_2)*a_S);
+
+            }
+        }
+        static Eigen::Matrix3f ComputeJrInv(const Eigen::Vector3f & so3_r)
+        {
+            return ComputeJlInv(-so3_r);
+        }
+
+        static Eigen::Matrix3f ComputeJr(const Eigen::Vector3f & so3_r)
+        {
+            return ComputeJl(-so3_r);
+        }
+
+
+        static Eigen::Matrix3f expAndTheta(const Eigen::Vector3f & omega, float * theta)
+        {
+            *theta = omega.norm();
+            float half_theta = 0.5*(*theta);
+
+            float imag_factor;
+            float real_factor = cos(half_theta);
+            if((*theta)<1e-10)
+            {
+                float theta_sq = (*theta)*(*theta);
+                float theta_po4 = theta_sq*theta_sq;
+                imag_factor = 0.5-0.0208333*theta_sq+0.000260417*theta_po4;
+            }
+            else
+            {
+                float sin_half_theta = sin(half_theta);
+                imag_factor = sin_half_theta/(*theta);
+            }
+
+            return Eigen::Matrix3f(Eigen::Quaternionf(real_factor,
+                                                      imag_factor*omega.x(),
+                                                      imag_factor*omega.y(),
+                                                      imag_factor*omega.z()).toRotationMatrix());
+        }
+
+        static Eigen::Matrix3f hat(const Eigen::Vector3f & v)
+        {
+            Eigen::Matrix3f Omega;
+            Omega <<  0, -v(2),  v(1)
+                    ,  v(2),     0, -v(0)
+                    , -v(1),  v(0),     0;
+            return Omega;
+        }
+
+        static Eigen::Matrix3f SetRodrigues(const Eigen::Vector3f &w) {
+
+
+            //w = theta * n
+            const Eigen::Vector3f w2{w[0]*w[0],w[1]*w[1],w[2]*w[2]};
+            const float th2 = w.transpose() *w, th = sqrtf(th2);//theta
+            if (th < 1e-10) {
+                const float s = 1.0f / sqrtf(th2 + 4.0f);
+                return Eigen::Matrix3f(Eigen::Quaternionf(s + s,
+                                                          w[0] * s,
+                                                          w[1] * s,
+                                                          w[2] * s).toRotationMatrix());
+            }
+            const float t1 = sinf(th) / th, t2 = (1.0f - cosf(th)) / th2, t3 = 1.0f - t2 * th2;//cos(theta)
+            const Eigen::Vector3f t1w = w * t1;//sin(theta) * n
+            const Eigen::Vector3f t2w2 = w2 * t2;//(1-cos(theta)) * n * n.t 的对角线部分
+            const float t2wx = t2 * w.x();//(1-cos(theta)) * n * n.t非对角线部分
+            const float t2wxy = t2wx * w.y();
+            const float t2wxz = t2wx * w.z();
+            const float t2wyz = t2 * w.y() * w.z();//R = cos(theta)*I + sin(theta) * [n]x + (1-cos(theta)) * n * n.t
+            Eigen::Matrix3f R;
+            R<<t3 + t2w2.x(),t2wxy + t1w.z(),t2wxz - t1w.y(),
+                    t2wxy - t1w.z(),t3 + t2w2.y(),t2wyz + t1w.x(),
+                    t2wxz + t1w.y(),t2wyz - t1w.x(),t3 + t2w2.z();
+            return R.transpose();
+        }
+#endif
+
+//imu的预积分约束,这里只求了m_Jrr1,m_Jrbw1,m_Jvr1,m_Jvv1,m_Jvba1,m_Jvbw1,m_Jpr1,m_Jpr2,m_Jpp1,m_Jpv1,m_Jpba1,m_Jpbw1
+//残差:e_r,e_v,e_p,e_ba,e_bw
+//优化变量 Rciw,Rcjw,p_wci,p_wcj,v_wi,v_wj,bai,baj,bwi,bwj
+// m_Jrr2 = -m_Jrr1, m_Jvv2 = -m_Jvv1 ,m_Jpp2 = - m_Jpp1,这里没有赋值,但是之后雅克比部分肯定是会给的
+//他都是用的jpl的被动表示,比如GetRodrigues,GetRodriguesJacobianInverse都是反着的R = exp[-th]x (Indirect Kalman Filter for 3D Attitude Estimation)
+//// e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
+//  Rciw右乘扰动 => -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * (Rciw*exp[-th]x).t}v
+//                    = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * exp[th]x*Rciw.t}v  //exp[th]x前面这堆东西 = eR * Rciw
+// 利用伴随性质 exp[Ad(R)*th]x *R => R* exp[th]x => -ln{exp[eR * Rciw*th]x*eR * Rciw *Rciw.t}v
+////  BCH展开 div(e_r)/div(Rciw)  = - Jl_inv(-e_r)* eR * Rciw = - Jr_inv(e_r)* eR * Rciw
+// Rcjw右乘扰动 =>  -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * exp[-th]x* Rciw.t}v
+//// 和上面一样的步骤 div(e_r)/div(Rcjw)   = Jr_inv(e_r)* eR * Rciw (不过这里没有赋值这个)
+// bwi加一个扰动 => -ln{预积分的Rij * exp[Jrbw *(dbw + bwi - z_bw)]x * Rcjw * Rciw.t}v
+//             = -ln{预积分的Rij  * exp[Jl(Jrbw *(bwi - z_bw))*Jrbw *dbw]x * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
+//  利用伴随性质 = -ln{ exp[预积分的Rij * Jl*Jrbw *dbw]x * 预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
+//BCH展开      = - (Jl_inv(-e_r)*预积分的Rij * Jl(Jrbw *(bwi - z_bw))*Jrbw *dbw + -er)
+// div(e_r)/div(bwi) = - Jl_inv(-e_r)*预积分的Rij * Jl*Jrbw
+//// div(e_r)/div(bwi)   = - Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+
+////  e_v = Rciw*(v_wj - v_wi + g*t) - (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
+// Rciw右乘扰动 div(e_v)/div(Rciw) = Rciw * exp[-th]x(v_wj - v_wi + g*dt) 我这里就简写了
+////    正交矩阵性质[Ab]xA = A[b]x  = Rciw * [v_wj - v_wi + g*dt]x = [Rciw*(v_wj - v_wji + g*dt)]x * Rciw
+////       div(e_v)/div(v_wi) = -Rciw
+////       div(e_v)/div(v_wj) = Rciw  (不过这里没有赋值这个)
+////       div(e_v)/div(bai) = -m_Jvba
+////       div(e_v)/div(bwi) = -m_Jvbw
+
+////  e_p = Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2) + Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+// Rciw右乘扰动 div(e_p)/div(Rciw) = Rciw * exp[-th]x(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i)
+//                               = Rciw * [p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i]x
+//// 正交矩阵性质[Ab]xA = A[b]x  = [Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i)]x*Rciw
+// Rcjw右乘扰动 div(e_p)/div(Rcjw) = Rciw * (Rcjw*exp[-th]x).t*tc0i
+//                            = - Rciw * [Rcjw.t*tc0i]x
+////                           = - [Rciw* Rcjw.t*tc0i]x * Rciw
+////       div(e_p)/div(v_wi) = -Rciw * dt
+////       div(e_p)/div(p_wci) = -Rciw
+////       div(e_p)/div(p_wcj) = Rciw  (不过这里没有赋值这个)
+////       div(e_p)/div(bai) = -m_Jvba
+////       div(e_p)/div(bwi) = -m_Jvbw
+//// e_ba = bai - baj
+//// e_bw = bwi - bwj 这两个的雅克比就是i是1,j是-1
+inline void GetErrorJacobian(const Camera &C1/*前一帧状态*/, const Camera &C2/*后一帧状态*/, const Point3D &pu,/*tc0_i*/
                                Error *e, Jacobian::Global *J, const float eps) const {
+
 #ifdef CFG_IMU_FULL_COVARIANCE
-    const Rotation3D dR = GetRotationState(C1, C2);
+    const Rotation3D dR = GetRotationState(C1, C2);//Rciw * Rcjw.t
     const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
-    const Rotation3D eR = m_RT / Rotation3D(drbw, eps) / dR;
-    eR.GetRodrigues(e->m_er, eps);
-    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr1, eps);
-    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
-    J->m_Jrr1.MakeMinus();
-    J->m_Jrbw1 = J->m_Jrr1 * m_RT * J->m_Jrbw1 * m_Jrbw;
-    J->m_Jrr1 = J->m_Jrr1 * eR * C1.m_T;
+    const Rotation3D eR = m_RT / Rotation3D(drbw, eps) / dR;//预积分的Rij * (exp[-Jrbw *(bwi - z_bw)]x).t * (Rciw * Rcjw.t).t
+                                                            //预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t
+    eR.GetRodrigues(e->m_er, eps);//这里SO3转so3是-th
+    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr1, eps);// J->m_Jrr1 = Jr_inv(e_r) 它这里用的是右乘雅克比
+    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);//J->m_Jrbw1 = Jr(-Jrbw *(bwi - z_bw))
+    J->m_Jrr1.MakeMinus();//J->m_Jrr1 = - Jr_inv(e_r)
+    J->m_Jrbw1 = J->m_Jrr1 * m_RT * J->m_Jrbw1 * m_Jrbw;//div(e_r)/div(bwi) = - Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+    J->m_Jrr1 = J->m_Jrr1 * eR * C1.m_Cam_pose;//div(e_r)/div(Rciw) = - Jr_inv(e_r)* eR * Rciw
+      //debug用
+
+#ifdef WYA_DEBUG
+      Eigen::Matrix3f Tc1w_eigen,Tc2w_eigen,m_RTeigen;
+      Tc1w_eigen<<C1.m_Cam_pose.r00(),C1.m_Cam_pose.r01(),C1.m_Cam_pose.r02(),
+              C1.m_Cam_pose.r10(),C1.m_Cam_pose.r11(),C1.m_Cam_pose.r12(),
+              C1.m_Cam_pose.r20(),C1.m_Cam_pose.r21(),C1.m_Cam_pose.r22();
+
+      Tc2w_eigen<<C2.m_Cam_pose.r00(),C2.m_Cam_pose.r01(),C2.m_Cam_pose.r02(),
+              C2.m_Cam_pose.r10(),C2.m_Cam_pose.r11(),C2.m_Cam_pose.r12(),
+              C2.m_Cam_pose.r20(),C2.m_Cam_pose.r21(),C2.m_Cam_pose.r22();
+
+      m_RTeigen<<m_RT.m00(),m_RT.m01(),m_RT.m02(),
+              m_RT.m10(),m_RT.m11(),m_RT.m12(),//预积分的R12
+              m_RT.m20(),m_RT.m21(),m_RT.m22();
+
+      Eigen::Matrix3f dR_eigen = Tc1w_eigen * Tc2w_eigen.transpose();
+      Eigen::Matrix3f m_Jrbw_eigen;
+      m_Jrbw_eigen<<m_Jrbw.m00(),m_Jrbw.m01(),m_Jrbw.m02(),
+              m_Jrbw.m10(),m_Jrbw.m11(),m_Jrbw.m12(),
+              m_Jrbw.m20(),m_Jrbw.m21(),m_Jrbw.m22();
+      Eigen::Vector3f drbw_eigen = m_Jrbw_eigen * Eigen::Vector3f{(C1.m_bw - m_bw).x(),(C1.m_bw - m_bw).y(),(C1.m_bw - m_bw).z()};
+
+      Eigen::Matrix3f eR_eigen = m_RTeigen* SetRodrigues(drbw_eigen) * Tc2w_eigen * Tc1w_eigen.transpose();
+      Eigen::AngleAxisf tempr(eR_eigen);
+      Eigen::Vector3f m_er_eigen{-tempr.axis()[0]*tempr.angle(),-tempr.axis()[1]*tempr.angle(),-tempr.axis()[2]*tempr.angle()};
+      Eigen::Matrix3f m_Jrr1_eigen =- ComputeJlInv(-m_er_eigen) * eR_eigen * Tc1w_eigen;
+
+    std::cout<<"dR: \n"
+    <<dR.m00()<<" "<<dR.m01()<<" "<<dR.m02()<<"\n"<<
+      dR.m10()<<" "<<dR.m11()<<" "<<dR.m12()<<"\n"<<
+      dR.m20()<<" "<<dR.m21()<<" "<<dR.m22()<<"\n";
+
+      std::cout<<"dR_eigen: \n"<<dR_eigen<<"\n";
+
+      std::cout<<"eR: \n"
+               <<eR.m00()<<" "<<eR.m01()<<" "<<eR.m02()<<"\n"
+               <<eR.m10()<<" "<<eR.m11()<<" "<<eR.m12()<<"\n"
+               <<eR.m20()<<" "<<eR.m21()<<" "<<eR.m22()<<"\n";
+      std::cout<<"eR_eigen: \n"<<eR_eigen<<"\n";
+
+      std::cout<<"m_er: \n"
+               <<e->m_er.x()<<" "<<e->m_er.y()<<" "<<e->m_er.z()<<"\n";
+      std::cout<<"m_er_eigen: \n"
+               <<m_er_eigen.x()<<" "<<m_er_eigen.y()<<" "<<m_er_eigen.z()<<"\n";
+
+
+      std::cout<<"m_Jrr1: \n"
+               <<J->m_Jrr1.m00()<<" "<<J->m_Jrr1.m01()<<" "<<J->m_Jrr1.m02()<<"\n"
+               <<J->m_Jrr1.m10()<<" "<<J->m_Jrr1.m11()<<" "<<J->m_Jrr1.m12()<<"\n"
+               <<J->m_Jrr1.m20()<<" "<<J->m_Jrr1.m21()<<" "<<J->m_Jrr1.m22()<<"\n";
+
+      std::cout<<"m_Jrr1_eigen: \n"<<m_Jrr1_eigen<<"\n";
+
+      //v
+            LA::AlignedVector3f dv = C2.m_v - C1.m_v;// (v_wj - v_wji + g*dt)
+            if (!IMU_GRAVITY_EXCLUDED) {
+                dv.z() += IMU_GRAVITY_MAGNITUDE * m_Tvg;
+            }
+            Eigen::Vector3f dv_eigen{dv[0],dv[1],dv[2]};
+
+            Eigen::Matrix3f m_Jvr1_eigen = Tc1w_eigen*eigenskewSymmetric(dv_eigen);
+
+#endif
 #else
     const Rotation3D dR = GetRotationState(C1, C2);
     const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
@@ -1001,36 +1252,42 @@ class Delta {
     Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
     J->m_Jrr1.MakeMinus();
     J->m_Jrbw1 = J->m_Jrr1 * eR * J->m_Jrbw1 * m_Jrbw;
-    J->m_Jrr1 = J->m_Jrr1 * C2.m_T;
+    J->m_Jrr1 = J->m_Jrr1 * C2.m_Cam_pose;
+
 #endif
 
-    e->m_ev = GetVelocityState(C1, C2);
-    SkewSymmetricMatrix::AB(e->m_ev, C1.m_T, J->m_Jvr1);
-    e->m_ev -= GetVelocityMeasurement(C1);
-    C1.m_T.GetMinus(J->m_Jvv1);
-    m_Jvba.GetMinus(J->m_Jvba1);
-    m_Jvbw.GetMinus(J->m_Jvbw1);
+    e->m_ev = GetVelocityState(C1, C2);//Rciw*(v_wj - v_wji + g*dt)
+    SkewSymmetricMatrix::AB(e->m_ev, C1.m_Cam_pose, J->m_Jvr1);//div(e_r)/div(Rciw) = [Rciw*(v_wj - v_wji + g*dt)]x * Rciw
 
-    e->m_ep = C2.m_p - C1.m_p - C1.m_v * m_Tpv;
+    e->m_ev -= GetVelocityMeasurement(C1);//预积分的测量值,考虑了bias误差的影响m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw)
+    C1.m_Cam_pose.GetMinus(J->m_Jvv1);//-Rciw
+    m_Jvba.GetMinus(J->m_Jvba1);//div(e_r)/div(bai) = -m_Jvba
+    m_Jvbw.GetMinus(J->m_Jvbw1);//div(e_r)/div(bwi) = -m_Jvbw
+
+    e->m_ep = C2.m_p - C1.m_p - C1.m_v * m_Tpv;//e_p = p_wcj - p_wci - v_wji*dt
     if (!IMU_GRAVITY_EXCLUDED) {
-      e->m_ep.z() += IMU_GRAVITY_MAGNITUDE * m_Tpg;
+      e->m_ep.z() += IMU_GRAVITY_MAGNITUDE * m_Tpg;//e_p = p_wcj - p_wci - v_wji*dt+ g*dt
     }
-    e->m_ep = C1.m_T.GetAppliedRotation(e->m_ep);
+    e->m_ep = C1.m_Cam_pose.GetAppliedRotation(e->m_ep);//e_p = Rciw*(p_wcj - p_wci - v_wji*dt + g*dt)
 #ifdef CFG_IMU_FULL_COVARIANCE
-    const LA::AlignedVector3f R21pu = dR.GetApplied(pu);
+    const LA::AlignedVector3f R21pu = dR.GetApplied(pu);//Rciw * Rcjw.t*tc0i
+    //因为把imu的测量挪到了c0上,所以这里需要考虑挪到c0以后的外参的ex_t补偿，b是imu twb = Rwc0*tc0b + twc0(c0下的位置转到b下)
+    //ex_t=(twbj - twbi) - (twc0j - twc0i)/*因为之前只对测量值加了旋转,还需要考虑到平移带来的位置变化*/= (Rwc0j - Rwc0i)*tc0i
+    // 又因为现在的残差是转到c0坐标系下比较,所以 Rwc0*ex_t =  Rciw * (Rcjw.t - Rciw.t)*tc0i =  Rciw * Rcjw.t*tc0i -tc0i
 #else
     const LA::AlignedVector3f R21pu = dR.GetAppliedInversely(pu);
 #endif
-    e->m_ep += R21pu;
-    SkewSymmetricMatrix::AB(e->m_ep, C1.m_T, J->m_Jpr1);
-    e->m_ep -= pu;
-    e->m_ep -= GetPositionMeasurement(C1);
-    C1.m_T.GetMinus(J->m_Jpp1);
-    C1.m_T.GetScaled(-m_Tpv, J->m_Jpv1);
-    m_Jpba.GetMinus(J->m_Jpba1);
-    m_Jpbw.GetMinus(J->m_Jpbw1);
-    SkewSymmetricMatrix::ATB(R21pu, C1.m_T, J->m_Jpr2);
-
+    e->m_ep += R21pu;//e_p = Rciw*(p_wcj - p_wci - v_wji*dt + 0.5*g*dt^2) + Rciw * Rcjw.t*tc0i
+    //div(e_p)/div(Rciw) = [Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i)]x * Rciw
+    SkewSymmetricMatrix::AB(e->m_ep, C1.m_Cam_pose, J->m_Jpr1);
+    e->m_ep -= pu; //e_p = Rciw*(p_wcj - p_wci - v_wji*dt + 0.5*g*dt^2) + Rciw * Rcjw.t*tc0i - tc0i
+    e->m_ep -= GetPositionMeasurement(C1);//e_p = Rciw*(p_wcj - p_wci - v_wji*dt + 0.5*g*dt^2) + Rciw * (Rcjw.t - Rciw.t)*tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+    C1.m_Cam_pose.GetMinus(J->m_Jpp1);//div(e_p)/div(p_wci) = -Rciw
+    C1.m_Cam_pose.GetScaled(-m_Tpv, J->m_Jpv1);//div(e_p)/div(v_wi) = -Rciw * dt
+    m_Jpba.GetMinus(J->m_Jpba1);//div(e_p)/div(bai) = -m_Jvba
+    m_Jpbw.GetMinus(J->m_Jpbw1);//div(e_p)/div(bwi) = -m_Jvbw
+    //div(e_p)/div(Rcjw) = [ - Rciw* Rcjw.t*tc0i]x * Rciw
+    SkewSymmetricMatrix::ATB(R21pu, C1.m_Cam_pose, J->m_Jpr2);
     e->m_eba = C1.m_ba - C2.m_ba;
     e->m_ebw = C1.m_bw - C2.m_bw;
 
@@ -1040,21 +1297,56 @@ class Delta {
     //J->m_Jpbw1.MakeZero();
     //J->m_Jpr2.MakeZero();
   }
-  inline void GetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
-                               const Rotation3D &Rg, Error *e, Jacobian::RelativeLF *J,
+
+//imu的预积分约束,之前优化的时候,优化变量都是相对于世界坐标系的,而边缘化时,优化变量是相对于相对运动最小的关键帧坐标系中的:也就是从W转到了K
+//上面的上面有类似推导的注释了,这里就给结果了,这个函数是针对要边缘化的这帧不是关键帧的情况,那么就是ij的pose,motion还有g都要优化
+// 不求对i pose的雅克比,因为i就是关键帧,约束还在关键帧和j帧帧中
+//残差:e_r,e_v,e_p,e_ba,e_bw
+//优化变量 Rcik,Rcjk,p_kci,p_kcj,,v_i,v_j,bai,baj,bwi,bwj,gw(东北天下的重力)
+//// e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjk * Rcik.t}v
+//   div(e_r)/div(Rcik)  = - Jl_inv(-e_r)* eR * Rcik = - Jr_inv(e_r)* eR * Rcik
+//   div(e_r)/div(Rcjk)   = Jr_inv(e_r)* eR * Rcik
+//   div(e_r)/div(bwi)   = - Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+
+////  e_v = Rcik*(Rcjk.t * v_j(是Rcjw*vw_j) - Rckw * gw*dt) - v_i(是Rciw*vw_i) - (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
+//    div(e_v)/div(Rcik)  = Rcik*[Rcjk.t * v_j - Rckw * gw*t]x = [Rcik*Rcjk.t * v_j - Rckw * gw*t]x*Rcik
+//    div(e_v)/div(Rcjk) = -Rcik*[Rcjk.t * v_j]x = -[Rcik  * Rcjk.t * v_j]x*Rcik
+//    div(e_v)/div(v_i) = -I
+//    div(e_v)/div(v_j) = Rcik*Rcjk.t
+//    div(e_v)/div(bai) = -m_Jvba
+//    div(e_v)/div(bwi) = -m_Jvbw
+//    div(e_v)/div(gw) = Rcik*(- Rckw *exp[-th]x* gw*dt) = -Rciw*[gw]x*dt
+//    代码里存的是div(e_v)/div(gw).t = - (Rciw*[gw*dt]x).t = = - [gw*dt]x* Rciw.t叉乘转换= - Rciw.t * [Rciw*gw*dt]x 固定z所以第行列是0
+
+////  e_p = - tc0i  + Rcik *(Rcjk.t*tc0i + (pkj(是Rkw*pwi + tkw) - pki)(这里代码里是Rkw*(pwi-pwj)因为tkw的部分消去了) - Rckw * gw*0.5*dt^2) - v_i*dt- (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+//    div(e_p)/div(Rcik)  = Rcik * [Rcjk.t*tc0i + pkj - pki - Rckw * gw*0.5*dt^2]x
+//    div(e_p)/div(Rcjk) = - Rcik * [Rcjk.t*tc0i]x = - [Rcik * Rcjk.t*tc0i]x * Rcik
+//    div(e_p)/div(v_wi) = -I * dt
+//    div(e_p)/div(pki) = -Rcik = -I
+//    div(e_p)/div(pkj) = Rcik = I
+//    div(e_p)/div(bai) = -m_Jvba
+//    div(e_p)/div(bwi) = -m_Jvbw
+//    div(e_p)/div(gw) = Rcik*(- Rckw *exp[-th]x* gw*0.5*dt^2) = -Rcik*Rckw*[gw*0.5*dt^2]x = -Rciw*[gw*0.5*dt^2]x 固定z所以第3列是0
+//    代码里存的是div(e_p)/div(gw).t = - (Rciw*[gw*0.5*dt^2]x).t = = - [gw*0.5*dt^2]x* Rciw.t叉乘转换= - Rciw.t * [gw*0.5*dt^2]x 固定z所以第行列是0
+//// e_ba = bai - baj
+//// e_bw = bwi - bwj 这两个的雅克比就是i是1,j是-1
+inline void GetErrorJacobian(const Camera &C1/*最老帧的状态*/, const Camera &C2/*次老帧的相机状态*/,
+        const Point3D &pu,/*tc0_i*/const Rotation3D &Rg/*上一次滑窗时的Tc0w(参考关键帧)*/, Error *e, Jacobian::RelativeLF *J,/*因子*/
                                const float eps) const {
 #ifdef CFG_IMU_FULL_COVARIANCE
-    const Rotation3D dR = GetRotationState(C1, C2);
-    const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
+    const Rotation3D dR = GetRotationState(C1, C2);//Rciw * Rcjw.t
+    const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);//
+    //预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t(数值上来说w和k这里是一样的)
     const Rotation3D eR = m_RT / Rotation3D(drbw, eps) / dR;
     eR.GetRodrigues(e->m_er, eps);
-    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr1, eps);
-    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
-    J->m_Jrr1.MakeMinus();
-    J->m_Jrbw1 = J->m_Jrr1 * m_RT * J->m_Jrbw1 * m_Jrbw;
-    J->m_Jrr1 = J->m_Jrr1 * eR;
-    const Rotation3D R1T = Rg / C1.m_T;
-    J->m_Jrr1 = LA::AlignedMatrix3x3f::GetABT(J->m_Jrr1, R1T);
+    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr1, eps);// J->m_Jrr1 = Jr_inv(e_r) 它这里用的是右乘雅克比
+    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);//J->m_Jrbw1 = Jr(-Jrbw *(bwi - z_bw))
+    J->m_Jrr1.MakeMinus();// J->m_Jrr1 = Jr_inv(e_r)
+    //div(e_r)/div(bwi) = - Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+    J->m_Jrbw1 = J->m_Jrr1 * m_RT * J->m_Jrbw1 * m_Jrbw;//
+    J->m_Jrr1 = J->m_Jrr1 * eR;// J->m_Jrr1 = Jr_inv(e_r) * eR
+    const Rotation3D R1T = Rg / C1.m_Cam_pose; // Rc0w(参考关键帧) * Rc0w(最老帧).t = Rc0(参考关键帧)c0(最老帧) = Rkci
+    J->m_Jrr1 = LA::AlignedMatrix3x3f::GetABT(J->m_Jrr1, R1T);// J->m_Jrr1 = - Jr_inv(e_r)* eR * Rcik
 #else
     const Rotation3D dR = GetRotationState(C1, C2);
     const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
@@ -1064,45 +1356,45 @@ class Delta {
     Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
     J->m_Jrr1.MakeMinus();
     J->m_Jrbw1 = J->m_Jrr1 * eR * J->m_Jrbw1 * m_Jrbw;
-    const Rotation3D R2T = Rg / C2.m_T;
+    const Rotation3D R2T = Rg / C2.m_Cam_pose;
     J->m_Jrr1 = LA::AlignedMatrix3x3f::GetABT(J->m_Jrr1, R2T);
 #endif
 
-    C1.m_T.ApplyRotation(C2.m_v, e->m_ev);
+    C1.m_Cam_pose.ApplyRotation(C2.m_v, e->m_ev);//m_ev = Rciw * v_wj = Rcik  * Rcjk.t * v_j(定义成Rcjw *v_wj)- (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
 #ifdef CFG_IMU_FULL_COVARIANCE
-    J->m_Jvv2 = dR;
+    J->m_Jvv2 = dR;//div(e_v)/div(v_j) = Rcik*Rcjk.t
 #else
     dR.LA::AlignedMatrix3x3f::GetTranspose(J->m_Jvv2);
 #endif
-    LA::AlignedMatrix3x3f::Ab(J->m_Jvv2, pu, (float *) &e->m_ep);
-    //const Rotation3D R1 = Rotation3D(C1.m_T) / Rg;
-    const Rotation3D R1 = R1T.GetTranspose();
-    SkewSymmetricMatrix::ATB(e->m_ev, R1, J->m_Jvr2);
-    SkewSymmetricMatrix::ATB(e->m_ep, R1, J->m_Jpr2);
+    LA::AlignedMatrix3x3f::Ab(J->m_Jvv2, pu, (float *) &e->m_ep);//m_ep = Rcik * Rcjk.t*tc0_i (tc0_i这里看上面的注释,有说过)
+    //const Rotation3D R1 = Rotation3D(C1.m_Cam_pose) / Rg;
+    const Rotation3D R1 = R1T.GetTranspose();//Rcik
+    SkewSymmetricMatrix::ATB(e->m_ev, R1, J->m_Jvr2);//div(e_v)/div(Rcjk) = -[Rcik  * Rcjk.t * v_j]x*Rcik
+    SkewSymmetricMatrix::ATB(e->m_ep, R1, J->m_Jpr2);//div(e_p)/div(Rcjk) = -[Rcik * Rcjk.t*tc0i]x * Rcik
     if (IMU_GRAVITY_EXCLUDED) {
       J->m_JvgT.Invalidate();
       J->m_JpgT.Invalidate();
     } else {
-      const LA::AlignedVector3f g1 = C1.m_T.GetColumn2();
+      const LA::AlignedVector3f g1 = C1.m_Cam_pose.GetColumn2();
       const LA::AlignedVector3f dv = g1 * (m_Tvg * IMU_GRAVITY_MAGNITUDE);
-      e->m_ev += dv;
-      SkewSymmetricMatrix::ATBT(C1.m_T, dv, J->m_JvgT);
+      e->m_ev += dv;//m_ev = Rciw * v_wj - Rciw*gw*dt = Rciw*(v_wj - gw*dt)
+      SkewSymmetricMatrix::ATBT(C1.m_Cam_pose, dv, J->m_JvgT);//div(e_v)/div(gw).t = - Rciw.t * [Rciw*gw*dt]x
       const LA::AlignedVector3f dp = g1 * (m_Tpg * IMU_GRAVITY_MAGNITUDE);
-      e->m_ep += dp;
-      SkewSymmetricMatrix::ATBT(C1.m_T, dp, J->m_JpgT);
+      e->m_ep += dp;//
+      SkewSymmetricMatrix::ATBT(C1.m_Cam_pose, dp, J->m_JpgT);//div(e_p)/div(gw).t = - Rciw.t * [gw*0.5*dt^2]x
     }
     SkewSymmetricMatrix::AB(e->m_ev, R1, J->m_Jvr1);
-    const LA::AlignedVector3f v1 = C1.m_T.GetAppliedRotation(C1.m_v);
-    e->m_ev -= v1;
-    e->m_ev -= GetVelocityMeasurement(C1);
+    const LA::AlignedVector3f v1 = C1.m_Cam_pose.GetAppliedRotation(C1.m_v);
+    e->m_ev -= v1;//m_ev = Rciw*(v_wj - gw*dt) - Rciw*v_wi
+    e->m_ev -= GetVelocityMeasurement(C1);//
     //J->m_Jvv1.MakeDiagonal(-1.0);
 #ifdef CFG_DEBUG
     J->m_Jvv1.Invalidate();
 #endif
-    m_Jvba.GetMinus(J->m_Jvba1);
+    m_Jvba.GetMinus(J->m_Jvba1);//后面就不注释了,都能和我的注释对上
     m_Jvbw.GetMinus(J->m_Jvbw1);
 
-    e->m_ep += C1.m_T.GetAppliedRotation(C2.m_p - C1.m_p);
+    e->m_ep += C1.m_Cam_pose.GetAppliedRotation(C2.m_p - C1.m_p);
     SkewSymmetricMatrix::AB(e->m_ep, R1, J->m_Jpr1);
     e->m_ep -= v1 * m_Tpv;
     e->m_ep -= pu;
@@ -1118,18 +1410,51 @@ class Delta {
     e->m_eba = C1.m_ba - C2.m_ba;
     e->m_ebw = C1.m_bw - C2.m_bw;
   }
-  inline void GetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
+//imu的预积分约束,之前优化的时候,优化变量都是相对于世界坐标系的,而边缘化时,优化变量是相对于相对运动最小的关键帧坐标系中的:也就是从W转到了K
+//上面的上面有类似推导的注释了,这里就给结果了,这个函数是针对要边缘化的这帧同时也是关键帧的情况,那么它的最近帧就是它自己,即Rcik,pcik都是0,
+// 不求对i pose的雅克比,因为i就是关键帧,约束还在关键帧和j帧帧中
+//残差:e_r,e_v,e_p,e_ba,e_bw
+//优化变量 Rcik,Rcjk,p_kci,p_kcj,v_i,v_j,bai,baj,bwi,bwj,gw(东北天下的重力)
+//// e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjk * Rcik.t}v
+//   div(e_r)/div(Rcik)  = - Jr_inv(e_r)* eR * Rcik
+//   div(e_r)/div(Rcjk)   = Jr_inv(e_r)* eR * Rcik
+//   div(e_r)/div(bwi)   = - Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+
+////  e_v = Rcik(在这种情况是I)*(Rcjk.t * v_j(是Rcjw*vw_j) - Rckw * gw*dt) - v_i(是Rciw*vw_i) - (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
+//    div(e_v)/div(Rcik)  = Rcik*[Rcjk.t * v_j - Rckw * gw*t]x = [Rcjk.t * v_j - Rckw * gw*t]x
+//    div(e_v)/div(Rcjk) = -Rcik*[Rcjk.t * v_j]x = -[Rcjk.t * v_j]x
+//    div(e_v)/div(v_i) = -I
+//    div(e_v)/div(v_j) = Rcik*Rcjk.t = Rcjk.t
+//    div(e_v)/div(bai) = -m_Jvba
+//    div(e_v)/div(bwi) = -m_Jvbw
+//    div(e_v)/div(gw) = Rcik*(- Rckw *exp[-th]x* gw*dt) = -Rcik*Rckw*[gw]x*dt  = - Rckw*[gw*dt]x 固定z所以第3列是0
+//    代码里存的是div(e_v)/div(gw).t = - (Rckw*[gw*dt]x).t =  -[gw*dt]x* Rckw.t叉乘转换= -Rckw.t * [Rckw*gw*dt]x 固定z所以第行列是0
+
+////  e_p = - tc0i  + Rcik(在这种情况是I) *(Rcjk.t*tc0i + (pkj(是Rkw*pwi + tkw) - pki)(这里代码里是Rkw*(pwi-pwj)因为tkw的部分消去了) - Rckw * gw*0.5*dt^2) - v_i*dt- (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+//    div(e_p)/div(Rcik)  = Rcik * [Rcjk.t*tc0i + pkj - pki - Rckw * gw*0.5*dt^2]x = [Rcjk.t*tc0i + pkj - pki - Rckw * gw*0.5*dt^2]x
+//    div(e_p)/div(Rcjk) = - Rcik * [Rcjk.t*tc0i]x = -[Rcjk.t*tc0i]x
+//    div(e_p)/div(v_wi) = -I * dt
+//    div(e_p)/div(pki) = -Rcik = -I
+//    div(e_p)/div(pkj) = Rcik = I
+//    div(e_p)/div(bai) = -m_Jvba
+//    div(e_p)/div(bwi) = -m_Jvbw
+//    div(e_p)/div(gw) = Rcik*(- Rckw *exp[-th]x* gw*0.5*dt^2) = -Rcik*Rckw*[gw*0.5*dt^2]x = -Rckw*[gw*0.5*dt^2]x 固定z所以第3列是0
+//    代码里存的是div(e_p)/div(gw).t = - (Rckw*[gw*0.5*dt^2]x).t =-[gw*0.5*dt^2]x* Rckw.t叉乘转换=- Rckw.t * [Rckw*gw*0.5*dt^2]x 固定z所以第行列是0
+//// e_ba = bai - baj
+//// e_bw = bwi - bwj 这两个的雅克比就是i是1,j是-1
+  inline void GetErrorJacobian(const Camera &C1/*前一帧状态*/, const Camera &C2/*后一帧状态*/, const Point3D &pu,/*tc0_i*/
                                Error *e, Jacobian::RelativeKF *J, const float eps) const {
 #ifdef CFG_IMU_FULL_COVARIANCE
-    const Rotation3D dR = GetRotationState(C1, C2);
+    const Rotation3D dR = GetRotationState(C1, C2);//Rciw * Rcjw.t
     const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
-    const Rotation3D eR = m_RT / Rotation3D(drbw, eps) / dR;
-    eR.GetRodrigues(e->m_er, eps);
-    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr2, eps);
-    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
-    J->m_Jrbw1 = J->m_Jrr2 * m_RT * J->m_Jrbw1 * m_Jrbw;
-    J->m_Jrbw1.MakeMinus();
-    J->m_Jrr2 = J->m_Jrr2 * eR;
+    const Rotation3D eR = m_RT / Rotation3D(drbw, eps) / dR;//预积分的Rij * (exp[-Jrbw *(bwi - z_bw)]x).t * (Rciw * Rcjw.t).t
+                                                            //预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t(数值上来说w和k这里是一样的)
+    eR.GetRodrigues(e->m_er, eps);//这里SO3转so3是-th
+    Rotation3D::GetRodriguesJacobianInverse(e->m_er, J->m_Jrr2, eps);// J->m_Jrr2 = Jr_inv(e_r) 它这里用的是右乘雅克比
+    Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);//J->m_Jrbw1 = Jr(-Jrbw *(bwi - z_bw))
+    J->m_Jrbw1 = J->m_Jrr2 * m_RT * J->m_Jrbw1 * m_Jrbw;//div(e_r)/div(bwi) = Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+    J->m_Jrbw1.MakeMinus();//div(e_r)/div(bwi) = -Jr_inv(e_r)*预积分的Rij * Jr(-Jrbw *(bwi - z_bw))*Jrbw
+    J->m_Jrr2 = J->m_Jrr2 * eR;//div(e_r)/div(Rcjk)   = Jr_inv(e_r)* eR * Rcik(这种情况为I)
 #else
     const Rotation3D dR = GetRotationState(C1, C2);
     const LA::AlignedVector3f drbw = m_Jrbw * (C1.m_bw - m_bw);
@@ -1139,32 +1464,32 @@ class Delta {
     Rotation3D::GetRodriguesJacobian(drbw.GetMinus(), J->m_Jrbw1, eps);
     J->m_Jrbw1 = J->m_Jrr2 * eR * J->m_Jrbw1 * m_Jrbw;
     J->m_Jrbw1.MakeMinus();
-    const Rotation3D R2T = Rotation3D(C1.m_T) / C2.m_T;
+    const Rotation3D R2T = Rotation3D(C1.m_Cam_pose) / C2.m_Cam_pose;
     J->m_Jrr2 = LA::AlignedMatrix3x3f::GetABT(J->m_Jrr2, R2T);
 #endif
 
-    C1.m_T.ApplyRotation(C2.m_v, e->m_ev);
+    C1.m_Cam_pose.ApplyRotation(C2.m_v, e->m_ev);//m_ev = Rciw * v_wj = Rcik(在这种情况是I) * Rcjk.t * v_j(定义成Rcjw *v_wj)= Rcjk.t * v_j
 #ifdef CFG_IMU_FULL_COVARIANCE
-    J->m_Jvv2 = dR;
+    J->m_Jvv2 = dR;//div(e_v)/div(v_wj) = Rciw * Rcjw.t = Rcik * Rcjk.t = Rcjk.t
 #else
     dR.LA::AlignedMatrix3x3f::GetTranspose(J->m_Jvv2);
 #endif
-    LA::AlignedMatrix3x3f::Ab(J->m_Jvv2, pu, (float *) &e->m_ep);
-    SkewSymmetricMatrix::GetTranspose(e->m_ev, J->m_Jvr2);
-    SkewSymmetricMatrix::GetTranspose(e->m_ep, J->m_Jpr2);
+    LA::AlignedMatrix3x3f::Ab(J->m_Jvv2, pu, (float *) &e->m_ep);//m_ep = Rcik * Rcjk.t*tc0_i = Rcjk.t*tc0_i (tc0_i这里看上面的注释,有说过)
+    SkewSymmetricMatrix::GetTranspose(e->m_ev, J->m_Jvr2);//div(e_v)/div(Rcjk) = -[Rcjk.t * v_j]x
+    SkewSymmetricMatrix::GetTranspose(e->m_ep, J->m_Jpr2);//div(e_p)/div(Rcjw) = -[ Rcjk.t*tc0_i]x 这个好像有些出入啊
     if (IMU_GRAVITY_EXCLUDED) {
       J->m_JvgT.Invalidate();
       J->m_JpgT.Invalidate();
     } else {
-      const LA::AlignedVector3f g1 = C1.m_T.GetColumn2();
-      const LA::AlignedVector3f dv = g1 * (m_Tvg * IMU_GRAVITY_MAGNITUDE);
-      e->m_ev += dv;
-      SkewSymmetricMatrix::ATBT(C1.m_T, dv, J->m_JvgT);
+      const LA::AlignedVector3f g1 = C1.m_Cam_pose.GetColumn2();//重力gw = [0,0,-9.81] ，
+      const LA::AlignedVector3f dv = g1 * (m_Tvg * IMU_GRAVITY_MAGNITUDE);//考虑了重力扰动,对应的是这个-Rckw*gw*dt,负号挪到g里后Rckw*gw*dt
+      e->m_ev += dv;//m_ev = Rckw * v_wj - Rckw*gw*dt = Rcik*(Rcjk.t * v_j - * gw*dt)
+      SkewSymmetricMatrix::ATBT(C1.m_Cam_pose, dv, J->m_JvgT);//div(e_v)/div(gw).t =  Rckw.t*([-Rckw*gw*dt]x).t = -Rckw.t * [Rckw*gw*dt]x
       const LA::AlignedVector3f dp = g1 * (m_Tpg * IMU_GRAVITY_MAGNITUDE);
-      e->m_ep += dp;
-      SkewSymmetricMatrix::ATBT(C1.m_T, dp, J->m_JpgT);
+      e->m_ep += dp;//m_ep =  Rcjk.t*tc0_i - Rckw * gw*0.5*dt^2
+      SkewSymmetricMatrix::ATBT(C1.m_Cam_pose, dp, J->m_JpgT);// div(e_v)/div(gw).t = -Rckw.t * [Rckw*gw*0.5*dt^2]x
     }
-    const LA::AlignedVector3f v1 = C1.m_T.GetAppliedRotation(C1.m_v);
+    const LA::AlignedVector3f v1 = C1.m_Cam_pose.GetAppliedRotation(C1.m_v);//残差具体的和我注释对应,就不写了
     e->m_ev -= v1;
     e->m_ev -= GetVelocityMeasurement(C1);
     //J->m_Jvv1.MakeDiagonal(-1.0);
@@ -1174,7 +1499,7 @@ class Delta {
     m_Jvba.GetMinus(J->m_Jvba1);
     m_Jvbw.GetMinus(J->m_Jvbw1);
 
-    e->m_ep += C1.m_T.GetAppliedRotation(C2.m_p - C1.m_p);
+    e->m_ep += C1.m_Cam_pose.GetAppliedRotation(C2.m_p - C1.m_p);
     e->m_ep -= v1 * m_Tpv;
     e->m_ep -= pu;
     e->m_ep -= GetPositionMeasurement(C1);
@@ -1189,31 +1514,34 @@ class Delta {
 
     e->m_eba = C1.m_ba - C2.m_ba;
     e->m_ebw = C1.m_bw - C2.m_bw;
+
   }
   inline void GetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
                         Factor *A, Camera::Factor::Binary *A12, Factor::Auxiliary::Global *U,
                         const float eps) const {
-    GetErrorJacobian(C1, C2, pu, &A->m_Je.m_e, &A->m_Je.m_J, eps);
-    A->m_F = GetCost(w, A->m_Je.m_e);
-    U->Set(A->m_Je.m_J, A->m_Je.m_e, w, m_W, m_Tpv);
-    U->Get(&A->m_A11, &A->m_A22, A12);
+    GetErrorJacobian(C1/*前一帧状态*/, C2/*后一帧状态*/, pu/*tc0_i*/, &A->m_Je.m_e/*motion部分的残差*/, &A->m_Je.m_J/*motion部分的雅克比*/, eps);
+    A->m_F = GetCost(w, A->m_Je.m_e/*motion部分的残差*/);//计算一下cost:马氏距离下的残差
+    //这一步在求H = J.t*W*J，存储在m_A,和-b = J.t*W*e存储在m_b，不过没有对得上具体位置,这个也不重要,最终的H里的顺序是p r v ba bw，
+    U->Set(A->m_Je.m_J/*motion部分的雅克比*/, A->m_Je.m_e/*motion部分的残差*/, w, m_W/*预积分的协方差的逆得到的信息矩阵*/, m_Tpv/*dt*/);
+    U->Get(&A->m_A11/*H中i时刻的c,m和i时刻的c,m,以及对应的-b*/, &A->m_A22/*H中j时刻的c,m和j时刻的c,m,以及对应的-b*/, A12/*H中i时刻的c,m和j时刻的c,m*/);
   }
-  inline void GetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
-                        const Rotation3D &Rg, Error *e, Jacobian::RelativeLF *J,
-                        Factor::Auxiliary::RelativeLF *U, const float eps) const {
-    GetErrorJacobian(C1, C2, pu, Rg, e, J, eps);
+  inline void GetFactor(const float w, const Camera &C1/*最老帧的状态*/, const Camera &C2/*次老帧的相机状态*/,
+          const Point3D &pu/*tc0_i*/,const Rotation3D &Rg, /*上一次滑窗时的Tc0w(参考关键帧)*/
+          Error *e, Jacobian::RelativeLF *J,
+                        Factor::Auxiliary::RelativeLF *U/*因子*/, const float eps) const {
+    GetErrorJacobian(C1/*最老帧的状态*/, C2/*次老帧的相机状态*/, pu/*tc0_i*/, Rg/*上一次滑窗时的Tc0w(参考关键帧)*/, e, J, eps);
     U->Set(*J, *e, w, m_W, m_Tpv);
   }
   inline void GetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
                         Error *e, Jacobian::RelativeKF *J, Factor::Auxiliary::RelativeKF *U,
                         const float eps) const {
-    GetErrorJacobian(C1, C2, pu, e, J, eps);
-    U->Set(*J, *e, w, m_W, m_Tpv);
+    GetErrorJacobian(C1/*最老帧的状态*/, C2/*次老帧的相机状态*/, pu/*tc0_i*/, e/*残差*/, J/*雅克比*/, eps);
+    U->Set(*J/*雅克比*/, *e, w, m_W/*协方差*/, m_Tpv/*dt*/);//这一步在求H = J.t*W*J，存储在m_A,和-b = J.t*W*e存储在m_b
   }
   inline float GetCost(const float w, const Error &e) const {
-    return GetCost(w, m_W, e);
+    return GetCost(w, m_W/*预积分得到的信息矩阵*/, e);
   }
-  static inline float GetCost(const float w, const Weight &W, const Error &e) {
+  static inline float GetCost(const float w, const Weight &W/*信息矩阵*/, const Error &e) {//马氏距离下的残差
 #ifdef CFG_IMU_FULL_COVARIANCE
     LA::AlignedVector3f We;
     float F = 0.0f;
@@ -1228,7 +1556,7 @@ class Delta {
     }
     return w * F;
 #else
-    return w * (LA::SymmetricMatrix3x3f::MahalanobisDistance(W.m_Wr, e.m_er) +
+    return gyr * (LA::SymmetricMatrix3x3f::MahalanobisDistance(W.m_Wr, e.m_er) +
                 LA::SymmetricMatrix3x3f::MahalanobisDistance(W.m_Wv, e.m_ev) +
                 LA::SymmetricMatrix3x3f::MahalanobisDistance(W.m_Wp, e.m_ep) +
                 W.m_wba * e.m_eba.SquaredLength() +
@@ -1296,13 +1624,13 @@ class Delta {
     }
   }
  public:
-  Measurement m_u1, m_u2;
-  LA::AlignedVector3f m_ba, m_bw;
-  Rotation3D m_RT;
-  LA::AlignedVector3f m_v, m_p;
-  LA::AlignedMatrix3x3f m_Jrbw, m_Jvba, m_Jvbw, m_Jpba, m_Jpbw;
-  Weight m_W;
-  float m_Tvg, m_Tpv, m_Tpg, m_r;
+  Measurement m_u1/*上一帧最后一个imu测量*/, m_u2;
+  LA::AlignedVector3f m_ba, m_bw;//bias
+  Rotation3D m_RT;//Rc0i_c0j
+  LA::AlignedVector3f m_v, m_p;//vc0i_c0j,pc0i_c0j
+  LA::AlignedMatrix3x3f m_Jrbw, m_Jvba, m_Jvbw, m_Jpba, m_Jpbw;//i时刻泰勒展开,然后递推得到预积分后状态量对i时刻ba,bw的雅克比
+  Weight m_W;//信息矩阵
+  float m_Tvg, m_Tpv/*两帧之间的时间戳*/, m_Tpg/*连加以后近似于m_Tpv^2*/, m_r;
 #ifdef CFG_DEBUG_EIGEN
  public:
   class EigenTransition : public EigenMatrix15x15f {
@@ -1566,7 +1894,7 @@ class Delta {
     inline EigenWeight() {}
     inline EigenWeight(const Eigen::Matrix<float, 15, 15, Eigen::RowMajor> &e_W) { *this = e_W; }
     inline EigenWeight(const Weight &W) { Set(W); }
-    inline EigenWeight(const float w, const Weight &W) { Set(w, W); }
+    inline EigenWeight(const float gyr, const Weight &W) { Set(gyr, W); }
     inline void operator = (const Eigen::Matrix<float, 15, 15, Eigen::RowMajor> &e_W) {
       *((Eigen::Matrix<float, 15, 15, Eigen::RowMajor> *) this) = e_W;
     }
@@ -1591,7 +1919,7 @@ class Delta {
       e_W(12, 12) = e_W(13, 13) = e_W(14, 14) = W.m_wbw;
 #endif
     }
-    inline void Set(const float w, const Weight &W) { Set(W); *this *= w; }
+    inline void Set(const float gyr, const Weight &W) { Set(W); *this *= gyr; }
     inline bool AssertEqual(const Weight &W, const int verbose = 1,
                             const std::string str = "") const {
       bool scc = true;
@@ -1821,11 +2149,11 @@ class Delta {
    public:
     class Global {
      public:
-      inline void operator *= (const float w) {
-        m_Ac1c1 *= w; m_Ac1m1 *= w; m_Ac1c2 *= w; m_Ac1m2 *= w; m_bc1 *= w;
-        m_Am1m1 *= w; m_Am1c2 *= w; m_Am1m2 *= w; m_bm1 *= w;
-        m_Ac2c2 *= w; m_Ac2m2 *= w; m_bc2 *= w;
-        m_Am2m2 *= w; m_bm2 *= w;
+      inline void operator *= (const float gyr) {
+        m_Ac1c1 *= gyr; m_Ac1m1 *= gyr; m_Ac1c2 *= gyr; m_Ac1m2 *= gyr; m_bc1 *= gyr;
+        m_Am1m1 *= gyr; m_Am1c2 *= gyr; m_Am1m2 *= gyr; m_bm1 *= gyr;
+        m_Ac2c2 *= gyr; m_Ac2m2 *= gyr; m_bc2 *= gyr;
+        m_Am2m2 *= gyr; m_bm2 *= gyr;
       }
       inline void Set(const EigenMatrix30x31f &A, const float F) {
         Set(EigenMatrix30x30f(A.block<30, 30>(0, 0)), EigenVector30f(A.block<30, 1>(0, 30)), F);
@@ -1938,8 +2266,10 @@ class Delta {
         scc = UT::AssertEqual(m_F, A.m_F, verbose, str + ".m_F") && scc;
         return scc;
       }
+
+
      public:
-      EigenMatrix6x6f m_Ac1c1;
+      EigenMatrix6x6f m_Ac1c1;//H中r1x1r的因子 我现在都是说的行列的索引
       EigenMatrix6x9f m_Ac1m1;
       EigenMatrix6x6f m_Ac1c2;
       EigenMatrix6x9f m_Ac1m2;
@@ -2036,7 +2366,7 @@ class Delta {
         return scc;
       }
      public:
-      EigenMatrix2x2f m_Agg;
+      EigenMatrix2x2f m_Agg;//重力和重力的H
       EigenMatrix2x6f m_Agc1;
       EigenMatrix2x9f m_Agm1;
       EigenMatrix2x6f m_Agc2;
@@ -2109,18 +2439,18 @@ class Delta {
   void EigenGetErrorJacobian(const Camera &C1, const Camera &C2, const Point3D &pu,
                              EigenError *e_e, EigenJacobian::RelativeKF *e_J,
                              const float eps) const;
-  void EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+  void EigenGetFactor(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                       EigenFactor::Global *e_A, const float eps) const;
-  void EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+  void EigenGetFactor(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                       const Rotation3D &Rg, EigenFactor::RelativeLF *e_A, const float eps) const;
-  void EigenGetFactor(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+  void EigenGetFactor(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                       EigenFactor::RelativeKF *e_A, const float eps) const;
-  static void EigenGetFactor(const float w, const Weight &W, const EigenJacobian::Global &e_J,
+  static void EigenGetFactor(const float gyr, const Weight &W, const EigenJacobian::Global &e_J,
                              const EigenError &e_e, EigenFactor::Global *e_A);
-  static void EigenGetFactor(const float w, const Weight &W, const EigenJacobian::RelativeLF &e_J,
+  static void EigenGetFactor(const float gyr, const Weight &W, const EigenJacobian::RelativeLF &e_J,
                              const EigenError &e_e, EigenFactor::RelativeLF *e_A);
   static EigenError EigenGetError(const EigenErrorJacobian &e_Je, const EigenVector30f e_x);
-  float EigenGetCost(const float w, const Camera &C1, const Camera &C2, const Point3D &pu,
+  float EigenGetCost(const float gyr, const Camera &C1, const Camera &C2, const Point3D &pu,
                      const EigenVector6f &e_xc1, const EigenVector9f &e_xm1,
                      const EigenVector6f &e_xc2, const EigenVector9f &e_xm2,
                      const float eps) const;

@@ -104,21 +104,21 @@ Camera::Prior::Rigid::EigenErrorJacobian Camera::Prior::Rigid::EigenGetErrorJaco
   return e_Je;
 }
 
-Camera::Prior::Rigid::EigenFactor Camera::Prior::Rigid::EigenGetFactor(const float w,
+Camera::Prior::Rigid::EigenFactor Camera::Prior::Rigid::EigenGetFactor(const float gyr,
                                                                        const Rigid3D &T1, const Rigid3D &T2) const {
   const EigenErrorJacobian e_Je = EigenGetErrorJacobian(T1, T2);
   const EigenMatrix6x12f e_J12 = EigenMatrix6x12f(e_Je.m_J1, e_Je.m_J2);
   const EigenMatrix6x13f e_Je12 = EigenMatrix6x13f(e_J12, e_Je.m_e);
-  const EigenMatrix6x6f e_W = EigenMatrix6x6f(w * EigenMatrix6x6f(m_Wrr, m_Wrp, m_Wpr, m_Wpp));
+  const EigenMatrix6x6f e_W = EigenMatrix6x6f(gyr * EigenMatrix6x6f(m_Wrr, m_Wrp, m_Wpr, m_Wpp));
   const EigenMatrix6x12f e_WJ12 = EigenMatrix6x12f(e_W * e_J12);
   const float e_F = (e_W * e_Je.m_e).dot(e_Je.m_e);
   return Camera::Prior::Rigid::EigenFactor(e_WJ12.transpose() * e_Je12, e_F);
 }
 
-float Camera::Prior::Rigid::EigenGetCost(const float w, const Rigid3D &T1, const Rigid3D &T2,
+float Camera::Prior::Rigid::EigenGetCost(const float gyr, const Rigid3D &T1, const Rigid3D &T2,
                                          const EigenVector6f &e_x1, const EigenVector6f &e_x2) const {
   const EigenErrorJacobian e_Je = EigenGetErrorJacobian(T1, T2);
-  const EigenMatrix6x6f e_W = EigenMatrix6x6f(w * EigenMatrix6x6f(m_Wrr, m_Wrp, m_Wpr, m_Wpp));
+  const EigenMatrix6x6f e_W = EigenMatrix6x6f(gyr * EigenMatrix6x6f(m_Wrr, m_Wrp, m_Wpr, m_Wpp));
   const EigenVector6f e_e = EigenVector6f(e_Je.m_e + e_Je.m_J1 * e_x1 + e_Je.m_J2 * e_x2);
   return (e_W * e_e).dot(e_e);
 }

@@ -92,7 +92,7 @@
 #define UT_DBL_EPSILON_MAX        1.0e-06
 #define UT_DBL_EPSILON_RATIO_MIN  1.0e-05
 #define UT_DBL_EPSILON_RATIO_MAX  0.001
-
+//#define CFG_DEBUG_EIGEN
 namespace UT {
 void Assert(const bool expression, const char *format, ...);
 void DebugStart();

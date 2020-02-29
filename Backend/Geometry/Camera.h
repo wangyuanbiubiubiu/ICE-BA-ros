@@ -25,14 +25,14 @@ class Camera {
  public:
   class Calibration {
    public:
-    Intrinsic m_K;
-    Rotation3D m_Ru;
-    Point3D m_pu;
-    LA::AlignedVector3f m_ba, m_bw/*, m_sa*/;
+    Intrinsic m_K;//左相机的内参
+    Rotation3D m_Ru;//外参Tc0_i
+    Point3D m_pu;//外参tc0_i
+    LA::AlignedVector3f m_ba, m_bw/*, m_sa*/;//imu的bias,不过这个所在的坐标系我觉得是左相机下的坐标系
 #ifdef CFG_STEREO
-    Intrinsic m_Kr;
-    Rotation3D m_Rr;
-    Point3D m_br;
+    Intrinsic m_Kr;//右相机的内参
+    Rotation3D m_Rr;//Tc0_c1
+    Point3D m_br;//-tc0_c1
 #endif
   };
   
@@ -69,7 +69,7 @@ class Camera {
 
   class Factor {
    public:
-    class Unitary {
+    class Unitary {//代表了对角线部分和增广的那一行的b
      public:
       class CC {
        public:
@@ -192,7 +192,7 @@ class Camera {
         }
        public:
         union {
-          struct { LA::SymmetricMatrix6x6f m_A; float m_r; LA::Vector6f m_b; };
+          struct { LA::SymmetricMatrix6x6f m_A/*对应的pose，pr-pr部分的对角线部分*/; float m_r; LA::Vector6f m_b/*pose对应的-b*/; };
           xp128f m_data[7];
         };
       };
@@ -325,7 +325,7 @@ class Camera {
         }
        public:
         union {
-          struct { LA::SymmetricMatrix9x9f m_A; LA::Vector9f m_b; };
+          struct { LA::SymmetricMatrix9x9f m_A/*H中mm这部分*/; LA::Vector9f m_b/*b中-mb这部分*/; };
           xp128f m_data[14];
         };
       };
@@ -368,10 +368,10 @@ class Camera {
       }
      public:
       //CC m_Acc;
-      CM m_Acm;
-      MM m_Amm;
+      CM m_Acm;//H的cm这部分 c就是相机pose
+      MM m_Amm;//H的mm部分,-b的m部分 m就是运动部分
     };
-    class Binary {
+    class Binary {//非对角线数据
      public:
       class CC : public LA::AlignedMatrix6x6f {
        public:
@@ -599,10 +599,10 @@ class Camera {
       inline void Set(const LA::AlignedMatrix3x3f *Ap, const LA::AlignedMatrix3x3f *Ar,
                       const LA::AlignedMatrix3x3f *Av, const LA::AlignedMatrix3x3f *Aba,
                       const LA::AlignedMatrix3x3f *Abw) {
-        m_Acc.Set(Ap, Ar);
-        m_Acm.Set(Ap + 2, Ar + 2);
-        m_Amc.Set(Av, Aba, Abw);
-        m_Amm.Set(Av + 2, Aba + 2, Abw + 2);
+        m_Acc.Set(Ap, Ar);//前一帧的pose x 后一帧的pose
+        m_Acm.Set(Ap + 2, Ar + 2);//前一帧的pose x 后一帧的motion
+        m_Amc.Set(Av, Aba, Abw);//前一帧的motion x 后一帧的pose
+        m_Amm.Set(Av + 2, Aba + 2, Abw + 2);//前一帧的motion x 后一帧的motion
       }
       inline void Set(const LA::AlignedMatrix3x3f *Av, const LA::AlignedMatrix3x3f *Aba,
                       const LA::AlignedMatrix3x3f *Abw) {
@@ -645,10 +645,10 @@ class Camera {
         MM::AmB(A.m_Amm, B.m_Amm, AmB.m_Amm);
       }
      public:
-      CC m_Acc;
-      CM m_Acm;
-      MC m_Amc;
-      MM m_Amm;
+      CC m_Acc;//A[T0,T1]//前一帧的pose x 后一帧的pose
+      CM m_Acm;//A[T0,M1]//前一帧的pose x 后一帧的motion
+      MC m_Amc;//A[M0,T1]//前一帧的motion x 后一帧的pose
+      MM m_Amm;//A[M0,M1]//前一帧的motion x 后一帧的motion
     };
    public:
     inline void MakeZero() { memset(this, 0, sizeof(Factor)); }
@@ -667,14 +667,14 @@ class Camera {
       Binary::AmB(A.m_Ab, B.m_Ab, AmB.m_Ab);
     }
    public:
-    Unitary m_Au;
-    Binary m_Ab;
+    Unitary m_Au;//存储了同一帧的M x M,Pose x M 以及对应的b
+    Binary m_Ab;//存储了前一帧Pose x 后一帧Pose,前一帧Pose x 后一帧M,前一帧M x 后一帧Pose,前一帧M x 后一帧M
   };
 
   class Conditioner {
    public:
 #ifdef CFG_PCG_FULL_BLOCK
-    class C : public LA::AlignedMatrix6x6f {
+    class Cam_state : public LA::AlignedMatrix6x6f {
      public:
       inline void Set(const Factor::Unitary::CC &A, const float *aMax = NULL,
                       const float *eps = NULL) {
@@ -710,7 +710,7 @@ class Camera {
       inline void Set(const Factor::Unitary::CC &A, const float aMax = 0.0f,
                       const float epsI = 0.0f, const float *epsLDL = NULL) {
         LA::SymmetricMatrix3x3f _A;
-        A.m_A.Get00(&_A);
+        A.m_A.Get00(&_A);//pose自己和自己的H
         if (!_A.GetInverse(m_Mp, aMax, epsI) &&
             !_A.GetInverseLDL(m_Mp, epsLDL)) {
           m_Mp.MakeZero();
@@ -735,7 +735,7 @@ class Camera {
         LA::AlignedMatrix3x3f::Ab<TYPE>(m_Mr, xr, Mx + 3);
       }
      public:
-      LA::AlignedMatrix3x3f m_Mp, m_Mr;
+      LA::AlignedMatrix3x3f m_Mp, m_Mr;//已经提前是对角线的逆了
     };
     class M {
      public:
@@ -893,20 +893,20 @@ class Camera {
      public:
       class Error {
        public:
-        LA::AlignedVector3f m_er, m_ep;
+        LA::AlignedVector3f m_er/*eR = Rc0w * Rwc0的旋转向量表示*/, m_ep/*twc0*/;
       };
       class ErrorJacobian {
        public:
         Error m_e;
-        LA::AlignedMatrix3x3f m_Jr;
+        LA::AlignedMatrix3x3f m_Jr;//R部分的导数
       };
       class Factor {
        public:
         inline void MakeZero() { memset(this, 0, sizeof(Factor)); }
-        ErrorJacobian m_Je;
+        ErrorJacobian m_Je;//存雅克比和残差
         union {
-          struct { float m_data[21], m_F; };
-          Camera::Factor::Unitary::CC m_A;
+          struct { float m_data[21], m_F/*costfun*/; };
+          Camera::Factor::Unitary::CC m_A;//固定原点因子的H,b
         };
       };
       class Reduction {
@@ -942,12 +942,12 @@ class Camera {
        public:
         UT::ES<ESError, int> m_ESr, m_ESp;
       };
-      inline void Set(const float w, const LA::Vector3f &s2r, const float s2p, const Rotation3D &R) {
+      inline void Set(const float w/*权重*/, const LA::Vector3f &s2r, const float s2p, const Rotation3D &R) {
         m_wr[0] = UT::Inverse(s2r.x(), w);
         m_wr[1] = UT::Inverse(s2r.y(), w);
         m_wr[2] = UT::Inverse(s2r.z(), w);
         m_wp.vdup_all_lane(UT::Inverse(s2p, w));
-        R.GetTranspose(m_RT);
+        R.GetTranspose(m_RT);//转置,存的是Twc0
       }
       inline void GetError(const Rigid3D &T, Error &e, const float eps) const {
         Rotation3D eR;
@@ -967,7 +967,14 @@ class Camera {
         e.m_ep += xp;
         LA::AlignedMatrix3x3f::AddAbTo(Je.m_Jr, xr, (float *) &e.m_er);
       }
-      inline void GetErrorJacobian(const Rigid3D &T, ErrorJacobian &Je, const float eps) const {
+      //pose第一帧的先验
+      ////m_ep = twc0 - 0
+      ////er = -ln{Rwc0(初始的第一帧pose) * Rc0w(要优化的)}v Rwc0(初始的第一帧pose) * Rc0w为eR
+      //  Rc0w右乘扰动 => -ln{Rwc0(初始的第一帧pose) * Rc0w*exp[-th]x }v -(-ln(eR))
+      // 伴随性质      = -ln{exp[eR*-th]x * eR}v + ln(eR)
+      //BCH           = - (Jl^-1(-er(因为是ln(eR))) *eR* -th + ln(eR)) + ln(eR)
+      //div(er)/div(Rc0w) = Jl^-1(-er) * eR =  Jr^-1(er) * eR
+      inline void GetErrorJacobian(const Rigid3D &T/*pose Tc0w*/, ErrorJacobian &Je, const float eps) const {
         Rotation3D eR;
         //Rotation3D RT;
         //LA::AlignedVector3f g;
@@ -975,26 +982,27 @@ class Camera {
         //RT.MakeIdentity(&g);
         //RT.Transpose();
         //Rotation3D::AB(RT, T, eR);
-        Rotation3D::AB(m_RT, T, eR);
-        eR.GetRodrigues(Je.m_e.m_er, eps);
-        T.GetPosition(Je.m_e.m_ep);
-        Rotation3D::GetRodriguesJacobianInverse(Je.m_e.m_er, Je.m_Jr, eps);
-        Je.m_Jr = Je.m_Jr * eR;
+        Rotation3D::AB(m_RT, T, eR);// eR = Rwc0 * Rc0w
+        eR.GetRodrigues(Je.m_e.m_er, eps);//eR转成旋转向量 这里是负的-ln
+        T.GetPosition(Je.m_e.m_ep);// m_ep = twc0 - 0
+        Rotation3D::GetRodriguesJacobianInverse(Je.m_e.m_er/*Rc0w * Rwc0的旋转向量*/, Je.m_Jr, eps);//Je.m_Jr = Jr^-1(er)
+        Je.m_Jr = Je.m_Jr * eR;//Je.m_Jr = Jr^-1(er) * eR
       }
-      inline void GetFactor(const Rigid3D &T, Factor &A, const float eps) const {
-        GetErrorJacobian(T, A.m_Je, eps);
+      inline void GetFactor(const Rigid3D &T/*pose*/, Factor &A, const float eps) const {//构造固定原点因子的H,b,存在A.m_A中,costfun存在A.m_F,m_Je里是J和残差
+        GetErrorJacobian(T/*pose*/, A.m_Je, eps);
         const LA::AlignedVector3f eTWr = A.m_Je.m_e.m_er * m_wr;
         const float r2p = A.m_Je.m_e.m_ep.SquaredLength();
-        A.m_F = eTWr.Dot(A.m_Je.m_e.m_er) + m_wp[0] * r2p;
+        A.m_F = eTWr.Dot(A.m_Je.m_e.m_er) + m_wp[0] * r2p;//costfun
+        //这里就算一下J.t*W*J和J.t*W*e 即H|-b
         A.m_A.m_A.MakeDiagonal(m_wp[0]);
         const LA::AlignedVector3f bp = A.m_Je.m_e.m_ep * m_wp;
-        A.m_A.m_b.v0() = bp.x();
+        A.m_A.m_b.v0() = bp.x();//se3中p部分
         A.m_A.m_b.v1() = bp.y();
         A.m_A.m_b.v2() = bp.z();
         const LA::AlignedMatrix3x3f JrT = A.m_Je.m_Jr.GetTranspose();
-        const LA::AlignedMatrix3x3f JTWr = JrT * m_wr;
-        LA::SymmetricMatrix6x6f::ABTTo33(JTWr, JrT, A.m_A.m_A);
-        LA::Vector6f::AbTo3(JTWr, A.m_Je.m_e.m_er, A.m_A.m_b);
+        const LA::AlignedMatrix3x3f JTWr = JrT * m_wr;//J.t×w
+        LA::SymmetricMatrix6x6f::ABTTo33(JTWr, JrT, A.m_A.m_A);//H中r的部分
+        LA::Vector6f::AbTo3(JTWr, A.m_Je.m_e.m_er, A.m_A.m_b);//b中r的部分
       }
       inline float GetCost(const Error &e) const {
         const LA::AlignedVector3f eTW = e.m_er * m_wr;
@@ -1009,8 +1017,8 @@ class Camera {
         Rp.m_dF = A.m_F - (Rp.m_F = GetCost(Rp.m_e));
       }
      public:
-      xp128f m_wr, m_wp;
-      Rotation3D m_RT;
+      xp128f m_wr/*旋转部分的信息矩阵*/, m_wp;/*平移部分的信息矩阵*/
+      Rotation3D m_RT;//Rwc0
 #ifdef CFG_DEBUG_EIGEN
      public:
       class EigenErrorJacobian {
@@ -1049,7 +1057,7 @@ class Camera {
         inline const float& F() const { return m_b.r(); }
         inline       float& F()       { return m_b.r(); }
        public:
-        LA::AlignedVector3f m_b;
+        LA::AlignedVector3f m_b;//b中前三维是残差，第4维是costfun
       };
       class Reduction {
        public:
@@ -1062,7 +1070,7 @@ class Camera {
         m_w.vdup_all_lane(UT::Inverse(s2, w));
       }
       inline void GetFactor(const LA::AlignedVector3f &v, Factor &A) const {
-        v.GetScaled(m_w, A.m_b);
+        v.GetScaled(m_w, A.m_b);//A.m_b = m_w*v
         A.F() = GetCost(v);
       }
       inline float GetCost(const LA::AlignedVector3f &e) const {
@@ -1092,7 +1100,7 @@ class Camera {
        public:
         inline void MakeZero() { m_b = m_F = 0.0f; }
        public:
-        float m_b, m_F;
+        float m_b, m_F/*costfun*/;
       };
       class Reduction {
        public:
@@ -1104,7 +1112,7 @@ class Camera {
       inline PositionZ(const float w, const float s2) {
         m_w = UT::Inverse(s2, w);
       }
-      inline void GetFactor(const float pz, Factor &A) const {
+      inline void GetFactor(const float pz/*twc0[2]*/, Factor &A) const {
         A.m_b = m_w * pz;
         A.m_F = GetCost(pz);
       }
@@ -1120,7 +1128,7 @@ class Camera {
         Rp.m_dF = A.m_F - (Rp.m_F = GetCost(pz1, xpz));
       }
      public:
-      float m_w;
+      float m_w;//权重矩阵
     };
     class Motion {
      public:
@@ -1164,8 +1172,8 @@ class Camera {
   }
   inline Camera(const Camera &C, const LA::AlignedVector3f *dp, const LA::AlignedVector3f *dr,
                 const LA::AlignedVector3f *dv, const LA::AlignedVector3f *dba,
-                const LA::AlignedVector3f *dbw, const float eps) : m_T(C.m_T, dp, dr, eps) {
-    m_T.GetPosition(m_p);
+                const LA::AlignedVector3f *dbw, const float eps) : m_Cam_pose(C.m_Cam_pose, dp, dr, eps) {
+    m_Cam_pose.GetPosition(m_p);
     m_v = C.m_v;
     if (dv) {
       m_v += *dv;
@@ -1184,15 +1192,15 @@ class Camera {
     memcpy(this, &C, sizeof(Camera));
   }
   inline bool operator == (const Camera &C) const {
-    return m_T == C.m_T &&
+    return m_Cam_pose == C.m_Cam_pose &&
            m_p == C.m_p &&
            m_v == C.m_v &&
            m_ba == C.m_ba &&
            m_bw == C.m_bw;
   }
 
-  inline void MakeIdentity(const LA::AlignedVector3f *g = NULL) {
-    m_T.MakeIdentity(g);
+  inline void MakeIdentity(const LA::AlignedVector3f *g = NULL) {//
+    m_Cam_pose.MakeIdentity(g);//如果有加速度重力化,世界坐标系就是东北天坐标系,那么imu的坐标系朝向也就知道了,但原始数据已经被转到了左相机的坐标系下了,所以求出的朝向是左相机的朝向Rc0w
     m_p.MakeZero();
     m_v.MakeZero();
     m_ba.MakeZero();
@@ -1200,19 +1208,19 @@ class Camera {
   }
 
   inline void Get(float *q, float *p, float *v) const {
-    m_T.GetQuaternion().Get(q);
+    m_Cam_pose.GetQuaternion().Get(q);
     m_p.Get(p);
     m_v.Get(v);
 
   }
 
-  inline bool Valid() const { return m_T.Valid(); }
-  inline bool Invalid() const { return m_T.Invalid(); }
-  inline void Invalidate() { m_T.Invalidate(); m_v.Invalidate(); }
+  inline bool Valid() const { return m_Cam_pose.Valid(); }
+  inline bool Invalid() const { return m_Cam_pose.Invalid(); }
+  inline void Invalidate() { m_Cam_pose.Invalidate(); m_v.Invalidate(); }
 
   inline void Print(const bool e = false, const bool l = false) const {
     UT::PrintSeparator();
-    m_T.Print(" T = ", e);
+    m_Cam_pose.Print(" T = ", e);
     m_p.Print(" p = ", e, l, true);
     m_v.Print(" v = ", e, l, true);
     m_ba.Print("ba = ", e, l, true);
@@ -1221,7 +1229,7 @@ class Camera {
   inline void Print(const std::string str, const bool e, const bool l) const {
     UT::PrintSeparator();
     const std::string _str(str.size(), ' ');
-    m_T.Print( str + " T = ", e);
+    m_Cam_pose.Print(str + " T = ", e);
     m_p.Print(_str + " p = ", e, l, true);
     m_v.Print(_str + " v = ", e, l, true);
     m_ba.Print(_str + "ba = ", e, l, true);
@@ -1229,15 +1237,15 @@ class Camera {
   }
 
   inline void AssertConsistency(const int verbose = 1, const std::string str = "") const {
-    m_T.AssertOrthogonal(verbose, str + ".m_R");
+    m_Cam_pose.AssertOrthogonal(verbose, str + ".m_R");
     UT_ASSERT(m_p.Valid());
-    m_p.AssertEqual(m_T.GetPosition(), verbose, str + ".m_p");
+    m_p.AssertEqual(m_Cam_pose.GetPosition(), verbose, str + ".m_p");
   }
 
   inline bool AssertEqual(const Camera &C, const int verbose = 1, const std::string str = "",
                           const float rEps = 0.001745329252f, const float pEps = 0.0f,
                           const float vEps = 0.0f) const {
-    if (m_T.AssertEqual(C.m_T, verbose, str + ".m_T", rEps, pEps) &&
+    if (m_Cam_pose.AssertEqual(C.m_Cam_pose, verbose, str + ".m_Cam_pose", rEps, pEps) &&
         m_p.AssertEqual(C.m_p, verbose, str + ".m_p", pEps) &&
         m_v.AssertEqual(C.m_v, verbose, str + ".m_v", vEps) &&
         m_ba.AssertEqual(C.m_ba, verbose, str + ".m_ba") &&
@@ -1252,9 +1260,9 @@ class Camera {
 
  public:
 
-  Rigid3D m_T;
-  Point3D m_p;
-  LA::AlignedVector3f m_v, m_ba, m_bw;
+  Rigid3D m_Cam_pose;//左相机相机位姿，Tc0w
+  Point3D m_p;//左相机相机位置 twc0
+  LA::AlignedVector3f m_v, m_ba, m_bw;//速度,加速度和陀螺仪bias ,世界坐标系下的
 
 };
 

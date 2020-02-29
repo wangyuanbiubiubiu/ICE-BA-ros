@@ -19,12 +19,12 @@
 //#endif
 //#define CAMERA_PRIOR_DEBUG_EIGEN
 #if defined CAMERA_PRIOR_DEBUG_EIGEN && !defined CFG_DEBUG_EIGEN
-#define CFG_DEBUG_EIGEN
+//#define CFG_DEBUG_EIGEN
 #endif
 #include "CameraPrior.h"
 
 namespace CameraPrior {
-
+//边缘化第i个pose
 bool Pose::Marginalize(const int i, AlignedVector<float> *work, const float *eps) {
   const int N = static_cast<int>(m_iKFs.size());
 #if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
@@ -66,7 +66,7 @@ bool Pose::Marginalize(const int i, AlignedVector<float> *work, const float *eps
   if (scc) {
     Mcici.MakeMinus();
     const int i1 = 0, i2 = i + 1, N1 = i, N2 = N - i2;
-    const Element::C &bci = m_bc[i];
+    const Element::Cam_state &bci = m_bc[i];
     const Element::RC &Arci = m_Arc[i];
     const Matrix::CC Ac1ci = m_Acc.GetBlock(i1, i, N1, 1);
     const Matrix::CC Acic2 = m_Acc.GetBlock(i, i2, 1, N2);
@@ -86,13 +86,13 @@ bool Pose::Marginalize(const int i, AlignedVector<float> *work, const float *eps
     Vector::AddABTTo(Mrci, Ac2ci, Arc2);
     Element::AddAbTo(Mrci, bci, m_br);
     Matrix::CC Ac1c1 = m_Acc.GetBlock(i1, i1, N1, N1), Ac1c2 = m_Acc.GetBlock(i1, i2, N1, N2);
-    Vector::C bc1 = m_bc.GetBlock(i1, N1);
+    Vector::Cam_state bc1 = m_bc.GetBlock(i1, N1);
     Vector::ABT(Ac1ci, Mcici, Mc1ci);
     Matrix::AddABTToUpper(Mc1ci, Ac1ci, Ac1c1);
     Matrix::AddABTTo(Mc1ci, Ac2ci, Ac1c2);
     Vector::AddAbTo(Mc1ci, bci, bc1);
     Matrix::CC Ac2c2 = m_Acc.GetBlock(i2, i2, N2, N2);
-    Vector::C bc2 = m_bc.GetBlock(i2, N2);
+    Vector::Cam_state bc2 = m_bc.GetBlock(i2, N2);
     Vector::ABT(Ac2ci, Mcici, Mc2ci);
     Matrix::AddABTToUpper(Mc2ci, Ac2ci, Ac2c2);
     Vector::AddAbTo(Mc2ci, bci, bc2);
@@ -101,12 +101,12 @@ bool Pose::Marginalize(const int i, AlignedVector<float> *work, const float *eps
   return scc;
 #endif
 }
-
+//先获得g,最老帧pose的先验的逆,如果有pose对应的先验不符合阈值,会将这个pose先验中边缘化掉,然后再
 bool Pose::MarginalizeUninformative(const float w, const float s2p, const float s2r,
                                     std::vector<int> *iks, AlignedVector<float> *work,
                                     const float *eps) {
   LA::AlignedMatrixXf S;
-  if (!GetPriorMeasurement(1.0f, &S, NULL, NULL, work, eps)) {
+  if (!GetPriorMeasurement(1.0f, &S/*g,最老帧pose的先验的逆*/, NULL, NULL, work, eps)) {
     return false;
   }
   LA::Vector3f s2pi, s2ri;
@@ -114,9 +114,9 @@ bool Pose::MarginalizeUninformative(const float w, const float s2p, const float 
   const int N = static_cast<int>(m_iKFs.size());
   iks->resize(N);
   for (int i = 0, ip = m_Zps.Size() == N ? 0 : 2; i < N; ++i) {
-    S.GetDiagonal(ip, s2pi);  ip += 3;
-    S.GetDiagonal(ip, s2ri);  ip += 3;
-    if (s2pi.Maximal() > _s2p || s2ri.Maximal() > _s2r) {
+    S.GetDiagonal(ip, s2pi);  ip += 3;//位置的对角
+    S.GetDiagonal(ip, s2ri);  ip += 3;//旋转的对角
+    if (s2pi.Maximal() > _s2p || s2ri.Maximal() > _s2r) {//A^-1可以理解为协方差,如果这个pose的协方差太大,需要记录下来,否则为-1
       iks->at(i) = i;
     } else {
       iks->at(i) = -1;
@@ -127,7 +127,7 @@ bool Pose::MarginalizeUninformative(const float w, const float s2p, const float 
     if (_i == -1) {
       continue;
     }
-    Marginalize(_i, work, eps);
+    Marginalize(_i, work, eps);//如果这个pose的协方差太大,就把这帧对应的pose给边缘化掉
     iks->at(i) = -1;
     for (int j = i + 1; j < N; ++j) {
       if (iks->at(j) != -1) {
@@ -141,7 +141,7 @@ bool Pose::MarginalizeUninformative(const float w, const float s2p, const float 
   LA::AlignedVectorXf x;
   return GetPriorMeasurement(1.0f, &S, &x, &m_xTb, work, eps);
 }
-
+//更新m_Arr,m_Arc,m_br,m_Acc,m_bc存储的先验约束
 void Pose::SetPriorEquation(const Matrix::X &A, const Vector::X &b, const bool g) {
   const int N = static_cast<int>(m_iKFs.size());
   const bool _g = m_Zps.Size() != N;
@@ -152,8 +152,8 @@ void Pose::SetPriorEquation(const Matrix::X &A, const Vector::X &b, const bool g
   const int ipg = 0, ipc = _g ? 2 : 0;
 #endif
   if (g && _g) {
-    A.GetBlockDiagonal(ipg, m_Arr);
-    m_Arc.Resize(N);
+    A.GetBlockDiagonal(ipg, m_Arr);//更新m_Arr中存储的Hgg的先验约束
+    m_Arc.Resize(N);//扩容成参考关键帧的个数
 #ifdef CFG_CAMERA_PRIOR_REORDER
     LA::Matrix3x2f Acg;
     LA::Matrix2x3f Agp, Agr;
@@ -164,10 +164,10 @@ void Pose::SetPriorEquation(const Matrix::X &A, const Vector::X &b, const bool g
     }
 #else
     for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {
-      A.GetBlock(ipg, ip, m_Arc[i]);
+      A.GetBlock(ipg, ip, m_Arc[i]);//g和次老帧之间的先验约束
     }
 #endif
-    b.GetBlock(ipg, m_br);
+    b.GetBlock(ipg, m_br);//bg
   } else {
     m_Arc.Resize(0);
   }
@@ -196,13 +196,13 @@ void Pose::SetPriorEquation(const Matrix::X &A, const Vector::X &b, const bool g
 #else
   for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {
     for (int j = i, jp = ip; j < N; ++j, jp += 6) {
-      A.GetBlock(ip, jp, m_Acc[i][j]);
+      A.GetBlock(ip, jp, m_Acc[i][j]);//前后帧之间的约束,以及自己和自己的约束
     }
-    b.GetBlock(ip, m_bc[i]);
+    b.GetBlock(ip, m_bc[i]);//bc
   }
 #endif
 }
-
+//得到g,观测关键帧,最老帧pose的先验
 void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, const bool g) const {
   const int N = static_cast<int>(m_iKFs.size());
   const bool _g = m_Zps.Size() != N;
@@ -211,8 +211,8 @@ void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, co
   const int Npr = N * 3, Npp = Npr, Npc = Npr + Npp, Np = Npg + Npc;
   const int ipr = 0, ipp = Npr, ipg = Npc;
 #else
-  const int Np = Npg + N * 6;
-  const int ipg = 0, ipc = Npg;
+  const int Np = Npg + N * 6;//之前的观测关键帧和g的总size,也就是先验的size
+  const int ipg = 0, ipc = Npg;//pg
 #endif
   A->Resize(Np, Np, symmetric);
   if (b) {
@@ -220,7 +220,7 @@ void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, co
   }
 
   if (g && _g) {
-    A->SetBlockDiagonal(ipg, m_Arr);
+    A->SetBlockDiagonal(ipg, m_Arr);//设置一下gg对应的上三角部分,g在A的最左上角
 #ifdef CFG_CAMERA_PRIOR_REORDER
     LA::Matrix2x3f Agp, Agr;
     LA::Matrix3x2f Acg;
@@ -230,7 +230,7 @@ void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, co
       Agp.GetTranspose(Acg);  A->SetBlock(_ipp, ipg, Acg);
     }
 #else
-    for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {
+    for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {//观测关键帧和最老帧pose在g之后
       A->SetBlock(ipg, ip, m_Arc[i]);
     }
 #endif
@@ -259,7 +259,7 @@ void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, co
     }
   }
 #else
-  for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {
+  for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {//遍历所有以前的观测关键帧
     for (int j = i, jp = ip; j < N; ++j, jp += 6) {
       A->SetBlock(ip, jp, m_Acc[i][j]);
     }
@@ -269,10 +269,10 @@ void Pose::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric, co
   }
 #endif
 }
-
+//得到g,观测关键帧,最老帧pose的先验以后求逆
 bool Pose::GetPriorMeasurement(const Element::T w, Matrix::X *S, Vector::X *x,
                                Element::T *xTb, const Element::T *eps) const {
-  GetPriorEquation(S, x, false);
+  GetPriorEquation(S, x, false);//得到g,最老帧pose的先验 A(存在S里) 如果x不为null,会求一下b(存在x里)
   if (x) {
     Vector::X b;
     if (xTb) {
@@ -283,13 +283,13 @@ bool Pose::GetPriorMeasurement(const Element::T w, Matrix::X *S, Vector::X *x,
       b.Bind(x->Data() + NpC, Np);
       b.Copy(*x);
     }
-    if (!S->SolveLDL(*x, eps)) {
+    if (!S->SolveLDL(*x, eps)) {//S*x = b 求x
       return false;
     }
     x->MakeMinus();
     S->InverseLDL(eps, true);
     if (xTb) {
-      *xTb = x->Dot(b);
+      *xTb = x->Dot(b);//x.t*b
     }
   } else {
     if (!S->InverseLDL(eps)) {
@@ -304,7 +304,7 @@ bool Pose::GetPriorMeasurement(const Element::T w, Matrix::X *S, Vector::X *x,
   }
   return true;
 }
-
+//得到g,最老帧pose的先验以后求逆?
 bool Pose::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::AlignedVectorXf *x,
                                float *xTb, AlignedVector<float> *work, const float *eps) const {
   if (Invalid()) {
@@ -424,7 +424,7 @@ bool Pose::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Aligne
   EigenMatrixXf e_S;
   EigenVectorXf e_x;
 #ifdef CFG_CAMERA_PRIOR_DOUBLE
-  EigenGetPriorMeasurement(w, &e_S, x ? &e_x : NULL);
+  EigenGetPriorMeasurement(gyr, &e_S, x ? &e_x : NULL);
   e_S.AssertEqual(*S, 1, str);
   if (x) {
     e_x.AssertEqual(*x, 1, str);
@@ -433,8 +433,8 @@ bool Pose::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Aligne
   EigenPrior e_Zp;
   e_Zp.Set(*this);
   //e_S = *S;
-  //if (w != 1) {
-  //  e_S /= w;
+  //if (gyr != 1) {
+  //  e_S /= gyr;
   //}
   //const EigenMatrixXf e_I = EigenMatrixXf::Identity(Np);
   //const EigenMatrixXf e_E1 = e_S * e_Zp.m_A - e_I;
@@ -473,7 +473,7 @@ bool Pose::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Aligne
       ecs[i].Set(eps);
     }
   }
-  return GetPriorMeasurement(w, S, x, xTb, eps ? _eps.Data() : NULL);
+  return GetPriorMeasurement(gyr, S, x, xTb, eps ? _eps.Data() : NULL);
 #endif
 }
 
@@ -592,7 +592,7 @@ bool Motion::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Alig
   EigenMatrixXf e_S;
   EigenVectorXf e_x;
 #ifdef CFG_CAMERA_PRIOR_DOUBLE
-  EigenGetPriorMeasurement(w, &e_S, x ? &e_x : NULL);
+  EigenGetPriorMeasurement(gyr, &e_S, x ? &e_x : NULL);
   e_S.AssertEqual(*S, 1, str);
   if (x) {
     e_x.AssertEqual(*x, 1, str);
@@ -612,8 +612,8 @@ bool Motion::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Alig
   }
 #endif
   //e_S = *S;
-  //if (w != 1) {
-  //  e_S /= w;
+  //if (gyr != 1) {
+  //  e_S /= gyr;
   //}
   //const EigenMatrix9x9f e_I = EigenMatrix9x9f::Identity();
   //const EigenMatrix9x9f e_E1 = e_S * e_Zp.m_A - e_I;
@@ -658,16 +658,16 @@ bool Motion::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Alig
       return false;
     }
   }
-  if (w != 1.0f) {
-    *S *= w;
+  if (gyr != 1.0f) {
+    *S *= gyr;
     if (xTb) {
-      *xTb /= w;
+      *xTb /= gyr;
     }
   }
 #endif
   return true;
 }
-
+//更新m_Arr,m_Arc,m_br,m_Acc,m_bc,m_Arm,m_Acm,m_Amm,m_bm存储的先验约束
 void Joint::SetPriorEquation(const Matrix::X &A, const Vector::X &b) {
   const int N = static_cast<int>(m_iKFs.size());
   const bool g = m_Zps.Size() != N;
@@ -725,24 +725,24 @@ void Joint::SetPriorEquation(const Matrix::X &A, const Vector::X &b) {
   const int Np = Npg + Npc + 9;
   UT_ASSERT(A.GetRows() == Np && A.GetColumns() == Np && b.Size() == Np);
 #endif
-  const int ipg = 0, ipc = Npg, ipm = ipc + Npc;
-  Pose::SetPriorEquation(A, b);
+  const int ipg = 0, ipc = Npg/*g的维度*/, ipm = ipc + Npc;/*motion部分的起点*/
+  Pose::SetPriorEquation(A, b);//更新m_Arr,m_Arc,m_br,m_Acc,m_bc存储的先验约束
   if (g) {
-    A.GetBlock(ipg, ipm, m_Arm);
+    A.GetBlock(ipg, ipm, m_Arm);//g和次老帧motion部分的约束
   }
   m_Acm.Resize(N);
   for (int i = 0, ip = ipc; i < N; ++i, ip += 6) {
     A.GetBlock(ip, ipm, m_Acm[i]);
   }
-  A.GetBlock(ipm, ipm, m_Amm);
+  A.GetBlock(ipm, ipm, m_Amm);//下一帧motion的约束
   b.GetBlock(ipm, m_bm);
 #endif
 }
-
+//获取g,所有观测关键帧,最老帧C,M的先验矩阵
 void Joint::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric) const {
-  const int N = static_cast<int>(m_iKFs.size());
+  const int N = static_cast<int>(m_iKFs.size());//有多少个观测关键帧
   const bool g = m_Zps.Size() != N;
-  const int Npg = g ? 2 : 0;
+  const int Npg = g ? 2 : 0;//说明要有g的部分
 #ifdef CFG_CAMERA_PRIOR_REORDER
   const int Npr = N * 3, Npp = Npr, Npc = Npr + Npp, Np = Npg + Npc + 9;
   const int ipr = 0, ipp = Npr;
@@ -792,10 +792,10 @@ void Joint::GetPriorEquation(Matrix::X *A, Vector::X *b, const bool symmetric) c
     m_bm.Get678(bm);            b->SetBlock(ipbw, bm);
   }
 #else
-  const int Npc = N * 6, Np = Npg + Npc + 9;
-  const int ipg = 0, ipc = Npg, ipm = ipc + Npc;
-  Pose::GetPriorEquation(A, b, symmetric);
-  A->Resize(Np, Np, symmetric, true);
+  const int Npc = N * 6/*之前的观测关键帧*/, Np = Npg + Npc + 9;//老的先验维度加上motion的维度
+  const int ipg = 0/*g的位置*/, ipc = Npg/*g后面的*/, ipm = ipc + Npc;//当前这个motion起点的位置
+  Pose::GetPriorEquation(A, b, symmetric);//得到g,观测关键帧,最老帧pose的先验
+  A->Resize(Np, Np, symmetric, true);//以及扩容motion部分
   if (b) {
     b->Resize(Np, true);
   }
@@ -1036,7 +1036,7 @@ bool Joint::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Align
   EigenMatrixXf e_S;
   EigenVectorXf e_x;
 #ifdef CFG_CAMERA_PRIOR_DOUBLE
-  EigenGetPriorMeasurement(w, &e_S, x ? &e_x : NULL);
+  EigenGetPriorMeasurement(gyr, &e_S, x ? &e_x : NULL);
   e_S.AssertEqual(*S, 1, str);
   if (x) {
     e_x.AssertEqual(*x, 1, str);
@@ -1056,8 +1056,8 @@ bool Joint::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Align
   }
 #endif
 //  e_S = *S;
-//  if (w != 1) {
-//    e_S /= w;
+//  if (gyr != 1) {
+//    e_S /= gyr;
 //  }
 //  const EigenMatrixXf e_I = EigenMatrixXf::Identity(Np);
 //  const EigenMatrixXf e_E1 = e_S * e_Zp.m_A - e_I;
@@ -1105,7 +1105,7 @@ bool Joint::GetPriorMeasurement(const float w, LA::AlignedMatrixXf *S, LA::Align
     LA::Vector9f *em = (LA::Vector9f *) (ecs + N);
     em->Set(eps + 6);
   }
-  return GetPriorMeasurement(w, S, x, xTb, eps ? _eps.Data() : NULL);
+  return GetPriorMeasurement(gyr, S, x, xTb, eps ? _eps.Data() : NULL);
 #endif
 }
 
@@ -1167,19 +1167,19 @@ bool Joint::Invertible(AlignedVector<float> *work, const float *eps) const {
 #endif
   return rank == Np;
 }
-
-bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
-                        const IMU::Delta::Factor::Auxiliary::RelativeLF &A,
+//当最老帧不是关键帧时,来的新的变量就是C,M,将m_Zps[i]更新为Tc0(参考关键帧)_c0(次老帧) i为当前最后一个参考关键帧,
+bool Joint::PropagateLF(const Rigid3D &Tr/*上一次滑窗时的Tc0w(参考关键帧)*/, const Camera &C,/*次老帧的相机状态*/
+                        const IMU::Delta::Factor::Auxiliary::RelativeLF &A,/*imu约束因子*/
                         AlignedVector<float> *work, const float *eps) {
   const int N = static_cast<int>(m_iKFs.size()), Nk = N - 1;
 #ifdef CFG_DEBUG
   UT_ASSERT(m_Zps.Size() != N);
   UT_ASSERT(m_iKFs[Nk] == INT_MAX);
 #endif
-  SetPose(Tr, Nk, C.m_T);
-  SetMotion(C.m_T, C.m_v, C.m_ba, C.m_bw);
+  SetPose(Tr, Nk, C.m_Cam_pose);//将m_Zps[i]更新为Tc0(参考关键帧)_c0(次老帧) i为当前最后一个参考关键帧
+  SetMotion(C.m_Cam_pose/*次老帧的Tc0w*/, C.m_v/*次老帧的vw*/, C.m_ba, C.m_bw);//更新m_Zp 中存储的motion状态量,其中m_v存储的是次老帧坐标系下的速度
 
-#if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
+  #if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
 #ifdef CAMERA_PRIOR_DEBUG_EIGEN
   EigenPrior e_Ap;
   e_Ap.Set(*this, true);
@@ -1189,7 +1189,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
 #endif
   Matrix::X _A;
   Vector::X _b, _work, _eps;
-  const int Npgk = 2 + Nk * 6, Npcm = 15, Np1 = Npgk + Npcm, Np2 = Np1 + Npcm;
+  const int Npgk = 2 + Nk * 6/*g加参考关键帧的维度*/, Npcm = 15, Np1 = Npgk + Npcm/*前一次的维度*/, Np2 = Np1 + Npcm;//又来了CM以后的维度
   work->Resize((_work.BindSize(Np2) + _A.BindSize(Np2, Np2, true) + _b.BindSize(Np2) +
                (eps ? _eps.BindSize(Npcm) : 0)) / sizeof(float));
   _work.Bind(work->Data(), Np2);
@@ -1199,7 +1199,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
     _eps.Bind(_b.BindNext(), Npcm);
     _eps.Set(eps);
   }
-  GetPriorEquation(&_A, &_b);
+  GetPriorEquation(&_A, &_b);//获取g,最老帧C,M的先验矩阵
 #ifdef CFG_CAMERA_PRIOR_REORDER
   const int Npr1 = N * 3, Npr2 = Npr1 + 3, ipr2 = Npr1, ipr1 = ipr2 - 3;
   _A.InsertZero(ipr2, 3, work);
@@ -1272,7 +1272,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   ////UT::Print("%.10e\n", _A[ipr2 - 2][ipr2 - 2]);
   //const bool scc = scc1 && scc2 && scc3 && scc4 && scc5;
   //UT::DebugStop();
-#else
+#else//扩容Ab,因为来了次老帧的CM
   const int ipg = 0, ipc1 = Npgk, ipc2 = ipc1 + Npcm;
 #ifdef CFG_DEBUG
   UT_ASSERT(ipc2 == Np1);
@@ -1281,24 +1281,24 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   _b.InsertZero(ipc2, Npcm, NULL);
   //_A.Resize(Np2, Np2, true, true);
   //_b.Resize(Np2, true);
-  _A.IncreaseBlockDiagonal(ipg, A.m_Agg);
-  _b.IncreaseBlock(ipg, A.m_bg);
+  _A.IncreaseBlockDiagonal(ipg, A.m_Agg);//这次要merge的imu约束给Hgg带来的影响
+  _b.IncreaseBlock(ipg, A.m_bg);//这次要merge的imu约束给bg带来的影响
   for (int i = 0, ip = ipc1; i < 10; ++i, ip += 3) {
-    _A.IncreaseBlock(0, ip, A.m_Agc[i]);
+    _A.IncreaseBlock(0, ip, A.m_Agc[i]);//imu约束给H的g与ci,mi,cj,mj带来了约束
     _b.IncreaseBlock(ip, A.m_b[i]);
   }
   for (int i = 0, ip = ipc1, k = 0; i < 10; ++i, ip += 3) {
     for (int j = i, jp = ip; j < 10; ++j, jp += 3, ++k) {
-      _A.IncreaseBlock(ip, jp, A.m_A[k]);
+      _A.IncreaseBlock(ip, jp, A.m_A[k]);//H中ci,mi,cj,mj x ci,mi,cj,mj 上三角区域的构建
     }
   }
   //UT::PrintSeparator();
-  //_b.Print(true);
+  //_b.Print(true);// 将ci,mi都merge掉
   const bool scc = _A.MarginalizeLDL(Npgk, Npcm, _b, &_work, eps ? _eps.Data() : NULL);
   //UT::PrintSeparator();
   //_b.Print(true);
 #endif
-  SetPriorEquation(_A, _b);
+  SetPriorEquation(_A, _b);//存储merge以后 Hg,cj,mj x g,cj,mj 的矩阵块数据
 #ifdef CAMERA_PRIOR_DEBUG_EIGEN
   e_Ap.AssertEqual(*this, 2, "[Joint::PropagateLF]");
 #endif
@@ -1332,8 +1332,8 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   Ac1m2.Set(A.m_A + 7, A.m_A + 16);
   Element::MC &Am2c1 = Amc[0];
   Ac1m2.GetTranspose(Am2c1);
-  Element::C &bc1 = m_bc[Nk];
-  bc1 += Element::C(A.m_b[0], A.m_b[1]);
+  Element::Cam_state &bc1 = m_bc[Nk];
+  bc1 += Element::Cam_state(A.m_b[0], A.m_b[1]);
 
   Element::MM &Am1m1 = m_Amm;
   Am1m1.Increase(A.m_A + 19, A.m_A + 26, A.m_A + 32, true);
@@ -1351,7 +1351,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   Ac2c2.Set(A.m_A + 40, A.m_A + 44);
   Element::CM &Ac2m2 = Acm2[Nk];
   Ac2m2.Set(A.m_A + 42, A.m_A + 46);
-  Element::C &bc2 = m_bc[N];
+  Element::Cam_state &bc2 = m_bc[N];
   bc2.Set(A.m_b[5], A.m_b[6]);
 
   Element::MM &Am2m2 = Amm[1];
@@ -1383,8 +1383,8 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   //Ac1m2.Set(A.m_Ar1v2);
   Element::MC &Am2c1 = Amc[0];
   Am2c1.Set(A.m_Ar1v2.GetTranspose());
-  Element::C &bc1 = m_bc[Nk];
-  bc1 += Element::C(A.m_bp1, A.m_br1);
+  Element::Cam_state &bc1 = m_bc[Nk];
+  bc1 += Element::Cam_state(A.m_bp1, A.m_br1);
 
   Element::MM &Am1m1 = m_Amm;
   Am1m1.Increase(A.m_Av1v1, A.m_Av1ba1, A.m_Av1bw1, A.m_Aba1ba1, A.m_Aba1bw1, A.m_Abw1bw1);
@@ -1402,7 +1402,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   Ac2c2.Set(A.m_Ap2p2, A.m_Ap2r2, A.m_Ar2r2);
   Element::CM &Ac2m2 = Acm2[Nk];
   Ac2m2.Set(A.m_Ar2v2);
-  Element::C &bc2 = m_bc[N];
+  Element::Cam_state &bc2 = m_bc[N];
   bc2.Set(A.m_bp2, A.m_br2);
 
   Element::MM &Am2m2 = Amm[1];
@@ -1429,7 +1429,7 @@ bool Joint::PropagateLF(const Rigid3D &Tr, const Camera &C,
   Vector::CM Ackm1 = Acm1.GetBlock(Nk);
   Matrix::CC Ackc2 = m_Acc.GetColumn(N, Nk);
   Vector::CM Ackm2 = Acm2.GetBlock(Nk);
-  Vector::C bck = m_bc.GetBlock(Nk);
+  Vector::Cam_state bck = m_bc.GetBlock(Nk);
 
 //#ifdef CFG_DEBUG
 #if 0
@@ -1698,26 +1698,17 @@ bool Joint::PropagateLF(const IMU::Delta::Factor::Auxiliary::RelativeLF &A, LA::
 #endif
   return true;
 }
-
-bool Joint::PropagateKF(const Rigid3D &Tr, const Camera &C,
-                        const IMU::Delta::Factor::Auxiliary::RelativeKF &A,
+//当前要merge的帧同时也是KF时,视觉约束仍然在KF中,所以这里的变量只有g,m1,c2,m2(重力,最老帧的motion,次老帧的pose,次老帧的motion)
+//将当前帧的motion状态进行边缘化,m_Zps里的[0]的pose放到[1]中(Rwck,但是t是0,0，0),而[0]处的设置成Tc0(参考关键帧)_c0(次老帧)
+// 同时更新v,改成Tc0w*vw,ba,bw(都是次老帧的)
+//更新m_Arr,m_Arc,m_br,m_Acc,m_bc,m_Arm,m_Acm,m_Amm,m_bm存储的先验约束
+bool Joint::PropagateKF(const Rigid3D &Tr/*参考关键帧Tc0w*/, const Camera &C/*次老帧的相机状态*/,
+                        const IMU::Delta::Factor::Auxiliary::RelativeKF &A,/*预积分的约束*/
                         AlignedVector<float> *work, const float *eps) {
-#ifdef CFG_DEBUG
-  UT_ASSERT(m_iKFs.empty());
-  //UT_ASSERT(m_Zps.Empty());
-  UT_ASSERT(m_Zps.Size() == 1);
-#endif
-#if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
-#ifdef CAMERA_PRIOR_DEBUG_EIGEN
-  EigenPrior e_Ap;
-  e_Ap.Set(*this, true);
-  IMU::Delta::EigenFactor::RelativeKF e_A;
-  e_A.Set(A, 0.0f);
-  e_Ap.PropagateKF(e_A);
-#endif
-  Matrix::X _A;
+
+  Matrix::X _A;//当要边缘化最老的帧是关键帧时,那么就直接H中去掉ci,pose对应的行列，因为观测的约束还在它对应的关键帧中
   Vector::X _b, _work, _eps;
-  const int Npg = 2, Npc = 6, Npm = 9, Np1 = Npg + Npm, Npcm = Npc + Npm, Np2 = Np1 + Npcm;
+  const int Npg = 2/*g的维度*/, Npc/*pose的维度*/ = 6, Npm = 9/*motion的维度*/, Np1 = Npg + Npm/*g+m*/, Npcm = Npc + Npm, Np2 = Np1 + Npcm;
   work->Resize((_work.BindSize(Np2) + _A.BindSize(Np2, Np2, true) + _b.BindSize(Np2) +
                (eps ? _eps.BindSize(Npm) : 0)) / sizeof(float));
   _work.Bind(work->Data(), Np2);
@@ -1727,218 +1718,37 @@ bool Joint::PropagateKF(const Rigid3D &Tr, const Camera &C,
     _eps.Bind(_b.BindNext(), Npm);
     _eps.Set(eps + Npc);
   }
-  GetPriorEquation(&_A, &_b);
-#ifdef CFG_CAMERA_PRIOR_REORDER
-  const int ipr2 = 0;
-  _A.InsertZero(ipr2, 3, work);
-  _b.InsertZero(ipr2, 3, work);
-  const int ipp2 = 3;
-  _A.InsertZero(ipp2, 3, work);
-  _b.InsertZero(ipp2, 3, work);
-  const int ipbw1 = 6, ipbw2 = ipbw1 + 3;
-  _A.InsertZero(ipbw2, 3, work);
-  _b.InsertZero(ipbw2, 3, work);
-  const int ipv1 = ipbw2 + 3, ipv2 = ipv1 + 3;
-  _A.InsertZero(ipv2, 3, work);
-  _b.InsertZero(ipv2, 3, work);
-  const int ipg = ipv2 + 3, ipba1 = ipg + 2, ipba2 = ipba1 + 3;
-  _A.InsertZero(ipba2, 3, work);
-  _b.InsertZero(ipba2, 3, work);
-  const int ipcs[8] = {ipv1, ipba1, ipbw1, ipp2, ipr2, ipv2, ipba2, ipbw2};
-  _A.IncreaseBlockDiagonal(ipg, A.m_Agg);
-  _b.IncreaseBlock(ipg, A.m_bg);
-  LA::Matrix3x2f Acg;
-  for (int i = 0; i < 8; ++i) {
-    const int ipc = ipcs[i];
-    if (ipg < ipc) {
-      _A.IncreaseBlock(ipg, ipc, A.m_Agc[i]);
-    } else {
-      A.m_Agc[i].GetTranspose(Acg);
-      _A.IncreaseBlock(ipc, ipg, Acg);
-    }
-    _b.IncreaseBlock(ipc, A.m_bc[i]);
-  }
-  LA::AlignedMatrix3x3f Acc;
-  for (int i = 0, k = 0; i < 8; ++i) {
-    const int ip = ipcs[i];
-    for (int j = i; j < 8; ++j, ++k) {
-      const int jp = ipcs[j];
-      if (ip <= jp) {
-        _A.IncreaseBlock(ip, jp, A.m_Ac[k]);
-      } else {
-        A.m_Ac[k].GetTranspose(Acc);
-        _A.IncreaseBlock(jp, ip, Acc);
-      }
-    }
-  }
-  bool scc = true;
-  scc = _A.MarginalizeLDL(ipbw1, 3, _b, &_work, eps ? _eps.Data() + 6 : NULL) && scc;
-  scc = _A.MarginalizeLDL(ipv1 - 3, 3, _b, &_work, eps ? _eps.Data() : NULL) && scc;
-  scc = _A.MarginalizeLDL(ipba1 - 6, 3, _b, &_work, eps ? _eps.Data() + 3 : NULL) && scc;
-  //UT::DebugStart();
-  //UT::Print("%f\n", _A[ipr2][ipg]);
-  //const bool scc1 = _A.MarginalizeLDL(ipbw1, 3, _b, &_work, eps ? _eps.Data() + 6 : NULL);
-  //UT::Print("%f\n", _A[ipr2][ipg - 3]);
-  //const bool scc2 = _A.MarginalizeLDL(ipv1 - 3, 3, _b, &_work, eps ? _eps.Data() : NULL);
-  //UT::Print("%f\n", _A[ipr2][ipg - 6]);
-  //const bool scc3 = _A.MarginalizeLDL(ipba1 - 6, 3, _b, &_work, eps ? _eps.Data() + 3 : NULL);
-  //UT::Print("%f\n", _A[ipr2][ipg - 6]);
-  //const bool scc = scc1 && scc2 && scc3;
-  //UT::DebugStop();
-#else
+  GetPriorEquation(&_A, &_b);//获取g,c,m的先验矩阵,在这里已经扩容了m1
+
   const int ipg = 0, ipc1 = Npg, ipc2 = ipc1 + Npm;
-#ifdef CFG_DEBUG
-  UT_ASSERT(ipc2 == Np1);
-#endif
-  _A.InsertZero(ipc2, Npcm, NULL);
+  _A.InsertZero(ipc2, Npcm, NULL);//这里是扩容了c2,m2的部分
   _b.InsertZero(ipc2, Npcm, NULL);
   //_A.Resize(Np2, Np2, true, true);
   //_b.Resize(Np2, true);
-  _A.IncreaseBlockDiagonal(ipg, A.m_Agg);
-  _b.IncreaseBlock(ipg, A.m_bg);
+  _A.IncreaseBlockDiagonal(ipg, A.m_Agg);//要merge的这个老帧的imu约束给Hgg带来的影响
+  _b.IncreaseBlock(ipg, A.m_bg);//bg
   for (int i = 0, ip = ipc1; i < 8; ++i, ip += 3) {
-    _A.IncreaseBlock(0, ip, A.m_Agc[i]);
-    _b.IncreaseBlock(ip, A.m_bc[i]);
+    _A.IncreaseBlock(0, ip, A.m_Agc[i]);//imu约束给H的g与m1,c2,m2带来了约束
+    _b.IncreaseBlock(ip, A.m_bc[i]);//b的m1,c2,m2
   }
   for (int i = 0, ip = ipc1, k = 0; i < 8; ++i, ip += 3) {
     for (int j = i, jp = ip; j < 8; ++j, jp += 3, ++k) {
-      _A.IncreaseBlock(ip, jp, A.m_Ac[k]);
+      _A.IncreaseBlock(ip, jp, A.m_Ac[k]);//H中m1,c2,m2 x m1,c2,m2 上三角区域的构建
     }
   }
+  //要对_A.block(Npg,Npg)(Npm,Npm)的对应的那个状态进行边缘化,这里就是merge m1
   const bool scc = _A.MarginalizeLDL(Npg, Npm, _b, &_work, eps ? _eps.Data() : NULL);
-#endif
   m_iKFs.resize(1, INT_MAX);
   //m_Zps.Resize(1);
-  const Rotation3D RrT = m_Zps.Back();
-  m_Zps.Resize(2);
-  m_Zps.Back() = RrT;
-  SetPose(Tr, 0, C.m_T);
-  SetMotion(C.m_T, C.m_v, C.m_ba, C.m_bw);
-  SetPriorEquation(_A, _b);
-#ifdef CAMERA_PRIOR_DEBUG_EIGEN
-  e_Ap.AssertEqual(*this, 1, "[Joint::PropagateKF]");
-#endif
+  const Rotation3D RrT = m_Zps.Back();//最新的参考关键帧的 Rwck
+int i =0;
+
+  m_Zps.Resize(2);//扩容
+  m_Zps.Back() = RrT;//之前在[0]Rwck的现在放在[1]Rwck
+  SetPose(Tr/*参考关键帧Tc0w*/, 0, C.m_Cam_pose/*次老帧的Tc0w*/);//将m_Zps[0]设置成Tc0(参考关键帧)_c0(次老帧)
+  SetMotion(C.m_Cam_pose/*次老帧的Tc0w*/, C.m_v/*次老帧的vw*/, C.m_ba, C.m_bw);//更新m_Zp 中存储的motion状态量,其中m_v存储的是次老帧坐标系下的速度
+  SetPriorEquation(_A, _b);//设置一下merge完这帧motion以后的各个先验矩阵块
   return scc;
-#else
-  m_iKFs.resize(1, INT_MAX);
-  //m_Zps.Resize(1);
-  const Rotation3D RrT = m_Zps.Back();
-  m_Zps.Resize(2);
-  m_Zps.Back() = RrT;
-  SetPose(Tr, 0, C.m_T);
-  SetMotion(C.m_T, C.m_v, C.m_ba, C.m_bw);
-  m_Acc.Resize(1, 1, true);
-  m_Acm.Resize(3);
-  m_Arc.Resize(1);
-  m_bc.Resize(1);
-
-  work->Resize((sizeof(Element::MC) + sizeof(Element::MM) * 3 + sizeof(Element::RM) * 2) /
-                sizeof(float));
-  Vector::MC Amc(work->Data(), 1, false);
-  Vector::MM Amm(Amc.End(), 3, false);
-  Vector::RM Arm(Amm.End(), 2, false);
-
-#ifdef CFG_IMU_FULL_COVARIANCE
-  Element::MM &Am1m1 = m_Amm;
-  Am1m1.Increase(A.m_Ac, A.m_Ac + 7, A.m_Ac + 13, true);
-  Element::MC &Am1c2 = Amc[0];
-  Am1c2.Set(A.m_Ac + 3, A.m_Ac + 10, A.m_Ac + 16);
-  Element::CM &Ac2m1 = m_Acm[1];
-  Am1c2.GetTranspose(Ac2m1);
-  Element::MM &Am2m1 = Amm[0];
-  Am2m1.Set(A.m_Ac + 5, A.m_Ac + 12, A.m_Ac + 18);
-  Am2m1.Transpose();
-  Element::M &bm1 = m_bm;
-  bm1 += Element::M(A.m_bc[0], A.m_bc[1], A.m_bc[2]);
-
-  Element::CC &Ac2c2 = m_Acc[0][0];
-  Ac2c2.Set(A.m_Ac + 21, A.m_Ac + 25);
-  Element::CM &Ac2m2 = m_Acm[0];
-  Ac2m2.Set(A.m_Ac + 23, A.m_Ac + 27);
-  Element::C &bc2 = m_bc[0];
-  bc2.Set(A.m_bc[3], A.m_bc[4]);
-
-  Element::MM &Am2m2 = Amm[1];
-  Am2m2.Set(A.m_Ac + 30, A.m_Ac + 32, A.m_Ac + 33);
-  Element::M bm2(A.m_bc[5], A.m_bc[6], A.m_bc[7]);
-
-  //m_Arr = A.m_Agg;
-  m_Arr += A.m_Agg;
-  Element::RM &Arm1 = m_Arm;
-  Arm1.Set(A.m_Agc[0], A.m_Agc[1], A.m_Agc[2]);
-  Element::RC &Arc2 = m_Arc[0];
-  Arc2.Set(A.m_Agc[3], A.m_Agc[4]);
-  Element::RM &Arm2 = Arm[0];
-  Arm2.Set(A.m_Agc[5], A.m_Agc[6], A.m_Agc[7]);
-  //m_br = A.m_bg;
-  m_br += A.m_bg;
-#else
-  Element::MM &Am1m1 = m_Amm;
-  Am1m1.Increase(A.m_Av1v1, A.m_Av1ba1, A.m_Av1bw1, A.m_Aba1ba1, A.m_Aba1bw1, A.m_Abw1bw1);
-  Element::MC &Am1c2 = Amc[0];
-  Am1c2.Set(A.m_Av1p2, A.m_Av1r2, A.m_Aba1p2, A.m_Aba1r2, A.m_Abw1p2, A.m_Abw1r2);
-  Element::CM &Ac2m1 = m_Acm[1];
-  Am1c2.GetTranspose(Ac2m1);
-  Element::MM &Am2m1 = Amm[0];
-  Am2m1.Set(A.m_Av1v2, A.m_Aba1v2, A.m_Aba1ba2, A.m_Abw1v2, A.m_Abw1bw2);
-  Am2m1.Transpose();
-  Element::M &bm1 = m_bm;
-  bm1 += Element::M(A.m_bv1, A.m_bba1, A.m_bbw1);
-
-  Element::CC &Ac2c2 = m_Acc[0][0];
-  Ac2c2.Set(A.m_Ap2p2, A.m_Ap2r2, A.m_Ar2r2);
-  Element::CM &Ac2m2 = m_Acm[0];
-  Ac2m2.Set(A.m_Ar2v2);
-  Element::C &bc2 = m_bc[0];
-  bc2.Set(A.m_bp2, A.m_br2);
-
-  Element::MM &Am2m2 = Amm[1];
-  Am2m2.Set(A.m_Av2v2, A.m_Aba2ba2, A.m_Abw2bw2);
-  Element::M bm2(A.m_bv2, A.m_bba2, A.m_bbw2);
-
-  //m_Arr = A.m_Agg;
-  m_Arr += A.m_Agg;
-  Element::RM &Arm1 = m_Arm;
-  Arm1.Set(A.m_Agv1, A.m_Agba1, A.m_Agbw1);
-  Element::RC &Arc2 = m_Arc[0];
-  Arc2.Set(A.m_Agp2, A.m_Agr2);
-  Element::RM &Arm2 = Arm[0];
-  Arm2.Set(A.m_Agv2);
-  //m_br = A.m_bg;
-  m_br += A.m_bg;
-#endif
-
-  bool scc = true;
-  Element::MM &Mm1m1 = Am1m1;
-  if (Mm1m1.InverseLDL(eps ? eps + 6 : NULL)) {
-    Mm1m1.MakeMinus();
-    Element::RM &Mrm1 = Arm[1];
-    Element::ABT(Arm1, Mm1m1, Mrm1);
-    Element::AddABTToUpper(Mrm1, Arm1, m_Arr);
-    Element::AddABTTo(Mrm1, Ac2m1, Arc2);
-    Element::AddABTTo(Mrm1, Am2m1, Arm2);
-    Element::AddAbTo(Mrm1, bm1, m_br);
-    Element::CM &Mc2m1 = m_Acm[2];
-    Element::ABT(Ac2m1, Mm1m1, Mc2m1);
-    Element::AddABTToUpper(Mc2m1, Ac2m1, Ac2c2);
-    Element::AddABTTo(Mc2m1, Am2m1, Ac2m2);
-    Element::AddAbTo(Mc2m1, bm1, bc2);
-    Element::MM &Mm2m1 = Amm[2];
-    Element::ABT(Am2m1, Mm1m1, Mm2m1);
-    Element::AddABTToUpper(Mm2m1, Am2m1, Am2m2);
-    Element::AddAbTo(Mm2m1, bm1, bm2);
-  } else {
-    scc = false;
-  }
-
-  Arm1 = Arm2;
-  Ac2c2.SetLowerFromUpper();
-  Am1m1 = Am2m2;
-  Am1m1.SetLowerFromUpper();
-  bm1 = bm2;
-  m_Acm.Resize(1);
-  return scc;
-#endif
 }
 
 bool Joint::PropagateKF(const IMU::Delta::Factor::Auxiliary::RelativeKF &A, LA::AlignedVectorXf *x,
@@ -2080,18 +1890,18 @@ bool Joint::PropagateKF(const IMU::Delta::Factor::Auxiliary::RelativeKF &A, LA::
 #endif
   return true;
 }
-
-bool Joint::GetPriorPose(const int iKF, Pose *Zp, AlignedVector<float> *work, const float *eps) const {
+//Zp中信息的导入以及边缘化最老帧的运动状态,将最老帧的motion部分边缘化,向Zp中存储g和pose的先验约束
+bool Joint::GetPriorPose(const int iKF/*当前要merge的老帧对应的关键帧id*/, Pose *Zp/*关键帧的先验*/, AlignedVector<float> *work, const float *eps) const {
 #if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
-  Zp->m_iKFr = m_iKFr;
-  Zp->m_iKFs = m_iKFs;
-  Zp->m_iKFs.back() = iKF;
-  Zp->m_Zps.Set(m_Zps);
+  Zp->m_iKFr = m_iKFr;//关键帧的先验因子获取上一次边缘化时的参考关键帧id
+  Zp->m_iKFs = m_iKFs;//所有的观测关键帧id
+  Zp->m_iKFs.back() = iKF;//m_iKFs同时包含了观测关键id+当前最老帧对应的关键帧id,如果是因为当前最老帧的最近关键帧不是当前的参考关键帧所调用的,那么这里就是最大值
+  Zp->m_Zps.Set(m_Zps);//Tc0(参考关键帧)_c0(最老帧)
 
   Matrix::X A;
   Vector::X b, _work, _eps;
   const int N = static_cast<int>(m_iKFs.size());
-  const int Npg = m_Zps.Size() == N ? 0 : 2, Npc = N * 6, Np = Npg + Npc + 9;
+  const int Npg = m_Zps.Size() == N ? 0 : 2, Npc = N * 6, Np = Npg + Npc + 9;//
   work->Resize((A.BindSize(Np, Np, true) + b.BindSize(Np) + _work.BindSize(Np) +
                (eps ? _eps.BindSize(15) : 0)) / sizeof(float));
   A.Bind(work->Data(), Np, Np, true);
@@ -2102,10 +1912,10 @@ bool Joint::GetPriorPose(const int iKF, Pose *Zp, AlignedVector<float> *work, co
     _eps.Set(eps);
   }
   bool scc = true;
-  GetPriorEquation(&A, &b);
+  GetPriorEquation(&A, &b);//获取g,所有观测关键帧,最老帧C,M的先验矩阵
   if (iKF == INT_MAX) {
-    const int Nk = N - 1;
-    Zp->m_iKFs.resize(Nk);
+    const int Nk = N - 1;//关键关键帧的个数
+    Zp->m_iKFs.resize(Nk);//只保存
     //Zp->m_Zps.Resize(Nk);
     const Rotation3D RrT = Zp->m_Zps.Back();
     Zp->m_Zps.Resize(Nk + 1);
@@ -2127,7 +1937,7 @@ bool Joint::GetPriorPose(const int iKF, Pose *Zp, AlignedVector<float> *work, co
     scc = A.MarginalizeLDL(ipv - 3, 3, b, &_work, _eps.Data() + 6) && scc;
     scc = A.MarginalizeLDL(ipba - 6, 3, b, &_work, _eps.Data() + 9) && scc;
 #else
-    scc = A.MarginalizeLDL(Np - 9, 9, b, &_work, eps ? _eps.Data() + 6 : NULL);
+    scc = A.MarginalizeLDL(Np - 9, 9, b, &_work, eps ? _eps.Data() + 6 : NULL);//将最老帧的motion部分边缘化,只留下g,观测关键帧,最老帧pose的先验
 #endif
   }
   Zp->SetPriorEquation(A, b);
@@ -2180,14 +1990,14 @@ bool Joint::GetPriorPose(const int iKF, Pose *Zp, AlignedVector<float> *work, co
       const Matrix::CC Ackci = Zp->m_Acc.GetColumn(Nk, Nk);
       Vector::RC Arck = Zp->m_Arc.GetBlock(Nk);
       Vector::AddABTTo(Mrci, Ackci, Arck);
-      const Element::C &bci = Zp->m_bc[Nk];
+      const Element::Cam_state &bci = Zp->m_bc[Nk];
       Element::AddAbTo(Mrci, bci, Zp->m_br);
       work->Resize(sizeof(Element::CC) * Nk / sizeof(float));
       Vector::CC Mckci(work->Data(), Nk, false);
       Vector::ABT(Ackci, Mcici, Mckci);
       Matrix::CC Ackck = Zp->m_Acc.GetBlock(Nk, Nk);
       Matrix::AddABTToUpper(Mckci, Ackci, Ackck);
-      Vector::C bck = Zp->m_bc.GetBlock(Nk);
+      Vector::Cam_state bck = Zp->m_bc.GetBlock(Nk);
       Vector::AddAbTo(Mckci, bci, bck);
     } else {
       scc = false;
@@ -2205,22 +2015,23 @@ bool Joint::GetPriorPose(const int iKF, Pose *Zp, AlignedVector<float> *work, co
   return scc;
 #endif
 }
-
-bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *eps) const {
+//先给Zp存储这次边缘化时最后的次老帧的Rc0w*vw,ba,bw,下一次取的时候就是最老帧的Rc0w*vw,ba,bw了
+//获取g,c,m的先验矩阵,除了这次的次老帧的motion,其他的全部都merge掉,保存在Zp中
+bool Joint::GetPriorMotion(Motion *Zp/*motion的先验*/, AlignedVector<float> *work, const float *eps) const {
 #if defined CFG_CAMERA_PRIOR_DOUBLE || defined CFG_CAMERA_PRIOR_REORDER
-  Zp->m_v = m_v;
+  Zp->m_v = m_v;//上一次边缘化最后的次老帧的Rc0w*vw
   Zp->m_ba = m_ba;
   Zp->m_bw = m_bw;
   Matrix::X A;
   Vector::X b, _work, _eps;
-  const int N = static_cast<int>(m_iKFs.size());
+  const int N = static_cast<int>(m_iKFs.size());//跳过pose部分
   const bool g = m_Zps.Size() != N;
   const int Npg = g ? 2 : 0;
 #ifdef CFG_CAMERA_PRIOR_REORDER
   const int Npr = N * 3, Npp = Npr, Npc = Npr + Npp, Npgc = Npg + Npc, Np = Npgc + 9;
   const int ipr = 0, ipp = Npr, ipg = Npc + 6;
 #else
-  const int Npgc = Npg + N * 6, Np = Npgc + 9;
+  const int Npgc = Npg + N * 6/*motion部分的起点*/, Np = Npgc + 9;/*motion后面部分的起点*/
   const int ipg = 0;
 #endif
   work->Resize((A.BindSize(Np, Np, true) + b.BindSize(Np) + _work.BindSize(Np) +
@@ -2249,7 +2060,7 @@ bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *
     }
 #endif
   }
-  GetPriorEquation(&A, &b);
+  GetPriorEquation(&A, &b);//获取g,c,m的先验矩阵
 #ifdef CFG_CAMERA_PRIOR_REORDER
 //#if 0
 #if 1
@@ -2326,7 +2137,7 @@ bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *
   b.GetBlock(0, _b);  Zp->m_bm.Set678(_b);
   b.GetBlock(3, _b);  Zp->m_bm.Set012(_b);
   b.GetBlock(6, _b);  Zp->m_bm.Set345(_b);
-#else
+#else//将g和pose都边缘化以后,motion部分的先验
   const bool scc = A.MarginalizeLDL(0, Npgc, b, &_work, eps ? _eps.Data() : NULL);
   A.GetBlock(0, 0, Zp->m_Amm);
   b.GetBlock(0, Zp->m_bm);
@@ -2345,7 +2156,7 @@ bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *
   Vector::RC Arc;
   Matrix::CC Acc;
   Vector::CM Acm;
-  Vector::C bc;
+  Vector::Cam_state bc;
   const int N = static_cast<int>(m_iKFs.size());
   work->Resize((Arc.BindSize(N) + Acc.BindSize(N, N, true) + Acm.BindSize(N) + bc.BindSize(N)) /
                sizeof(float));
@@ -2428,7 +2239,7 @@ bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *
     if (Mii.InverseLDL(eps)) {
       Mii.MakeMinus();
       const Element::CM &Aim = Acm[i];
-      const Element::C &bi = bc[i];
+      const Element::Cam_state &bi = bc[i];
       for (int j = i + 1; j < N; ++j) {
         LA::AlignedMatrix6x6f::ATB(Mii, Ai[j], Mij);
         LA::AlignedMatrix6x6f *Aj = Acc[j];
@@ -2496,7 +2307,7 @@ bool Joint::GetPriorMotion(Motion *Zp, AlignedVector<float> *work, const float *
     return false;
   }
   LA::AlignedMatrix9x9f Amm = Zp->m_Amm;
-  const int rank = Amm.RankLDL(eps ? eps + 6 : NULL);
+  const int rank = Amm.RankLDL(eps ? eps + 6 : NULL);//是否满秩
   return rank == 9;
 }
 
@@ -2618,10 +2429,10 @@ Pose::EigenErrorJacobian Pose::EigenGetErrorJacobian(const AlignedVector<Rigid3D
   return e_Je;
 }
 
-Pose::EigenFactor Pose::EigenGetFactor(const float w, const AlignedVector<Rigid3D> &Cs,
+Pose::EigenFactor Pose::EigenGetFactor(const float gyr, const AlignedVector<Rigid3D> &Cs,
                                        const float eps) const {
   const EigenErrorJacobian e_Je = EigenGetErrorJacobian(Cs, eps);
-  const EigenPrior e_Ap = EigenPrior(m_Arr, m_Arc, m_Acc, m_br, m_bc, w);
+  const EigenPrior e_Ap = EigenPrior(m_Arr, m_Arc, m_Acc, m_br, m_bc, gyr);
   const EigenMatrixXf e_JT = EigenMatrixXf(e_Je.m_J.transpose());
   const EigenVectorXf e_Ae = EigenVectorXf(e_Ap.m_A * e_Je.m_e);
   EigenFactor e_A;
@@ -2632,7 +2443,7 @@ Pose::EigenFactor Pose::EigenGetFactor(const float w, const AlignedVector<Rigid3
   return e_A;
 }
 
-float Pose::EigenGetCost(const float w, const AlignedVector<Rigid3D> &Cs,
+float Pose::EigenGetCost(const float gyr, const AlignedVector<Rigid3D> &Cs,
                          const std::vector<EigenVector6f> &e_xs, const float eps) const {
   const EigenErrorJacobian e_Je = EigenGetErrorJacobian(Cs, eps);
   EigenVectorXf e_x;
@@ -2643,7 +2454,7 @@ float Pose::EigenGetCost(const float w, const AlignedVector<Rigid3D> &Cs,
     e_x.block<6, 1>(j, 0) = e_xs[m_iKFs[i]];
   }
   const EigenVectorXf e_e = EigenVectorXf(e_Je.m_e + e_Je.m_J * e_x);
-  const EigenPrior e_Ap = EigenPrior(m_Arr, m_Arc, m_Acc, m_br, m_bc, w);
+  const EigenPrior e_Ap = EigenPrior(m_Arr, m_Arc, m_Acc, m_br, m_bc, gyr);
   //return e_e.dot(e_Ap.m_A * e_e * 0.5f + e_Ap.m_b);
   return e_e.dot(e_Ap.m_A * e_e + e_Ap.m_b * 2.0f);
 }
@@ -2655,20 +2466,20 @@ void Pose::EigenGetResidual(const AlignedVector<Rigid3D> &Cs, EigenVectorXf *e_r
   *e_r = EigenVectorXf(e_Ap.m_A * e_Je.m_e + e_Ap.m_b);
 }
 
-void Pose::EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S, EigenVectorXf *e_x) const {
+void Pose::EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S, EigenVectorXf *e_x) const {
   EigenPrior e_Ap;
   e_Ap.Set(*this);
   const auto e_ldlt = e_Ap.m_A.cast<Element::T>().ldlt();
   const int N = static_cast<int>(e_Ap.m_A.rows());
-  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * w;
+  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * gyr;
   if (e_x) {
     *e_x = e_ldlt.solve(-e_Ap.m_b.cast<Element::T>()).cast<float>();
   }
 }
 
-Motion::EigenErrorJacobian Motion::EigenGetErrorJacobian(const Camera &C) const {
-  const EigenRotation3D e_R = EigenRotation3D(C.m_T);
-  const EigenVector3f e_v = EigenVector3f(C.m_v);
+Motion::EigenErrorJacobian Motion::EigenGetErrorJacobian(const Camera &Cam_state) const {
+  const EigenRotation3D e_R = EigenRotation3D(Cam_state.m_Cam_pose);
+  const EigenVector3f e_v = EigenVector3f(Cam_state.m_v);
   const EigenMatrix3x3f e_Jvr = EigenMatrix3x3f(e_R * EigenSkewSymmetricMatrix(e_v));
   const EigenVector3f e_zv = EigenVector3f(m_v);
   const EigenVector3f e_ev = EigenVector3f(e_R * e_v - e_zv);
@@ -2681,8 +2492,8 @@ Motion::EigenErrorJacobian Motion::EigenGetErrorJacobian(const Camera &C) const 
   e_Je.m_J.block<3, 3>(6, 9) = EigenMatrix3x3f::Identity();
   //e_Je.m_J.Print();
   e_Je.m_e.block<3, 1>(0, 0) = e_ev;
-  e_Je.m_e.block<3, 1>(3, 0) = EigenVector3f(C.m_ba - m_ba);
-  e_Je.m_e.block<3, 1>(6, 0) = EigenVector3f(C.m_bw - m_bw);
+  e_Je.m_e.block<3, 1>(3, 0) = EigenVector3f(Cam_state.m_ba - m_ba);
+  e_Je.m_e.block<3, 1>(6, 0) = EigenVector3f(Cam_state.m_bw - m_bw);
 #ifdef CAMERA_PRIOR_POSE_EIGEN_DEBUG_JACOBIAN
   const float e_drMax = 0.1f;
   const float e_dvMax = 1.0f;
@@ -2702,17 +2513,17 @@ Motion::EigenErrorJacobian Motion::EigenGetErrorJacobian(const Camera &C) const 
 #endif
 #if 1
   ErrorJacobian Je;
-  GetErrorJacobian(C, &Je);
+  GetErrorJacobian(Cam_state, &Je);
   e_Je.AssertEqual(Je);
   e_Je.Set(Je);
 #endif
   return e_Je;
 }
 
-Motion::EigenFactor Motion::EigenGetFactor(const float w, const Camera &C) const {
-  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C);
-  const EigenMatrix9x9f e_Amm = EigenMatrix9x9f(EigenMatrix9x9f(m_Amm) * w);
-  const EigenVector9f e_bm = EigenVector9f(EigenVector9f(m_bm) * w);
+Motion::EigenFactor Motion::EigenGetFactor(const float gyr, const Camera &Cam_state) const {
+  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(Cam_state);
+  const EigenMatrix9x9f e_Amm = EigenMatrix9x9f(EigenMatrix9x9f(m_Amm) * gyr);
+  const EigenVector9f e_bm = EigenVector9f(EigenVector9f(m_bm) * gyr);
   const Eigen::Matrix<float, 12, 9> e_JT = e_Je.m_J.transpose();
   const EigenVector9f e_Ae = EigenVector9f(e_Amm * e_Je.m_e);
   EigenFactor e_A;
@@ -2730,10 +2541,10 @@ Motion::EigenFactor Motion::EigenGetFactor(const float w, const Camera &C) const
   return e_A;
 }
 
-float Motion::EigenGetCost(const float w, const Camera &C, const EigenVector3f &e_xr,
+float Motion::EigenGetCost(const float gyr, const Camera &Cam_state, const EigenVector3f &e_xr,
                            const EigenVector9f &e_xm) const {
-  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C);
-  const EigenMatrix9x9f e_Amm = EigenMatrix9x9f(EigenMatrix9x9f(m_Amm) * w);
+  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(Cam_state);
+  const EigenMatrix9x9f e_Amm = EigenMatrix9x9f(EigenMatrix9x9f(m_Amm) * gyr);
   EigenVector12f e_x;
   e_x.block<3, 1>(0, 0) = e_xr;
   e_x.block<9, 1>(3, 0) = e_xm;
@@ -2741,14 +2552,14 @@ float Motion::EigenGetCost(const float w, const Camera &C, const EigenVector3f &
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
   return e_e.dot(e_Amm * e_e);
 #else
-  const EigenVector9f e_bm = EigenVector9f(EigenVector9f(m_bm) * w);
+  const EigenVector9f e_bm = EigenVector9f(EigenVector9f(m_bm) * gyr);
   //return e_e.dot(e_Amm * e_e * 0.5f + e_bm);
   return e_e.dot(e_Amm * e_e + e_bm * 2.0f);
 #endif
 }
 
-void Motion::EigenGetResidual(const Camera &C, EigenVector9f *e_r) const {
-  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(C);
+void Motion::EigenGetResidual(const Camera &Cam_state, EigenVector9f *e_r) const {
+  const EigenErrorJacobian e_Je = EigenGetErrorJacobian(Cam_state);
   const EigenMatrix9x9f e_A = EigenMatrix9x9f(m_Amm);
   *e_r = EigenVector9f(e_A * e_Je.m_e);
   if (m_bm.Valid()) {
@@ -2756,13 +2567,13 @@ void Motion::EigenGetResidual(const Camera &C, EigenVector9f *e_r) const {
   }
 }
 
-void Motion::EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S,
+void Motion::EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S,
                                       EigenVectorXf *e_x) const {
   EigenPrior e_Ap;
   e_Ap.Set(*this);
   const auto e_ldlt = e_Ap.m_A.cast<Element::T>().ldlt();
   const int N = static_cast<int>(e_Ap.m_A.rows());
-  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * w;
+  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * gyr;
   if (e_x) {
     *e_x = e_ldlt.solve(-e_Ap.m_b.cast<Element::T>()).cast<float>();
   }
@@ -2881,12 +2692,12 @@ void Joint::EigenPrior::PropagateLF(const IMU::Delta::EigenFactor::RelativeLF &e
 }
 
 void Joint::EigenPrior::PropagateKF(const IMU::Delta::EigenFactor::RelativeKF &e_A, EigenVectorXf *e_x) {
-  EigenMatrix2x2f e_dArr;
+  EigenMatrix2x2f e_dArr;//r是g
   EigenMatrix2x30f e_dArc;
   EigenMatrix30x30f e_dAcc;
   EigenVector2f e_dbr;
   EigenVector30f e_dbc;
-  e_A.Get(e_dArr, e_dArc, e_dAcc, e_dbr, e_dbc);
+  e_A.Get(e_dArr, e_dArc, e_dAcc, e_dbr, e_dbc);//
 
 #ifdef CFG_DEBUG
   UT_ASSERT(m_A.GetRows() == 17 && m_A.GetColumns() == 17 && m_b.Size() == 17);
@@ -2904,7 +2715,7 @@ void Joint::EigenPrior::PropagateKF(const IMU::Delta::EigenFactor::RelativeKF &e
   EigenMatrixXf(m_A.block<6, 32>(2, 0)).AssertZero(1, "", -1.0f, -1.0f);
   EigenVectorXf(m_b.block<6, 1>(2, 0)).AssertZero(1, "", -1.0f, -1.0f);
 #endif
-  m_A.Erase(2, 6);
+  m_A.Erase(2, 6);//因为p1是关键帧,所以认为p1和p2的观测约束也就是p2和p1对应的kf的约束,所以这里直接移除了所在的p1的行列
   m_b.Erase(2, 6);
   if (e_x) {
     *e_x = m_A.cast<Element::T>().ldlt().solve(-m_b.cast<Element::T>()).cast<float>();
@@ -2913,7 +2724,7 @@ void Joint::EigenPrior::PropagateKF(const IMU::Delta::EigenFactor::RelativeKF &e
   EigenMatrixX<Element::T> e_Ab;
   e_Ab.Set(EigenMatrixX<Element::T>(m_A.cast<Element::T>()),
            EigenVectorX<Element::T>(m_b.cast<Element::T>()));
-  e_Ab.Marginalize(2, 9);
+  e_Ab.Marginalize(2, 9);//边缘化M1
   //const int ipv = 2, ipba = ipv + 3, ipbw = ipba + 3;
   //e_Ab.Marginalize(ipbw, 3);
   //e_Ab.Marginalize(ipv, 3);
@@ -2964,7 +2775,7 @@ void Joint::EigenPrior::GetPriorPose(const int iKF, Pose::EigenPrior *e_Ap) cons
 #else
   e_Ab.Marginalize(Npgc, 9);
   if (iKF == INT_MAX) {
-    e_Ab.Marginalize(Npgc - 6, 6);
+    e_Ab.Marginalize(Npgc - 6, 6);//把pose也merge了,只剩下g了
   }
 #endif
   EigenMatrixXf(e_Ab.cast<float>()).Get(e_Ap->m_A, e_Ap->m_b);
@@ -3111,15 +2922,15 @@ void Joint::EigenPrior::GetPriorMotion(Motion::EigenPrior *e_Ap) const {
 #endif
   //UT::DebugStop();
 #else
-  e_Ab.Marginalize(0, Npgc);
+  e_Ab.Marginalize(0, Npgc);//g和pose要进行merge
 #endif
   EigenMatrixXf(e_Ab.cast<float>()).Get(e_Ap->m_A, e_Ap->m_b);
 }
 
-void Joint::EigenGetResidual(const AlignedVector<Rigid3D> &Cs, const Camera &C,
+void Joint::EigenGetResidual(const AlignedVector<Rigid3D> &Cs, const Camera &Cam_state,
                              EigenVectorXf *e_r, const float eps) const {
   const Pose::EigenErrorJacobian e_Jec = Pose::EigenGetErrorJacobian(Cs, eps);
-  const Motion::EigenErrorJacobian e_Jem = Motion::EigenGetErrorJacobian(C);
+  const Motion::EigenErrorJacobian e_Jem = Motion::EigenGetErrorJacobian(Cam_state);
   EigenPrior e_Ap;
   e_Ap.Set(*this);
   EigenVectorXf e_e;
@@ -3130,12 +2941,12 @@ void Joint::EigenGetResidual(const AlignedVector<Rigid3D> &Cs, const Camera &C,
   *e_r = EigenVectorXf(e_Ap.m_A * e_e + e_Ap.m_b);
 }
 
-void Joint::EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S, EigenVectorXf *e_x) const {
+void Joint::EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S, EigenVectorXf *e_x) const {
   EigenPrior e_Ap;
   e_Ap.Set(*this);
   const auto e_ldlt = e_Ap.m_A.cast<Element::T>().ldlt();
   const int N = static_cast<int>(e_Ap.m_A.rows());
-  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * w;
+  *e_S = e_ldlt.solve(EigenMatrixX<Element::T>::Identity(N)).cast<float>() * gyr;
   if (e_x) {
     *e_x = e_ldlt.solve(-e_Ap.m_b.cast<Element::T>()).cast<float>();
   }

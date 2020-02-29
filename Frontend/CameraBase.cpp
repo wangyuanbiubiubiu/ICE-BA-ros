@@ -43,7 +43,7 @@ namespace vio {
 /// \brief cameras Namespace for camera-related functionality.
 namespace cameras {
 
-// Creates a random (uniform distribution) image point.
+// Creates acc random (uniform distribution) image point.
 Eigen::Vector2d CameraBase::createRandomImagePoint() const {
   // Uniform random sample in image coordinates.
   // Add safety boundary for later inaccurate backprojection
@@ -57,7 +57,7 @@ Eigen::Vector2d CameraBase::createRandomImagePoint() const {
   return outPoint;
 }
 
-// Creates a random (uniform distribution) image point.
+// Creates acc random (uniform distribution) image point.
 Eigen::Vector2f CameraBase::createRandomImagePoint2f() const {
   // Uniform random sample in image coordinates.
   // Add safety boundary for later inaccurate backprojection
@@ -81,7 +81,7 @@ Eigen::Vector2d CameraBase::createRandomImagePointAtRadius(double radius) const 
   return outPoint;
 }
 
-// Creates a random visible point in Euclidean coordinates.
+// Creates acc random visible point in Euclidean coordinates.
 Eigen::Vector3d CameraBase::createRandomVisiblePoint(double minDist,
                                                      double maxDist) const {
   // random image point first:
@@ -98,7 +98,7 @@ Eigen::Vector3d CameraBase::createRandomVisiblePoint(double minDist,
   return ray;
 }
 
-// Creates a random visible point in homogeneous coordinates.
+// Creates acc random visible point in homogeneous coordinates.
 Eigen::Vector4d CameraBase::createRandomVisibleHomogeneousPoint(
     double minDist, double maxDist) const {
   Eigen::Vector3d point = createRandomVisiblePoint(minDist, maxDist);

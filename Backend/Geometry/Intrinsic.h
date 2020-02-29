@@ -19,7 +19,7 @@
 #include "Rotation.h"
 #include "Table.h"
 #include "AlignedVector.h"
-
+#include <iostream>
 class Intrinsic {
  public:
 
@@ -123,11 +123,11 @@ class Intrinsic {
       }
     }
    public:
-    float m_fx, m_fy, m_cx, m_cy;
+    float m_fx, m_fy, m_cx, m_cy;//主目的K
     float m_fxI, m_fyI;
     float m_fxx, m_fxy, m_fyy;
     float m_fxxI, m_fxyI, m_fyyI;
-    float m_ds[8], m_jds[8];
+    float m_ds[8]/*k1,k2,p1,p2,k3,k4,k5,k6*/, m_jds[8];//畸变和给畸变雅克比部分准备的
   };
 
   class RectificationMap {
@@ -307,56 +307,68 @@ class Intrinsic {
     return Kv;
   }
 
-  inline void Set(const int w, const int h, const float fx, const float fy = 0.0f,
+    //左目输入时：img_Size,内参,畸变,是否是鱼眼
+    //右目输入时：img_Size,右目内参,右目畸变,是否是鱼眼,左相机的内参,Tc0_c1的外参
+    inline void Set(const int w, const int h, const float fx, const float fy = 0.0f,
                   const float cx = 0.0f, const float cy = 0.0f, const float *ds = NULL,
                   const bool fishEye = false, const float fxr = 0.0f, const float fyr = 0.0f,
-                  const float cxr = 0.0f, const float cyr = 0.0f, const Rotation3D *Rr = NULL) {
-    m_w = w;
-    m_h = h;
-    const float _cxr = cxr == 0.0f ? (w - 1) * 0.5f : cxr;
-    const float _cyr = cyr == 0.0f ? (h - 1) * 0.5f : cyr;
-    m_k.Set(fx, fy == 0.0f ? fx : fy, cx == 0.0f ? _cxr : cx, cy == 0.0f ? _cyr : cy);
-    m_radial6 = ds && (ds[5] != 0.0f || ds[6] != 0.0f || ds[7] != 0.0f) ? 1 : 0;
-    m_tangential = ds && (ds[2] != 0.0f || ds[3] != 0.0f) ? 1 : 0;
-    m_needUndist = m_radial6 != 0 || m_tangential != 0 ||
-                  (ds && (ds[0] != 0.0f || ds[1] != 0.0f || ds[4] != 0.0f)) ? 1 : 0;
-    if (m_needUndist || fxr != 0.0f || fyr != 0.0f || Rr) {
-      m_needRect = 1;
-      if (m_needUndist != 0) {
-        m_fishEye = fishEye ? 1 : 0;
-        memcpy(m_k.m_ds, ds, sizeof(m_k.m_ds));
-        memset(m_k.m_jds, 0, sizeof(m_k.m_jds));
-        if (fishEye) {
-          m_radial6 = 0;
-          m_tangential = 0;
+                  const float cxr = 0.0f, const float cyr = 0.0f, const Rotation3D *Rr = NULL)
+    {
+        m_w = w;
+        m_h = h;
+        //这里其实不是右目,左目设置时这里就是右目,右目设置时这里就是左目
+        const float _cxr = cxr == 0.0f ? (w - 1) * 0.5f : cxr;
+        const float _cyr = cyr == 0.0f ? (h - 1) * 0.5f : cyr;
+        //设置主目(就是最先输入的这一目)的内参
+        m_k.Set(fx, fy == 0.0f ? fx : fy, cx == 0.0f ? _cxr : cx, cy == 0.0f ? _cyr : cy);
+        m_radial6 = ds && (ds[5] != 0.0f || ds[6] != 0.0f || ds[7] != 0.0f) ? 1 : 0;//判断是不是6维的径向畸变,euroc这里应该是0
+        m_tangential = ds && (ds[2] != 0.0f || ds[3] != 0.0f) ? 1 : 0;//是否有切向畸变
+        //只有没有畸变的时候才不需要去畸变,即8维度全是0
+        m_needUndist = m_radial6 != 0 || m_tangential != 0 ||
+                       (ds && (ds[0] != 0.0f || ds[1] != 0.0f || ds[4] != 0.0f)) ? 1 : 0;
+        if (m_needUndist || fxr != 0.0f || fyr != 0.0f || Rr)
+        {
+            m_needRect = 1;
+            if (m_needUndist != 0) {
+                m_fishEye = fishEye ? 1 : 0;//是否是鱼眼
+                //设置这一目的畸变参数
+                memcpy(m_k.m_ds, ds, sizeof(m_k.m_ds));
+                memset(m_k.m_jds, 0, sizeof(m_k.m_jds));
+                if (fishEye) {
+                    m_radial6 = 0;
+                    m_tangential = 0;
+                } else
+                    {
+                    //这里是为了后续算去畸变时候的雅克比用的,具体看Intrinsic.cpp中Undistort的注释
+                    m_k.m_jds[1] = ds[1] * 2.0f;
+                    m_k.m_jds[4] = ds[4] * 3.0f;
+                    if (m_radial6) {
+                        m_k.m_jds[6] = ds[6] * 2.0f;
+                        m_k.m_jds[7] = ds[7] * 3.0f;
+                    }
+                    if (m_tangential) {
+                        m_k.m_jds[2] = ds[2] * 2.0f;
+                        m_k.m_jds[3] = ds[3] * 2.0f;
+                    }
+                }
+            } else {
+                m_fishEye = 0;
+                memset(m_k.m_ds, 0, sizeof(m_k.m_ds));
+                memset(m_k.m_jds, 0, sizeof(m_k.m_jds));
+            }
+            //Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
+            //设置另一目的K矩阵
+            Set(m_k.m_fx, m_k.m_fy, _cxr, _cyr);
+            const float _fxr = fxr == 0.0f ? GetRectifiedFocal() : fxr;
+            const float _fyr = fyr == 0.0f ? _fxr : fyr;
+            //Set(_fxr, _fyr, m_k.m_cx, m_k.m_cy);
+            Set(_fxr, _fyr, _cxr, _cyr);
         } else {
-          m_k.m_jds[1] = ds[1] * 2.0f;
-          m_k.m_jds[4] = ds[4] * 3.0f;
-          if (m_radial6) {
-            m_k.m_jds[6] = ds[6] * 2.0f;
-            m_k.m_jds[7] = ds[7] * 3.0f;
-          }
-          if (m_tangential) {
-            m_k.m_jds[2] = ds[2] * 2.0f;
-            m_k.m_jds[3] = ds[3] * 2.0f;
-          }
+            //不需要取畸变的话
+            Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
+            m_needRect = 0;
+            m_fishEye = 0;
         }
-      } else {
-        m_fishEye = 0;
-        memset(m_k.m_ds, 0, sizeof(m_k.m_ds));
-        memset(m_k.m_jds, 0, sizeof(m_k.m_jds));
-      }
-      //Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
-      Set(m_k.m_fx, m_k.m_fy, _cxr, _cyr);
-      const float _fxr = fxr == 0.0f ? GetRectifiedFocal() : fxr;
-      const float _fyr = fyr == 0.0f ? _fxr : fyr;
-      //Set(_fxr, _fyr, m_k.m_cx, m_k.m_cy);
-      Set(_fxr, _fyr, _cxr, _cyr);
-    } else {
-      Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
-      m_needRect = 0;
-      m_fishEye = 0;
-    }
   }
   inline void DownSample() {
     m_w /= 2;
@@ -404,10 +416,10 @@ class Intrinsic {
   }
   inline void GetInverseTranspose(LA::AlignedMatrix3x3f &KIT) const { GetTransposeInverse(KIT); }
   inline void GetInverse(Intrinsic &KI) const { KI.Set(fxI(), fyI(), -cx() * fxI(), -cy() * fyI()); }
-
+//这里没看懂,啥操作
   inline float GetRectifiedFocal() const {
-    const float xdMax = m_k.m_cx / m_k.m_fx;
-    const float ydMax = m_k.m_cy / m_k.m_fy;
+    const float xdMax = m_k.m_cx / m_k.m_fx;//主目的内参cx/fx
+    const float ydMax = m_k.m_cy / m_k.m_fy;//主目的内参cy/fy
     Point2D xd, xn;
 
 #if 0
@@ -512,15 +524,15 @@ class Intrinsic {
   }
   //inline void NormalizedToImage(Line2D &l) const
   //{
-  //  l.c() -= l.a() * cxfxI() + l.b() * cyfyI();
-  //  l.a() *= fxI();
+  //  l.c() -= l.acc() * cxfxI() + l.b() * cyfyI();
+  //  l.acc() *= fxI();
   //  l.b() *= fyI();
   //  l.Normalize();
   //}
   //inline void NormalizedToImage(const Line2D &ln, Line2D &Kl) const
   //{
-  //  Kl.c() = ln.c() - (ln.a() * cxfxI() + ln.b() * cyfyI());
-  //  Kl.a() = ln.a() * fxI();
+  //  Kl.c() = ln.c() - (ln.acc() * cxfxI() + ln.b() * cyfyI());
+  //  Kl.acc() = ln.acc() * fxI();
   //  Kl.b() = ln.b() * fyI();
   //  Kl.Normalize();
   //}
@@ -635,8 +647,8 @@ class Intrinsic {
   }
   //inline void ImageToNormalized(Line2D &l) const
   //{
-  //  l.c() += cx() * l.a() + cy() * l.b();
-  //  l.a() *= fx();
+  //  l.c() += cx() * l.acc() + cy() * l.b();
+  //  l.acc() *= fx();
   //  l.b() *= fy();
   //  l.Normalize();
   //}
@@ -698,22 +710,23 @@ class Intrinsic {
   inline void Print() const { UT::Print("%f %f %f %f\n", fx(), fy(), cx(), cy()); }
 
   inline void AssertConsistency() const { m_k.AssertConsistency(FishEye(), Radial6(), Tangential()); }
-
+//畸变对应表,用来给点去畸变时作为初值
   class UndistortionMap {
    public:
     void Set(const Intrinsic &K);
     inline const bool Empty() const { return m_xns.Empty(); }
     inline Point2D Get(const Point2D &xd) const {
-      const float x = m_fx * xd.x() + m_cx;
+      const float x = m_fx * xd.x() + m_cx;//对应的畸变像素坐标
       const float y = m_fy * xd.y() + m_cy;
 
       xp128f w;
       Point2D xn;
       const int ix1 = int(x), ix2 = ix1 + 1, iy1 = int(y), iy2 = iy1 + 1;
+
 #ifdef CFG_DEBUG
-      UT_ASSERT(ix1 >= 0 && ix2 < m_xns.w() && iy1 >= 0 && iy2 < m_xns.h());
+      UT_ASSERT(ix1 >= 0 && ix2 < m_xns.gyr() && iy1 >= 0 && iy2 < m_xns.h());
 #endif
-      const Point2D &xn11 = m_xns[iy1][ix1], &xn12 = m_xns[iy2][ix1];
+      const Point2D &xn11 = m_xns[iy1][ix1], &xn12 = m_xns[iy2][ix1];//插值
       const Point2D &xn21 = m_xns[iy1][ix2], &xn22 = m_xns[iy2][ix2];
       UT::ImageInterpolateWeight(x - ix1, y - iy1, w);
       UT::ImageInterpolate<float, float>(xn11.x(), xn12.x(), xn21.x(), xn22.x(), w, xn.x());
@@ -721,7 +734,7 @@ class Intrinsic {
       return xn;
     }
   protected:
-    float m_fx, m_fy, m_cx, m_cy;
+    float m_fx, m_fy, m_cx, m_cy;//将图片缩放到FTR_UNDIST_LUT_SIZE×FTR_UNDIST_LUT_SIZEsize,所以内参也要响应的调整
     Table<Point2D> m_xns;
   };
 
@@ -781,12 +794,18 @@ class Intrinsic {
 
  protected:
 
-  Parameter m_k;
-  int m_w, m_h;
+  Parameter m_k;//主目的畸变参数
+  int m_w, m_h;//图像size
   union {
-    struct { ubyte m_needRect, m_needUndist, m_fishEye, m_radial6, m_tangential; };
+    struct { ubyte m_needRect,
+            m_needUndist, //是否需要去畸变
+            m_fishEye, //是否是鱼眼
+            m_radial6, //是否是6维度的径向畸变
+            m_tangential;//是否具有切向畸变
+            };
     int m_flag[2];
   };
+  //另一目的内参
   xp128f m_f, m_fI, m_c;
   xp128f m_fx, m_fy, m_cx, m_cy;
   xp128f m_fxI, m_fyI, m_fxIcx, m_fyIcy;

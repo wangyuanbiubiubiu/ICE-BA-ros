@@ -107,8 +107,8 @@ void GlobalBundleAdjustor::Reset() {
   m_Zps.resize(0);
   m_Aps.resize(0);
   //m_ZpLM.Invalidate();
-  m_ZpLM.m_iKF = 0;
-  m_ZpLM.Initialize(BA_WEIGHT_PRIOR_CAMERA_INITIAL,
+  m_ZpLM.m_iKF = 0;//初始化m_Amm先验部分权重
+  m_ZpLM.Initialize(BA_WEIGHT_PRIOR_CAMERA_INITIAL,//初始权重
                     BA_VARIANCE_PRIOR_VELOCITY_FIRST,
                     BA_VARIANCE_PRIOR_BIAS_ACCELERATION_FIRST,
                     BA_VARIANCE_PRIOR_BIAS_GYROSCOPE_FIRST);
@@ -158,9 +158,9 @@ void GlobalBundleAdjustor::Reset() {
   //m_F = 0.0f;
 }
 
-void GlobalBundleAdjustor::PushKeyFrame(const GlobalMap::InputKeyFrame &IKF,
-                                        const AlignedVector<IMU::Measurement> &us,
-                                        const std::vector<Depth::InverseGaussian> &dzs
+void GlobalBundleAdjustor::PushKeyFrame(const GlobalMap::InputKeyFrame &IKF,/*当前关键帧*/
+                                        const AlignedVector<IMU::Measurement> &us,/*在当前帧时间戳之前的imu测量*/
+                                        const std::vector<Depth::InverseGaussian> &dzs//当前关键帧观测到的地图点逆深度的备份
 #ifdef CFG_HANDLE_SCALE_JUMP
                                       , const float d
 #endif
@@ -169,8 +169,8 @@ void GlobalBundleAdjustor::PushKeyFrame(const GlobalMap::InputKeyFrame &IKF,
 #ifdef CFG_DEBUG
   UT_ASSERT(dzs.size() >= IKF.m_zs.size());
 #endif
-  m_ITs1.push_back(IT_KEY_FRAME);
-  m_IKFs1.push_back(InputKeyFrame(IKF, us, dzs
+  m_ITs1.push_back(IT_KEY_FRAME);//记录一下m_IKFs1里push的是什么东西
+  m_IKFs1.push_back(InputKeyFrame(IKF/*当前关键帧*/, us/*在当前帧时间戳之前的imu测量*/, dzs//当前关键帧观测到的地图点逆深度的备份
 #ifdef CFG_HANDLE_SCALE_JUMP
                                 , d
 #endif
@@ -217,11 +217,13 @@ void GlobalBundleAdjustor::PushCameraPriorMotion(const int iFrm, const int iKF, 
     }
   }
   m_ITs1.push_back(IT_CAMERA_PRIOR_MOTION);
-  m_IZpLM1.Set(iKF, IZp);
+  m_IZpLM1.Set(iKF, IZp);//
   MT_WRITE_LOCK_END(m_MT, iFrm, MT_TASK_GBA_PushCameraPriorMotion);
 }
 
 void GlobalBundleAdjustor::Run() {
+
+
 #if 0
 //#if 1
   AssertConsistency();
@@ -229,7 +231,7 @@ void GlobalBundleAdjustor::Run() {
   m_delta2 = BA_DL_RADIUS_INITIAL;
   m_ts[TM_TOTAL].Start();
   m_ts[TM_SYNCHRONIZE].Start();
-  SynchronizeData();
+  SynchronizeData();//做一些数据GBA数据的关联
   m_ts[TM_SYNCHRONIZE].Stop();
   m_ts[TM_TOTAL].Stop();
 #if 0
@@ -388,16 +390,16 @@ void GlobalBundleAdjustor::Run() {
       if (im == -1) {
         continue;
       }
-      Camera &C = m_CsLM[im];
-      C.m_T = T;
-      C.m_p = p;
-      C.m_v += LA::AlignedVector3f::GetRandom(evMax);
-      C.m_ba += LA::AlignedVector3f::GetRandom(ebaMax);
-      C.m_bw += LA::AlignedVector3f::GetRandom(ebwMax);
+      Camera &Cam_state = m_CsLM[im];
+      Cam_state.m_Cam_pose = T;
+      Cam_state.m_p = p;
+      Cam_state.m_v += LA::AlignedVector3f::GetRandom(evMax);
+      Cam_state.m_ba += LA::AlignedVector3f::GetRandom(ebaMax);
+      Cam_state.m_bw += LA::AlignedVector3f::GetRandom(ebwMax);
 #ifdef CFG_DEBUG
-      C.m_v.MakeZero();
-      C.m_ba.MakeZero();
-      C.m_bw.MakeZero();
+      Cam_state.m_v.MakeZero();
+      Cam_state.m_ba.MakeZero();
+      Cam_state.m_bw.MakeZero();
 #endif
       m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION | GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
     }
@@ -485,7 +487,7 @@ void GlobalBundleAdjustor::Run() {
         }
         IMU::Delta &D = m_DsLM[im];
         const KeyFrame &KF = m_KFs[ic];
-        IMU::PreIntegrate(KF.m_us, m_KFs[ic - 1].m_T.m_t, KF.m_T.m_t, m_CsLM[im - 1], &D,
+        IMU::PreIntegrate(KF.m_imu_measures, m_KFs[ic - 1].m_Cam_pose.m_t, KF.m_Cam_pose.m_t, m_CsLM[im - 1], &D,
                           &m_work, true, D.m_u1.Valid() ? &D.m_u1 : NULL, D.m_u2.Valid() ? &D.m_u2 : NULL);
       }
       m_AdsLM.MakeZero();
@@ -522,12 +524,12 @@ void GlobalBundleAdjustor::Run() {
       T.SetPosition(p);
       const int im = m_CsLM.Size() - nKFs + ic;
       if (im >= 0) {
-        Camera &C = m_CsLM[im];
-        C.m_T = T;
-        C.m_p = p;
-        C.m_v += dv;
-        C.m_ba += dba;
-        C.m_bw += dbw * UT_FACTOR_DEG_TO_RAD;
+        Camera &Cam_state = m_CsLM[im];
+        Cam_state.m_Cam_pose = T;
+        Cam_state.m_p = p;
+        Cam_state.m_v += dv;
+        Cam_state.m_ba += dba;
+        Cam_state.m_bw += dbw * UT_FACTOR_DEG_TO_RAD;
       }
 #endif
     }
@@ -549,19 +551,19 @@ void GlobalBundleAdjustor::Run() {
     }
 #endif
     m_ts[TM_FACTOR].Start();
-    UpdateFactors();
+    UpdateFactors();//更新因子
     m_ts[TM_FACTOR].Stop();
 #ifdef GBA_DEBUG_EIGEN
     DebugUpdateFactors();
 #endif
     m_ts[TM_SCHUR_COMPLEMENT].Start();
-    UpdateSchurComplement();
+    UpdateSchurComplement();//要将H|-b中的地图点部分先边缘化得到[S|-g],这里在求的就是W*V^-1*W.t g 和 W*V^-1*v
     m_ts[TM_SCHUR_COMPLEMENT].Stop();
 #ifdef GBA_DEBUG_EIGEN
     DebugUpdateSchurComplement();
 #endif
     m_ts[TM_CAMERA].Start();
-    const bool scc = SolveSchurComplement();
+    const bool scc = SolveSchurComplement();//PCG加速S*x = -g
     m_ts[TM_CAMERA].Stop();
 #ifdef GBA_DEBUG_EIGEN
     DebugSolveSchurComplement();
@@ -572,6 +574,8 @@ void GlobalBundleAdjustor::Run() {
     //  break;
     //}
     m_ts[TM_DEPTH].Start();
+      //du =-Wcu.t * Huu^-1 * dxc +  Huu^-1*bu (Huu就是V,bu就是v) = Huu^-1*(bu -Wcu.t * dxc )也就求出了地图点逆深度的增量
+//利用相机pose的增量反求出地图点逆深度的增量,将所有所有需要反求增量的du push进m_xsGN
     SolveBackSubstitution();
     m_ts[TM_DEPTH].Stop();
 #ifdef GBA_DEBUG_EIGEN
@@ -584,19 +588,19 @@ void GlobalBundleAdjustor::Run() {
     m_xsGD.Resize(0);   m_x2GD = 0.0f;
     m_xsDL.Resize(0);   m_x2DL = 0.0f;
     m_rho = FLT_MAX;
-    const int nItersDL = std::max(BA_DL_MAX_ITERATIONS, 1);
+    const int nItersDL = std::max(BA_DL_MAX_ITERATIONS, 1);//dogleg迭代次数
     for (m_iIterDL = 0; m_iIterDL < nItersDL; ++m_iIterDL) {
-      if (m_x2GN > m_delta2 && m_xsGD.Empty() && BA_DL_MAX_ITERATIONS > 0) {
+      if (m_x2GN > m_delta2 && m_xsGD.Empty() && BA_DL_MAX_ITERATIONS > 0) {//如果大于半径的话,
         m_ts[TM_UPDATE].Start();
-        SolveGradientDescent();
+        SolveGradientDescent();//求解pU点,方向是负梯度方向,步长g.t*g/g.t*A*g
         m_ts[TM_UPDATE].Stop();
 #ifdef GBA_DEBUG_EIGEN
         DebugSolveGradientDescent();
 #endif
       }
       m_ts[TM_UPDATE].Start();
-      SolveDogLeg();
-      UpdateStatesPropose();
+      SolveDogLeg();//判断GN求出的增量和pU点与信赖半径的关系,然后求解dogleg方法的增量
+      UpdateStatesPropose();//备份状态以及更新状态(pose更新在m_Cs中,motion更新在m_CsLM)和逆深度(m_ds)
       m_ts[TM_UPDATE].Stop();
 #ifdef CFG_VERBOSE
       if (m_verbose) {
@@ -617,7 +621,7 @@ void GlobalBundleAdjustor::Run() {
         break;
       }
       m_ts[TM_UPDATE].Start();
-      ComputeReduction();
+      ComputeReduction();//计算一下所有因子的实际下降和理论下降,然后计算rho = 实际/理论
       m_ts[TM_UPDATE].Stop();
 #ifdef CFG_VERBOSE
       if (m_verbose) {
@@ -640,7 +644,7 @@ void GlobalBundleAdjustor::Run() {
     }
     if (m_iIterDL == BA_DL_MAX_ITERATIONS) {
       m_ts[TM_UPDATE].Start();
-      UpdateStatesDecide();
+      UpdateStatesDecide();//通过rho来判断近似效果的好坏,近似的不好需要回滚更新
       m_ts[TM_UPDATE].Stop();
     }
 #ifdef CFG_DEBUG
@@ -724,7 +728,7 @@ void GlobalBundleAdjustor::Run() {
     delete viewer;
   }
 #endif
-  UpdateData();
+  UpdateData();//更新GlobalMap里m_Cs的pose
 #ifdef CFG_DEBUG
   //if (!m_serial && m_debug)
   if (m_debug) {
@@ -733,7 +737,7 @@ void GlobalBundleAdjustor::Run() {
 #endif
 #ifdef GBA_DEBUG_PRINT
   {
-    Rigid3D C;
+    Rigid3D Cam_state;
     Camera::Factor::Unitary::CC A;
     Camera::Factor::Binary::CC M;
     double Su, Ss2;
@@ -743,8 +747,8 @@ void GlobalBundleAdjustor::Run() {
       if (i == 0) {
         const int iKF = nKFs - 1;
         const KeyFrame &KF = m_KFs[iKF];
-        UT::Print("[%d]\n", KF.m_T.m_iFrm);
-        C = m_Cs[iKF];
+        UT::Print("[%d]\n", KF.m_Cam_pose.m_iFrm);
+        Cam_state = m_Cs[iKF];
         A = m_SAcus[iKF] - m_SMcus[iKF];
         M.MakeZero();
         //const int Nk = static_cast<int>(KF.m_iKFsMatch.size());
@@ -763,13 +767,13 @@ void GlobalBundleAdjustor::Run() {
           const FRM::Measurement &Z = KF.m_Zs[iZ];
           const Depth::InverseGaussian *ds = m_ds.data() + m_iKF2d[Z.m_iKF];
           for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
-            const Depth::InverseGaussian &d = ds[KF.m_zs[iz].m_ix];
+            const Depth::InverseGaussian &d = ds[KF.m_zs[iz].m_L_idx];
             Su = d.u() + Su;
             Ss2 = d.s2() + Ss2;
           }
         }
       } else {
-        C.MakeIdentity();
+        Cam_state.MakeIdentity();
         A.MakeZero();
         M.MakeZero();
         Su = Ss2 = 0.0;
@@ -780,7 +784,7 @@ void GlobalBundleAdjustor::Run() {
         const xp128f sa = xp128f::get(1.0f / nKFs);
         const xp128f sm = xp128f::get(1.0f / (CountSchurComplements() - nKFs));
         for (int iKF = 0; iKF < nKFs; ++iKF) {
-          C = m_Cs[iKF] * C;
+          Cam_state = m_Cs[iKF] * Cam_state;
           A += (m_SAcus[iKF] - m_SMcus[iKF]) * sa;
           const KeyFrame &KF = m_KFs[iKF];
           //const int Nk = static_cast<int>(KF.m_iKFsMatch.size());
@@ -800,8 +804,8 @@ void GlobalBundleAdjustor::Run() {
           Ss2 = d.s2() + Ss2;
         }
       }
-      UT::Print("C:\n");
-      C.Print(true);
+      UT::Print("Cam_state:\n");
+      Cam_state.Print(true);
       UT::Print("A:\n");
       A.Print(true);
       M.Print(true);
@@ -919,13 +923,13 @@ bool GlobalBundleAdjustor::SaveCameras(const std::string fileName, const bool po
   Quaternion q;
   Rotation3D R;
   LA::AlignedVector3f ba, bw;
-  const Rotation3D RuT = m_K.m_Ru.GetTranspose();
+  const Rotation3D RuT = m_K.m_Ru.GetTranspose();//Ri_c0
   for (int ic = 0; ic < Nc2; ++ic) {
     const HistoryCamera &C = Cs[ic];
     const Rigid3D &T = C.m_C;
     T.GetPosition(p);
     p += T.GetAppliedRotationInversely(m_K.m_pu);
-    Rotation3D::AB(RuT, T, R);
+    Rotation3D::AB(RuT, T, R);//Ri_w = Ri_c0* Rc0w
     R.GetQuaternion(q);
     fprintf(fp, "%f %f %f %f %f %f %f %f", C.m_t, p.x(), p.y(), p.z(),
                                            q.x(), q.y(), q.z(), q.w());
@@ -1182,9 +1186,9 @@ float GlobalBundleAdjustor::ComputeRMSE() {
 #endif
   return sqrtf(Se2 / Nc2);
 }
-
+//同步数据,比如当新的关键帧老的时候需要进行数据关联,当滑窗merge的时候,需要将滑窗对先验获取
 void GlobalBundleAdjustor::SynchronizeData() {
-  const int iFrm = m_iFrms.empty() ? MT_TASK_NONE : m_iFrms.back();
+  const int iFrm = m_iFrms.empty() ? MT_TASK_NONE : m_iFrms.back();//当前帧id
   MT_WRITE_LOCK_BEGIN(m_MT, iFrm, MT_TASK_GBA_SynchronizeData);
   m_ITs1.swap(m_ITs2);
   m_IKFs1.swap(m_IKFs2);
@@ -1204,11 +1208,11 @@ void GlobalBundleAdjustor::SynchronizeData() {
   }
 #endif
 
-  while (!m_ITs2.empty()) {
-    const InputType IT = m_ITs2.front();
+  while (!m_ITs2.empty()) {//遍历所有的输入帧
+    const InputType IT = m_ITs2.front();//输入类型
     m_ITs2.pop_front();
     if (IT == IT_KEY_FRAME) {
-      PushKeyFrame(m_IKFs2.front());
+      PushKeyFrame(m_IKFs2.front());//向GBA中加入关键帧
       m_IKFs2.pop_front();
     } else if (IT == IT_DELETE_KEY_FRAME) {
       DeleteKeyFrame(m_IDKFs2.front());
@@ -1219,12 +1223,12 @@ void GlobalBundleAdjustor::SynchronizeData() {
     } else if (IT == IT_UPDATE_CAMERAS) {
       UpdateCameras(m_IUCs2.front());
       m_IUCs2.pop_front();
-    } else if (IT == IT_CAMERA_PRIOR_POSE) {
+    } else if (IT == IT_CAMERA_PRIOR_POSE) {//滑窗时最老帧是关键帧或者参考关键帧变化时滑窗会给GBA位姿先验
       PushCameraPriorPose(m_IZps2.front());
       m_IZps2.pop_front();
-    } else if (IT == IT_CAMERA_PRIOR_MOTION) {
+    } else if (IT == IT_CAMERA_PRIOR_MOTION) {//滑窗时最老帧是关键帧滑窗会给GBA motion先验
       if (m_IZpLM2.Valid()) {
-        SetCameraPriorMotion(m_IZpLM2);
+        SetCameraPriorMotion(m_IZpLM2);//如果滑窗边缘化了一个关键帧对应的普通帧,就会给关键帧一个先验约束
         m_IZpLM2.Invalidate();
       }
     }
@@ -1232,7 +1236,7 @@ void GlobalBundleAdjustor::SynchronizeData() {
 }
 
 void GlobalBundleAdjustor::UpdateData() {
-  m_GM->GBA_Update(m_iFrms, m_Cs, m_Ucs
+  m_GM->GBA_Update(m_iFrms/*关键帧和普通帧之间的id对应*/, m_Cs/*优化完更新以后的左相机的位姿*/, m_Ucs
 #ifdef CFG_HANDLE_SCALE_JUMP
                  , m_dsKF
 #endif
@@ -1253,18 +1257,32 @@ void GlobalBundleAdjustor::UpdateData() {
 bool GlobalBundleAdjustor::BufferDataEmpty() {
   return m_IKFs1.empty() && m_IDKFs1.empty() && m_IUCs1.empty();
 }
-
-void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
+//向GBA中加入关键帧,流程和LBA的差不多
+//step1:初始化GBA的m_KFs中的当前关键帧
+//step2:遍历所有共视关键帧,将当前共视关键帧和当前关键帧之间的共视信息进行关联,都观测到了同一个点就存储下来,m_iz1是F1对这个地图点
+// 的观测索引,m_iz2是F1对这个地图点的观测索引
+//step3:将观测的匹配信息加入Zm中,并进行相关H矩阵的扩容,当前共视关键帧也要更新当前关键帧作为自己作为自己的共视帧
+//step4:处理一下imu非法的情况,因为前后两个关键帧可能会隔的比较久
+//step5:向m_Cs中存储这个关键帧的左相机pose,向m_CsLM中存储这个关键帧的左相机状态
+//step6:计算当前关键帧和之前关键帧之间的imu约束,以及重新计算之前帧和前前帧之间的imu约束(此时最后一次a,w的测量均值用的是当前帧
+// 第一个imu测量和之前的imu测量做中值,保证了数据的一致性)
+//step7:遍历所有的观测关键帧然后遍历观测关键帧中的地图点,如果地图点有变动,则更新地图点
+//step8:将所有地图点的逆深度存到m_ds里,以及m_xsTmp里新地图点观测信息的存储,最终存储到m_KFs中这帧的m_xs中
+// (中间有一步我没看懂在干啥,感觉也并不会出现这种情况啊,就是这帧观测的新地图点已经被别的关键帧观测了,难道是闭环时用的?)
+void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF)
+{
   //Timer timer;
   //timer.Start();
-  const int nKFs1 = static_cast<int>(m_KFs.size()), nKFs2 = nKFs1 + 1;
-  const int Nm1 = m_CsLM.Size(), Nm2 = Nm1 + 1;
-  m_KFs.resize(nKFs2);
+  const int nKFs1 = static_cast<int>(m_KFs.size())/*之前有多少帧关键帧，也可以用作关键帧id*/, nKFs2 = nKFs1 + 1;/*需要扩容的size*/
+  const int Nm1 = m_CsLM.Size()/*关键帧id*/, Nm2 = Nm1 + 1;
+
+  m_KFs.resize(nKFs2);//和LBA一样，需要的数据扩容
   m_iFrms.resize(nKFs2);
   m_Cs.Resize(nKFs2, true);
   m_CsLM.Resize(Nm2, true);
 #ifdef CFG_GROUND_TRUTH
-  if (m_CsGT) {
+  if (m_CsGT)
+  {
     m_CsKFGT.Resize(nKFs2, true);
     m_CsLMGT.Resize(Nm2, true);
   }
@@ -1283,11 +1301,13 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
   m_ucmsLM.resize(Nm2, ucmFlag1 | ucmFlag2);
   m_DsLM.Resize(Nm2, true);
 #ifdef CFG_GROUND_TRUTH
-  if (m_CsGT) {
+  if (m_CsGT)
+  {
     m_DsLMGT.Resize(Nm2, true);
   }
 #ifdef CFG_HISTORY
-  if (m_history >= 3) {
+  if (m_history >= 3)
+  {
     m_ucsGT.resize(m_KFs.size(), GBA_FLAG_FRAME_DEFAULT);
   }
 #endif
@@ -1301,50 +1321,67 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
                       | GBA_FLAG_TRACK_MEASURE
 #endif
                       ;
-  const int iKF = nKFs1, im = Nm1;
-  KeyFrame &KF = m_KFs[iKF];
-  KF.Initialize(IKF);
-  const int iFrm = KF.m_T.m_iFrm;
-  m_iFrms[iKF] = iFrm;
+  const int iKF = nKFs1, im/*关键帧id*/ = Nm1;
+  KeyFrame &KF = m_KFs[iKF];//构造GBA的m_KFs中的当前关键帧
+  KF.Initialize(IKF);//构造关键帧
+  const int iFrm = KF.m_T.m_iFrm;//帧id
+  m_iFrms[iKF] = iFrm;//全局帧id和关键帧id的对应
   std::vector<int> &iKF2X = m_idxsTmp1, &iX2z = m_idxsTmp2;
-  PushFeatureMeasurementMatchesFirst(KF, iKF2X, iX2z);
-  const int Nk = static_cast<int>(KF.m_iKFsMatch.size());
+  PushFeatureMeasurementMatchesFirst(KF/*当前帧*/, iKF2X, iX2z/*地图点被观测到,就记录这个地图点在m_zs存储的起始位置*/);
+  const int Nk = static_cast<int>(KF.m_iKFsMatch.size());//这个关键帧的共视的老关键帧
 #ifdef CFG_DEBUG
   for (int ik = 0; ik < Nk; ++ik) {
     UT_ASSERT(KF.m_iKFsMatch[ik] < iKF);
   }
 #endif
-  for (int ik = 0; ik < Nk; ++ik) {
+
+//遍历所有共视关键帧,将当前共视关键帧和当前关键帧之间的共视信息进行关联,都观测到了同一个点就存储下来,m_iz1是F1对这个地图点的观测索引,m_iz2是F1对这个地图点的观测索引
+//将观测的匹配信息加入Zm中,并进行相关H矩阵的扩容,当前共视关键帧也要更新当前关键帧作为自己作为自己的共视帧
+  for (int ik = 0; ik < Nk; ++ik)
+  {
     KeyFrame &_KF = m_KFs[KF.m_iKFsMatch[ik]];
-    PushFeatureMeasurementMatchesNext(_KF, KF, iKF2X, iX2z, KF.m_Zm);
+      //将_KF和KF之间的共视信息进行关联,都观测到了同一个点就存储下来,m_iz1是F1对这个地图点的观测索引,m_iz2是F1对这个地图点的观测索引
+//将观测的匹配信息加入Zm中,并进行相关H矩阵的扩容
+    PushFeatureMeasurementMatchesNext(_KF/*观测到的关键帧*/, KF/*当前关键帧*/, iKF2X/*[i]非-1时表示第i个关键帧之前的共视帧有多少个地图点*/,
+            iX2z/*储存的是当前这帧的共视帧的所有地图点数量,地图点被观测到,就记录这个地图点在m_zs存储的起始位置*/, KF.m_Zm/*较新帧和之后几帧之间的匹配关联*/);
+
 #ifdef CFG_DEBUG
     UT_ASSERT(_KF.m_iKFsMatch.empty() || _KF.m_iKFsMatch.back() < iKF);
 #endif
     _KF.m_iKFsMatch.push_back(iKF);
   }
-  if (iKF > 0) {
+
+
+  if (iKF > 0)//处理一下imu非法的情况
+  {
     const int _iKF = iKF - 1;
-    if (KF.m_us.Empty()) {
+    if (KF.m_us.Empty())//如果当前帧没有imu数据,flag设为非法
+    {
       m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_INVALID;
-    } else {
-      if ((KF.m_T.m_t - m_KFs[_iKF].m_T.m_t) > GBA_MAX_IMU_TIME_INTERVAL) {
+    } else
+    {
+      if ((KF.m_T.m_t - m_KFs[_iKF].m_T.m_t) > GBA_MAX_IMU_TIME_INTERVAL)//两帧之间时间间隔过长,清空imu,flag设为非法
+      {
         KF.m_us.Clear();
         m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_INVALID;
-      } else if (KF.m_iKFsMatch.empty() || KF.m_iKFsMatch.back() != _iKF) {
+      }
+      else if (KF.m_iKFsMatch.empty() || KF.m_iKFsMatch.back() != _iKF)
+      {
         KF.InsertMatchKeyFrame(_iKF);
         m_KFs[_iKF].m_iKFsMatch.push_back(iKF);
       }
-      if (!KF.m_us.Empty()) {
+      if (!KF.m_us.Empty()) {//如果imu数据不为空,
         const int _im = im - 1;
-        if (_im >= 0 && (m_ucmsLM[_im] & GBA_FLAG_CAMERA_MOTION_INVALID)) {
+        if (_im >= 0 && (m_ucmsLM[_im] & GBA_FLAG_CAMERA_MOTION_INVALID))
+        {
           m_ucmsLM[_im] &= ~GBA_FLAG_CAMERA_MOTION_INVALID;
           m_ucmsLM[_im] |= ucmFlag2;
         }
       }
     }
   }
-  const bool v1 = IKF.m_C.m_T.Valid(), v2 = IKF.m_C.m_v.Valid();
-  if (im > 0 && !KF.m_us.Empty() && (GBA_PROPAGATE_CAMERA || !v1 || !v2)) {
+  const bool v1 = IKF.m_Cam_state.m_Cam_pose.Valid(), v2 = IKF.m_Cam_state.m_v.Valid();//之前已经用imu测量初始化过了,应该都是true
+  if (im > 0 && !KF.m_us.Empty() && (GBA_PROPAGATE_CAMERA || !v1 || !v2)) {//这里不进行预积分
     IMU::Delta D;
     Camera C;
     const KeyFrame &_KF = m_KFs[iKF - 1];
@@ -1354,11 +1391,11 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
     IMU::Propagate(m_K.m_pu, D, _C, C, BA_ANGLE_EPSILON);
     if (GBA_PROPAGATE_CAMERA) {
       m_CsLM[im] = C;
-      m_Cs[iKF] = m_CsLM[im].m_T;
+      m_Cs[iKF] = m_CsLM[im].m_Cam_pose;
     } else {
       if (!v1) {
-        m_Cs[iKF] = C.m_T;
-        m_CsLM[im].m_T = C.m_T;
+        m_Cs[iKF] = C.m_Cam_pose;
+        m_CsLM[im].m_Cam_pose = C.m_Cam_pose;
         m_CsLM[im].m_p = C.m_p;
       }
       if (!v2) {
@@ -1368,12 +1405,12 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
       }
     }
   } else {
-    m_Cs[iKF] = IKF.m_C.m_T;
-    m_CsLM[im] = IKF.m_C;
+    m_Cs[iKF] = IKF.m_Cam_state.m_Cam_pose;//相机pose和相机状态的设置
+    m_CsLM[im] = IKF.m_Cam_state;
   }
 #ifdef CFG_GROUND_TRUTH
   if (m_CsGT) {
-    m_CsKFGT[iKF] = m_CsGT[iFrm].m_T;
+    m_CsKFGT[iKF] = m_CsGT[iFrm].m_Cam_pose;
     m_CsLMGT[im] = m_CsGT[iFrm];
   }
 #endif
@@ -1381,33 +1418,40 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
   m_dsKF[iKF] = IKF.m_d;
 #endif
 #ifdef CFG_INCREMENTAL_PCG
-  m_xcs[iKF].MakeZero();
+  m_xcs[iKF].MakeZero();//pose和motion的增量置0
   m_xmsLM[im].MakeZero();
 #endif
   IMU::Delta &D = m_DsLM[im];
-  if (KF.m_us.Empty() || im == 0) {
+  if (KF.m_us.Empty() || im == 0)
+  {//如果没有imu测量或者是第一帧,就设成非法
     D.Invalidate();
-  } else {
+  } else
+  {
+      //前后两个关键帧之间的imu约束,算一下imu预积分
     const int _iKF = iKF - 1;
     const int _im = im - 1;
     const KeyFrame &_KF = m_KFs[_iKF];
-    const float _t = _KF.m_T.m_t;
-    IMU::PreIntegrate(KF.m_us, _t, KF.m_T.m_t, m_CsLM[_im], &D, &m_work, true,
-                      _KF.m_us.Empty() ? NULL : &_KF.m_us.Back(), NULL, BA_ANGLE_EPSILON);
-    if (_im > 0 && !_KF.m_us.Empty()) {
-      IMU::Delta &_D = m_DsLM[_im];
-      IMU::PreIntegrate(_KF.m_us, m_KFs[_iKF - 1].m_T.m_t, _t, m_CsLM[_im - 1], &_D, &m_work, true,
-                        _D.m_u1.Valid() ? &_D.m_u1 : NULL, &KF.m_us.Front(), BA_ANGLE_EPSILON);
+    const float _t = _KF.m_T.m_t;//前一帧关键很
+    IMU::PreIntegrate(KF.m_us/*当前关键帧和之前关键帧之间的imu测量*/, _t/*上一关键帧的时间戳*/, KF.m_T.m_t/*当前关键帧的时间戳*/,
+            m_CsLM[_im]/*上一关键帧的状态*/, &D/*预积分部分*/, &m_work, true,/*是否要输出雅克比*/
+                      _KF.m_us.Empty() ? NULL : &_KF.m_us.Back()/*上一关键帧最后一个imu测量*/, NULL, BA_ANGLE_EPSILON);
+    if (_im > 0 && !_KF.m_us.Empty())
+    {
+        //这里就是重新算了上一帧的预积分,这次的a,w的测量均值不再是k k+1取均值,而是i,j取中值(为了imu数据的连续性)
+      IMU::Delta &_D = m_DsLM[_im];//前一帧对应的预积分(前一帧和前前帧之间的),保存了预积分以后的状态量,协方差,信息矩阵,以及对ba,bw的雅克比
+      IMU::PreIntegrate(_KF.m_us/*之前关键帧和前前关键帧之间的imu测量*/, m_KFs[_iKF - 1].m_T.m_t, _t, m_CsLM[_im - 1], &_D, &m_work, true,
+                        _D.m_u1.Valid() ? &_D.m_u1/*前前帧的最后一个imu测量*/ : NULL, &KF.m_us.Front()/*当前帧第一个imu测量*/, BA_ANGLE_EPSILON);
       m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_CAMERA;
-      m_ucmsLM[_im] |= ucmFlag1 | ucmFlag2;
+      m_ucmsLM[_im] |= ucmFlag1 | ucmFlag2;//
+
     }
   }
-  if (iFrm == 0) {
-    const LA::Vector3f s2r = LA::Vector3f::Get(BA_VARIANCE_FIX_ORIGIN_ROTATION_X,
-                                               BA_VARIANCE_FIX_ORIGIN_ROTATION_Y,
-                                               BA_VARIANCE_FIX_ORIGIN_ROTATION_Z);
-    const float s2p = BA_VARIANCE_FIX_ORIGIN_POSITION;
-    m_Zo.Set(BA_WEIGHT_FIX_ORIGIN, s2r, s2p, m_Cs[iKF]);
+  if (iFrm == 0) {//如果是第一帧,进行固定
+    const LA::Vector3f s2r = LA::Vector3f::Get(BA_VARIANCE_FIX_ORIGIN_ROTATION_X,/*0*/
+                                               BA_VARIANCE_FIX_ORIGIN_ROTATION_Y,/*0*/
+                                               BA_VARIANCE_FIX_ORIGIN_ROTATION_Z/*(0.01*pi/180)^2*/);//yaw没有被固定
+    const float s2p = BA_VARIANCE_FIX_ORIGIN_POSITION;//1.0e-6f 0.001^2
+    m_Zo.Set(BA_WEIGHT_FIX_ORIGIN/*1.0e-5f*/, s2r/*首帧R初始值*/, s2p/*首帧t初始值*/, m_Cs[iKF]/*首帧pose*/);
     m_Ao.MakeZero();
   }
 #ifdef CFG_GROUND_TRUTH
@@ -1421,30 +1465,24 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
       const Camera &_C = m_CsLMGT[_im];
       IMU::PreIntegrate(KF.m_us, _t, KF.m_T.m_t, _C, &m_DsLMGT[im], &m_work, true,
                         _KF.m_us.Empty() ? NULL : &_KF.m_us.Back(), NULL, BA_ANGLE_EPSILON);
-#ifdef GBA_DEBUG_GROUND_TRUTH_MEASUREMENT
-      D.DebugSetMeasurement(_C, m_CsLMGT[im], m_K.m_pu, BA_ANGLE_EPSILON);
-      m_DsLMGT[im].DebugSetMeasurement(_C, m_CsLMGT[im], m_K.m_pu, BA_ANGLE_EPSILON);
-#endif
+
       if (_im > 0 && !_KF.m_us.Empty()) {
         IMU::Delta &_D = m_DsLMGT[_im];
         IMU::PreIntegrate(_KF.m_us, m_KFs[_iKF - 1].m_T.m_t, _t, m_CsLMGT[_im - 1], &_D, &m_work,
                           true, _D.m_u1.Valid() ? &_D.m_u1 : NULL, &KF.m_us.Front(),
                           BA_ANGLE_EPSILON);
-#ifdef GBA_DEBUG_GROUND_TRUTH_MEASUREMENT
-        m_DsLM[_im].DebugSetMeasurement(m_CsLMGT[_im - 1], _C, m_K.m_pu, BA_ANGLE_EPSILON);
-        _D.DebugSetMeasurement(m_CsLMGT[_im - 1], _C, m_K.m_pu, BA_ANGLE_EPSILON);
-#endif
+
       }
     }
   }
 #endif
-#ifdef CFG_DEBUG
-  UT_ASSERT(KF.m_iKFsPrior.empty());
-#endif
+//遍历所有的观测关键帧然后遍历观测关键帧中的地图点,如果地图点有变动,则更新地图点
   m_iKF2d.push_back(m_iKF2d.back());
-  m_iKF2cb.push_back(m_iKF2cb.back() + static_cast<int>(KF.m_ikp2KF.size()));
-  const int NZ = static_cast<int>(IKF.m_Zs.size());
-  for (int iZ = 0; iZ < NZ; ++iZ) {
+  m_iKF2cb.push_back(m_iKF2cb.back() + static_cast<int>(KF.m_ikp2KF.size()));//KF.m_ikp2KF.size())是这个关键帧和之前的多少个关键帧有共视
+  //m_iKF2cb存储这个关键帧来之前其他的关键帧总共有多少个共视,为的是方便索引
+  const int NZ = static_cast<int>(IKF.m_Zs.size());//当前关键帧的所有观测
+  for (int iZ = 0; iZ < NZ; ++iZ)
+  {
     const FRM::Measurement &Z = IKF.m_Zs[iZ];
     const int _iKF = Z.m_iKF, id = m_iKF2d[_iKF];
     Depth::InverseGaussian *ds = m_ds.data() + id;
@@ -1454,21 +1492,19 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
 #endif
     bool ud = false;
     const KeyFrame &_KF = m_KFs[_iKF];
-    for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
-      const int ix = IKF.m_zs[iz].m_ix;
-      if (IKF.m_dzs[iz].Valid() && fabs(IKF.m_dzs[iz].u() - ds[ix].u()) >= BA_UPDATE_DEPTH) {
-        ds[ix] = IKF.m_dzs[iz];
+    for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz)//遍历所有的观测关键帧然后遍历观测关键帧中的地图点,如果地图点有变动,则更新地图点
+    {
+      const int ix = IKF.m_zs[iz].m_ix;//逆深度不是地图点平均逆深度(说明是三角化出来的点的逆深度)
+      if (IKF.m_dzs[iz].Valid() && fabs(IKF.m_dzs[iz].u() - ds[ix].u()) >= BA_UPDATE_DEPTH)
+      {
+        ds[ix] = IKF.m_dzs[iz];//那么就更新地图点的逆深度并且flags设置为需要更新深度
         m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;
         uds[ix] |= udFlag2;
         //m_Ucs[_iKF] |= GM_FLAG_FRAME_UPDATE_DEPTH;
         //Uds[ix] |= GM_FLAG_TRACK_UPDATE_DEPTH;
         ud = true;
       }
-#ifdef GBA_FLAG_TRACK_MEASURE
-      else {
-        uds[ix] |= GBA_FLAG_TRACK_MEASURE;
-      }
-#endif
+
 #if defined CFG_GROUND_TRUTH && defined CFG_HISTORY
       if (m_history >= 3) {
         m_ucsGT[_iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;
@@ -1476,27 +1512,20 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
       }
 #endif
     }
-#ifdef CFG_HANDLE_SCALE_JUMP
-    if (!ud) {
-      continue;
-    }
-    m_Ucs[_iKF] |= GM_FLAG_FRAME_UPDATE_DEPTH;
-    m_dsKF[_iKF] = AverageDepths(ds, m_iKF2d[_iKF + 1] - id);
-#endif
+
   }
-  const int NX = static_cast<int>(IKF.m_Xs.size());
-  for (int iX1 = 0, iX2 = 0; iX1 < NX; iX1 = iX2) {
-    const int _iKF = IKF.m_Xs[iX1].m_iKF;
+  const int NX = static_cast<int>(IKF.m_Xs.size());//关键帧新看到的地图点
+  for (int iX1 = 0, iX2 = 0; iX1 < NX; iX1 = iX2)
+  {
+    const int _iKF = IKF.m_Xs[iX1].m_iKF;//当前关键帧id
     for (iX2 = iX1 + 1; iX2 < NX && IKF.m_Xs[iX2].m_iKF == _iKF; ++iX2) {}
-    const int id = m_iKF2d[_iKF + 1], Nx = iX2 - iX1;
-#ifdef CFG_DEBUG
-    UT_ASSERT(iX1 == 0 || _iKF > IKF.m_Xs[iX1 - 1].m_iKF);
-    UT_ASSERT(Nx != 0);
-#endif
-    for (int jKF = _iKF; jKF <= iKF; ++jKF) {
-      m_iKF2d[jKF + 1] += Nx;
+    const int id = m_iKF2d[_iKF + 1]/*新的地图点在全局地图点中的id*/, Nx = iX2 - iX1;
+
+    for (int jKF = _iKF; jKF <= iKF; ++jKF)
+    {
+      m_iKF2d[jKF + 1] += Nx;//加上这次观测到的新地图点数量
     }
-    m_ds.insert(m_ds.begin() + id, Nx, Depth::InverseGaussian());
+    m_ds.insert(m_ds.begin() + id, Nx, Depth::InverseGaussian());//扩容逆深度以及相关flags
     m_uds.insert(m_uds.begin() + id, Nx, udFlag1);
     m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;
 #if defined CFG_GROUND_TRUTH && defined CFG_HISTORY
@@ -1505,37 +1534,32 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
       m_udsGT.insert(m_udsGT.begin() + id, Nx, GBA_FLAG_TRACK_UPDATE_DEPTH);
     }
 #endif
-    const GlobalMap::Point *Xs = IKF.m_Xs.data() + iX1;
-    Depth::InverseGaussian *ds = m_ds.data() + id;
+    const GlobalMap::Point *Xs = IKF.m_Xs.data() + iX1;//当前关键帧首个地图点对应的指针
+    Depth::InverseGaussian *ds = m_ds.data() + id;//当前地图点需要构造的对应的逆深度
     ubyte *uds = m_uds.data() + id;
     m_xsTmp.resize(Nx);
     std::vector<ubyte> &mcs = m_marksTmp1;
-    mcs.assign(nKFs2, 0);
-    for (int i = 0; i < Nx; ++i) {
-      const GlobalMap::Point &X = Xs[i];
-      ds[i] = X.m_d;
-      m_xsTmp[i] = X.m_x;
+    mcs.assign(nKFs2, 0);//清空上一次的标识,赋值
+    for (int i = 0; i < Nx; ++i)
+    {//遍历所有地图点将所有地图点的逆深度存到m_ds里,以及m_xsTmp里新地图点观测信息的存储
+      const GlobalMap::Point &X = Xs[i];//当前地图点
+      ds[i] = X.m_d;//深度信息赋值
+      m_xsTmp[i] = X.m_x;//新地图点的观测信息
       const int Nz = static_cast<int>(X.m_zs.size());
-#ifdef GBA_FLAG_TRACK_MEASURE
-      if (Nz > 0) {
-        uds[i] |= GBA_FLAG_TRACK_MEASURE;
-      }
-#endif
-      for (int j = 0; j < Nz; ++j) {
+
+      for (int j = 0; j < Nz; ++j)
+      {
         mcs[X.m_zs[j].m_iKF] = 1;
       }
     }
-#ifdef CFG_HANDLE_SCALE_JUMP
-    if (_iKF != iKF) {
-      m_Ucs[_iKF] |= GM_FLAG_FRAME_UPDATE_DEPTH;
-      m_dsKF[_iKF] = AverageDepths(m_ds.data() + m_iKF2d[_iKF], m_iKF2d[_iKF + 1] - m_iKF2d[_iKF]);
-    }
-#endif
+
     std::vector<int> &ik2KF = m_idxsTmp1, &iKF2k = m_idxsTmp2;
     ik2KF.resize(0);
     iKF2k.assign(nKFs2, -1);
-    for (int jKF = 0; jKF < nKFs2; ++jKF) {
-      if (!mcs[jKF]) {
+    for (int jKF = 0; jKF < nKFs2; ++jKF)//遍历当前所有的关键帧,这里干啥不清楚
+    {
+      if (!mcs[jKF])
+      {
         continue;
       }
       iKF2k[jKF] = static_cast<int>(ik2KF.size());
@@ -1543,14 +1567,17 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
     }
     const int Nk = static_cast<int>(ik2KF.size());
     m_zsListTmp.resize(Nk);
-    for (int ik = 0; ik < Nk; ++ik) {
+    for (int ik = 0; ik < Nk; ++ik)
+    {
       m_zsListTmp[ik].resize(0);
     }
     const int Nx1 = static_cast<int>(m_KFs[_iKF].m_xs.size());
-    for (int i = 0, ix = Nx1; i < Nx; ++i, ++ix) {
+    for (int i = 0, ix = Nx1; i < Nx; ++i, ++ix)
+    {//遍历所有新地图点
       const GlobalMap::Point &X = Xs[i];
       const int Nz = static_cast<int>(X.m_zs.size());
-      for (int j = 0; j < Nz; ++j) {
+      for (int j = 0; j < Nz; ++j)
+      {
         const FTR::Measurement &z = X.m_zs[j];
         const int ik = iKF2k[z.m_iKF];
         m_zsListTmp[ik].push_back(z);
@@ -1560,7 +1587,8 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
     std::vector<int> &izs = m_idxsTmp2, &ix2z = m_idxsTmp3;
     izs.resize(Nk);
     KeyFrame &_KF = m_KFs[_iKF];
-    for (int ik2 = 0; ik2 < Nk; ++ik2) {
+    for (int ik2 = 0; ik2 < Nk; ++ik2)//这里好像用不到啊
+    {
       const int iKF2 = ik2KF[ik2];
       KeyFrame &KF2 = m_KFs[iKF2];
       int jk2, &iz2 = izs[ik2];
@@ -1572,110 +1600,84 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF) {
         const std::vector<int>::iterator _ik = std::lower_bound(_KF.m_iKFsMatch.begin() +
                                                                 _KF.m_Zm.m_SMczms.Size(),
                                                                 _KF.m_iKFsMatch.end(), iKF2);
-#ifdef CFG_DEBUG
-        UT_ASSERT(_ik == _KF.m_iKFsMatch.end() || *_ik != iKF2);
-#endif
+
         _KF.m_iKFsMatch.insert(_ik, iKF2);
       }
       const int Nz2 = static_cast<int>(zs2.size());
       KF2.m_Zm.InsertFeatureMeasurement2(jk2, iz2, Nz2);
-      for (int jk2 = KF2.m_Zm.m_SMczms.Size(); jk2 < Nk22; ++jk2) {
+      for (int jk2 = KF2.m_Zm.m_SMczms.Size(); jk2 < Nk22; ++jk2)
+      {
         KeyFrame &KF3 = m_KFs[KF2.m_iKFsMatch[jk2]];
         const int jk3 = KF3.SearchMatchKeyFrame(iKF2);
-#ifdef CFG_DEBUG
-        UT_ASSERT(jk3 >= 0);
-#endif
+
         KF3.m_Zm.InsertFeatureMeasurement1(jk3, iz2, Nz2);
       }
       ix2z.assign(Nx, -1);
       int *_ix2z = ix2z.data() - Nx1;
-      for (int i = 0; i < Nz2; ++i) {
+      for (int i = 0; i < Nz2; ++i)
+      {
         const int ix = zs2[i].m_ix;
-#ifdef CFG_DEBUG
-        UT_ASSERT(ix >= Nx1 && ix < Nx1 + Nx);
-#endif
+
         _ix2z[ix] = iz2 + i;
       }
-      for (int ik1 = 0; ik1 < ik2; ++ik1) {
+      for (int ik1 = 0; ik1 < ik2; ++ik1)
+      {
         const int iKF1 = ik2KF[ik1];
         m_izmsTmp.resize(0);
         const int iz1 = izs[ik1];
         const std::vector<FTR::Measurement> &zs1 = m_zsListTmp[ik1];
         const int Nz1 = static_cast<int>(zs1.size());
-        for (int i = 0; i < Nz1; ++i) {
+        for (int i = 0; i < Nz1; ++i)
+        {
           const int ix = zs1[i].m_ix, _iz2 = _ix2z[ix];
-          if (_iz2 == -1) {
+          if (_iz2 == -1)
+          {
             continue;
           }
-#ifdef CFG_DEBUG
-          UT_ASSERT(zs2[_iz2 - iz2].m_ix == ix);
-#endif
+
           m_izmsTmp.push_back(FTR::Measurement::Match(iz1 + i, _iz2));
         }
-        if (m_izmsTmp.empty()) {
+        if (m_izmsTmp.empty())
+        {
           continue;
         }
         const std::vector<int>::iterator _jk2 = std::lower_bound(KF2.m_iKFsMatch.begin() + jk2,
                                                                  KF2.m_iKFsMatch.begin() +
                                                                  KF2.m_Zm.m_SMczms.Size(), iKF1);
         jk2 = static_cast<int>(_jk2 - KF2.m_iKFsMatch.begin());
-        if (_jk2 == KF2.m_iKFsMatch.end() || *_jk2 != iKF1) {
+        if (_jk2 == KF2.m_iKFsMatch.end() || *_jk2 != iKF1)
+        {
           KF2.InsertMatchKeyFrame(iKF1, &_jk2);
           KeyFrame &KF1 = m_KFs[iKF1];
           const std::vector<int>::iterator jk1 = std::lower_bound(KF1.m_iKFsMatch.begin() +
                                                                   KF1.m_Zm.m_SMczms.Size(),
                                                                   KF1.m_iKFsMatch.end(), iKF2);
-#ifdef CFG_DEBUG
-          UT_ASSERT(jk1 == KF1.m_iKFsMatch.end() || *jk1 != iKF2);
-#endif
+
           KF1.m_iKFsMatch.insert(jk1, iKF2);
         }
         KF2.m_Zm.InsertFeatureMeasurementMatches(jk2, m_izmsTmp, &m_work);
-//#ifdef CFG_DEBUG
-#if 0
-        const KeyFrame &KF1 = m_KFs[iKF1];
-        KF2.m_Zm.AssertConsistency(static_cast<int>(KF2.m_iKFsMatch.size()));
-        KF2.m_Zm.AssertConsistency(jk2, KF1, KF2, m_izmsTmp);
-#endif
+
       }
       const int Nk23 = static_cast<int>(KF2.m_iKFsMatch.size());
-//#ifdef CFG_DEBUG
-#if 0
-      for (int jk2 = 0; jk2 < Nk23; ++jk2) {
-        const KeyFrame &KF1 = m_KFs[KF2.m_iKFsMatch[jk2]];
-        KF2.m_Zm.AssertConsistency(jk2, KF1, KF2, m_izmsTmp);
-      }
-#endif
-      if (Nk23 == Nk21) {
+
+      if (Nk23 == Nk21)
+      {
         continue;
       }
       const int Ncb = Nk23 - Nk21;
-      for (int jKF = iKF2; jKF <= iKF; ++jKF) {
+      for (int jKF = iKF2; jKF <= iKF; ++jKF)
+      {
         m_iKF2cb[jKF + 1] += Ncb;
       }
     }
-    m_KFs[_iKF].PushFeatures(m_xsTmp);
+    m_KFs[_iKF].PushFeatures(m_xsTmp/*所有新地图点（由当前关键帧产生）的观测*/);
   }
-  m_AdsLM.InsertZero(Nm1);
+  m_AdsLM.InsertZero(Nm1);//初始化一下
   m_Afps.InsertZero(nKFs1);
   m_AfmsLM.InsertZero(Nm1);
   m_SAcus.InsertZero(nKFs1);
   m_SMcus.InsertZero(nKFs1);
   m_SAcmsLM.InsertZero(Nm1);
-//#ifdef CFG_DEBUG
-#if 0
-  if (m_debug) {
-    m_xsGN.Resize(0);
-    AssertConsistency(false, false);
-  }
-#endif
-  //timer.Stop(true);
-  //static double g_St = 0.0;
-  //static int g_N = 0;
-  //const double t = timer.GetAverageMilliseconds();
-  //g_St += t;
-  //++g_N;
-  //UT::Print("[%d] GBA::PushKeyFrame = %f %f\n", IKF.m_T.m_iFrm, t, g_St / g_N);
 }
 
 void GlobalBundleAdjustor::DeleteKeyFrame(const int iKF) {
@@ -2167,7 +2169,7 @@ void GlobalBundleAdjustor::UpdateCameras(const std::vector<GlobalMap::InputCamer
       continue;
     }
     const int iKF = static_cast<int>(i - m_iFrms.begin());
-    m_Cs[iKF] = C.m_C;
+    m_Cs[iKF] = C.m_Cam_pose;
     m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_CAMERA;
     m_Ucs[iKF] |= GM_FLAG_FRAME_UPDATE_CAMERA;
     const int im = iKF - (nKFs - m_CsLM.Size());
@@ -2175,28 +2177,30 @@ void GlobalBundleAdjustor::UpdateCameras(const std::vector<GlobalMap::InputCamer
       continue;
     }
     Camera &_C = m_CsLM[im];
-    _C.m_T = C.m_C;
-    _C.m_T.GetPosition(_C.m_p);
+    _C.m_Cam_pose = C.m_Cam_pose;
+    _C.m_Cam_pose.GetPosition(_C.m_p);
     m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
                     GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
   }
 }
-
+//m_Zps储存所有的运动先验,每个运动先验里是g和观测关键帧以及参考关键帧的先验约束,当Zp.m_iKFs.size()为时则只有g和参考关键帧的先验,m_Aps里存储所有先验的所有关键帧
+//step1:将当前新增的运动约束加进m_Zps中,同时m_Aps对应的位置也要扩容成关键帧的数量,将上一次滑窗的参考关键帧设成需要更新旋转,剩下的观测关键帧都设成需要更新pose
+//step2:上次滑窗的参考关键帧,观测关键帧,最老帧所对应的关键帧,这之中的每个关键帧都将他之前的这里面的关键帧push进自己的先验约束中,并构建索引
 void GlobalBundleAdjustor::PushCameraPriorPose(const CameraPrior::Pose &Zp) {
   const int iZp = static_cast<int>(m_Zps.size());
   m_Zps.push_back(Zp);
-  const int N = static_cast<int>(Zp.m_iKFs.size());
+  const int N = static_cast<int>(Zp.m_iKFs.size());//这次运动先验所涉及的观测关键帧(如果最老帧是关键帧时merge给的位姿约束的话,就还有最老帧的KF的id)的个数
   m_Aps.resize(iZp + 1);
   //m_Aps.push_back(CameraPrior::Pose::Factor());
-  m_Aps[iZp].MakeZero(N);
-  m_ucs[Zp.m_iKFr] |= GBA_FLAG_FRAME_UPDATE_CAMERA;
+  m_Aps[iZp].MakeZero(N);//
+  m_ucs[Zp.m_iKFr] |= GBA_FLAG_FRAME_UPDATE_CAMERA;//将参考关键帧设成需要更新
   const int nKFs = static_cast<int>(m_KFs.size()), imr = Zp.m_iKFr - (nKFs - m_CsLM.Size());
   if (imr >= 0) {
-    m_ucmsLM[imr] |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;
+    m_ucmsLM[imr] |= GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;//参考关键帧只更新旋转(因为在滑窗存储参考关键帧pose时,只考虑前后两次滑窗的so3误差)
   }
   const ubyte ucmFlag = GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
-  for (int i = 0; i < N; ++i) {
+  for (int i = 0; i < N; ++i) {//遍历所有具有位姿先验的关键帧id,均设成需要更新位姿
     const int _iKF = Zp.m_iKFs[i];
     m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_CAMERA;
     const int im = _iKF - (nKFs - m_CsLM.Size());
@@ -2204,15 +2208,16 @@ void GlobalBundleAdjustor::PushCameraPriorPose(const CameraPrior::Pose &Zp) {
       m_ucmsLM[im] |= ucmFlag;
     }
   }
+
   for (int i1 = -1; i1 < N; ++i1) {
-    const int iKF1 = i1 == -1 ? Zp.m_iKFr : Zp.m_iKFs[i1];
-    for (int i2 = i1 + 1; i2 < N; ++i2) {
-      const int iKF2 = Zp.m_iKFs[i2];
+    const int iKF1 = i1 == -1 ? Zp.m_iKFr : Zp.m_iKFs[i1];//iKF1初始是前一次滑窗的参考关键帧id
+    for (int i2 = i1 + 1; i2 < N; ++i2) {//遍历所有具有位姿先验的关键帧
+      const int iKF2 = Zp.m_iKFs[i2];//观测参考帧,最后一个是最老帧滑窗对应的关键帧id
       const int _iKF1 = std::min(iKF1, iKF2), _iKF2 = std::max(iKF1, iKF2);
-      KeyFrame &KF = m_KFs[_iKF2];
+      KeyFrame &KF = m_KFs[_iKF2];//靠后的这个关键帧
       const int Nkp = static_cast<int>(KF.m_ikp2KF.size());
-      const int ip = KF.PushCameraPrior(_iKF1, &m_work);
-      if (ip == -1 || static_cast<int>(KF.m_ikp2KF.size()) == Nkp) {
+      const int ip = KF.PushCameraPrior(_iKF1, &m_work);//向靠后的这个关键帧放进靠前的这个关键帧的先验
+      if (ip == -1 || static_cast<int>(KF.m_ikp2KF.size()) == Nkp) {//static_cast<int>(KF.m_ikp2KF.size()) == Nkp应该是恒定满足的吧
         continue;
       }
       for (int jKF = _iKF2; jKF < nKFs; ++jKF) {
@@ -2221,67 +2226,72 @@ void GlobalBundleAdjustor::PushCameraPriorPose(const CameraPrior::Pose &Zp) {
     }
   }
 }
-
+//设置一下先验运动约束
 void GlobalBundleAdjustor::SetCameraPriorMotion(const CameraPriorMotion &Zp) {
   const int nKFs = static_cast<int>(m_KFs.size());
-  if (m_ZpLM.Valid()) {
-    m_ApLM.MakeMinus();
-    m_SAcus[m_ZpLM.m_iKF].Increase3(m_ApLM.m_Arr.m_A, m_ApLM.m_Arr.m_b);
+  if (m_ZpLM.Valid()) {//将老的先验运动约束减去
+    m_ApLM.MakeMinus();//上一次的motion的先验约束减去
+    m_SAcus[m_ZpLM.m_iKF].Increase3(m_ApLM.m_Arr.m_A, m_ApLM.m_Arr.m_b);//R x R 对应的H|-b
     const int im = m_ZpLM.m_iKF - (nKFs - m_CsLM.Size());
-    Camera::Factor::Unitary &SAcm = m_SAcmsLM[im].m_Au;
+    Camera::Factor::Unitary &SAcm = m_SAcmsLM[im].m_Au;//当前这个关键帧的Hcm以及Hmm(对角线上跟运动相关)和-mb部分
     SAcm.m_Acm.Increase3(m_ApLM.m_Arm);
     SAcm.m_Amm += m_ApLM.m_Amm;
   }
-  m_ZpLM = Zp;
+  m_ZpLM = Zp;//替换成新的运动约束,里面有LBA对于这个关键帧的观测
   const int im = m_ZpLM.m_iKF - (nKFs - m_CsLM.Size());
-  m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |
+  m_ucmsLM[im] |= GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |//设置成需要更新motion
                   GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION |
                   GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE;
   m_ApLM.MakeZero();
 }
-
-void GlobalBundleAdjustor::PushFeatureMeasurementMatchesFirst(const FRM::Frame &F,
-                                                              std::vector<int> &iKF2X,
+//处理一下共视之间的关系
+void GlobalBundleAdjustor::PushFeatureMeasurementMatchesFirst(const FRM::Frame &F,/*滑窗中的当前帧*/
+                                                              std::vector<int> &iKF2X,/*存储的是当前帧和关键帧的共视关系*/
                                                               std::vector<int> &iX2z) {
-  int SNx = 0;
-  const int NZ = static_cast<int>(F.m_Zs.size());
-  iKF2X.assign(m_KFs.size(), -1);
-  for (int iZ = 0; iZ < NZ; ++iZ) {
-    const int iKF = F.m_Zs[iZ].m_iKF;
-    iKF2X[iKF] = SNx;
-    SNx += static_cast<int>(m_KFs[iKF].m_xs.size());
-  }
-  iX2z.assign(SNx, -1);
-  for (int iZ = 0; iZ < NZ; ++iZ) {
-    const FRM::Measurement &Z = F.m_Zs[iZ];
-    int *ix2z = iX2z.data() + iKF2X[Z.m_iKF];
-    for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
-      ix2z[F.m_zs[iz].m_ix] = iz;
+    int SNx = 0;
+    const int NZ = static_cast<int>(F.m_Zs.size());//共视关键帧的个数
+    iKF2X.assign(m_KFs.size(), -1);
+    for (int iZ = 0; iZ < NZ; ++iZ) {
+        const int iKF = F.m_Zs[iZ].m_iKF;//当前的共视关键帧id
+        iKF2X[iKF] = SNx;
+        SNx += static_cast<int>(m_KFs[iKF].m_xs.size());//第i个关键帧之前的共视帧有多少个地图点
     }
-  }
+    iX2z.assign(SNx, -1);
+    for (int iZ = 0; iZ < NZ; ++iZ) {
+        const FRM::Measurement &Z = F.m_Zs[iZ];
+        int *ix2z = iX2z.data() + iKF2X[Z.m_iKF];//跳转到这个关键帧的首个地图点
+        for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {//如果这个地图点被观测到,就记录这个地图点在m_zs存储的起始位置
+            ix2z[F.m_zs[iz].m_ix] = iz;
+        }
+    }
 }
 
-void GlobalBundleAdjustor::PushFeatureMeasurementMatchesNext(const FRM::Frame &F1,
-                                                             const FRM::Frame &F2, const std::vector<int> &iKF2X, const std::vector<int> &iX2z2,
+//将F1和F2之间的共视信息进行关联,都观测到了同一个点就存储下来,m_iz1是F1对这个地图点的观测索引,m_iz2是F1对这个地图点的观测索引
+//将观测的匹配信息加入Zm中,并进行相关H矩阵的扩容
+void GlobalBundleAdjustor::PushFeatureMeasurementMatchesNext(const FRM::Frame &F1,/*共视关键帧*/
+                                                            const FRM::Frame &F2,/*当前关键帧*/
+                                                            const std::vector<int> &iKF2X,/*[i]表示第i个关键帧之前的F2帧观测了多少个地图点*/
+                                                            const std::vector<int> &iX2z2,/*共视帧的地图点被观测到,就记录这个地图点在m_zs存储的起始位置*/
                                                              FRM::MeasurementMatch &Zm) {
   m_izmsTmp.resize(0);
-  const int NZ1 = static_cast<int>(F1.m_Zs.size());
-  for (int iZ1 = 0; iZ1 < NZ1; ++iZ1) {
-    const FRM::Measurement &Z1 = F1.m_Zs[iZ1];
+  const int NZ1 = static_cast<int>(F1.m_Zs.size());//共视关键帧的共视关键帧数量
+  for (int iZ1 = 0; iZ1 < NZ1; ++iZ1) {//遍历共视关键帧对于关键帧M的观测
+    const FRM::Measurement &Z1 = F1.m_Zs[iZ1];//共视关键帧对某一个关键帧的观测
     const int iX = iKF2X[Z1.m_iKF];
-    if (iX == -1) {
+    if (iX == -1) {//如果F2没有观测到这个关键帧M就跳过
       continue;
     }
     const int *ix2z2 = iX2z2.data() + iX;
-    const int iz11 = Z1.m_iz1, iz12 = Z1.m_iz2;
+    const int iz11 = Z1.m_iz1, iz12 = Z1.m_iz2;//F1对于这个M中地图点观测的索引范围
     for (int iz1 = iz11; iz1 < iz12; ++iz1) {
       const int iz2 = ix2z2[F1.m_zs[iz1].m_ix];
-      if (iz2 != -1) {
-        m_izmsTmp.push_back(FTR::Measurement::Match(iz1, iz2));
+      if (iz2 != -1) {//如果F2没有观测到这个点就跳过
+        m_izmsTmp.push_back(FTR::Measurement::Match(iz1, iz2));//都观测到了同一个点就存储下来,m_iz1是F1对这个地图
+        // 点的观测索引,m_iz2是F1对这个地图点的观测索引
       }
     }
   }
-  Zm.PushFeatureMeasurementMatches(m_izmsTmp);
+  Zm.PushFeatureMeasurementMatches(m_izmsTmp);//将观测信息加入Zm中,并进行相关H矩阵的扩容
 }
 
 int GlobalBundleAdjustor::CountMeasurementsFrame() {

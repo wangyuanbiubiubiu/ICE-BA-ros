@@ -484,7 +484,7 @@ bool AlgorithmParam::WriteToCvYaml(const std::string& filename) {
 DuoCalibParam::DuoCalibParam() :
     C_R_B(Eigen::Matrix3f::Identity()),
     C_p_B(Eigen::Vector3f::Zero()),
-    device_id("n/a"),
+    device_id("n/acc"),
     sensor_type(SensorType::UNKNOWN) {
   this->Camera.D_T_C_lr.resize(2, Eigen::Matrix4f::Identity());
   this->Camera.cameraK_lr.resize(2, Eigen::Matrix3f::Identity());
@@ -832,31 +832,41 @@ bool DuoCalibParam::WriteToYaml(const std::string& filename) {
 bool DuoCalibParam::initUndistortMap(const cv::Size& new_img_size) {
   // compute the boundary of images in uv coordinate
   this->Camera.lurd_lr.resize(2);
-  for (int lr = 0; lr < 2; ++lr) {
-    std::vector<cv::Point2f> lurd(4);
-    lurd[0].x = 0;
-    lurd[0].y = this->Camera.img_size.height / 2;
-    lurd[1].x = this->Camera.img_size.width / 2;
-    lurd[1].y = 0;
-    lurd[2].x = this->Camera.img_size.width;
-    lurd[2].y = this->Camera.img_size.height / 2;
-    lurd[3].x = this->Camera.img_size.width / 2;
-    lurd[3].y = this->Camera.img_size.height;
-    std::vector<cv::Point2f> lurd_undistort(4);
-    cv::undistortPoints(lurd, lurd_undistort,
-                        this->Camera.cv_camK_lr[lr],
-                        this->Camera.cv_dist_coeff_lr[lr]);
-    this->Camera.lurd_lr[lr][0] = lurd_undistort[0].x;
-    this->Camera.lurd_lr[lr][1] = lurd_undistort[1].y;
-    this->Camera.lurd_lr[lr][2] = lurd_undistort[2].x;
-    this->Camera.lurd_lr[lr][3] = lurd_undistort[3].y;
+  //遍历左右相机
+  for (int lr = 0; lr < 2; ++lr)
+  {
+      std::vector<cv::Point2f> lurd(4);
+      //图像左边缘中心点
+      lurd[0].x = 0;
+      lurd[0].y = this->Camera.img_size.height / 2;
+      //图像上边缘中心点
+      lurd[1].x = this->Camera.img_size.width / 2;
+      lurd[1].y = 0;
+      //图像右边缘中心点
+      lurd[2].x = this->Camera.img_size.width;
+      lurd[2].y = this->Camera.img_size.height / 2;
+      //图像下边缘中心点
+      lurd[3].x = this->Camera.img_size.width / 2;
+      lurd[3].y = this->Camera.img_size.height;
+      std::vector<cv::Point2f> lurd_undistort(4);
+      //去畸变
+      cv::undistortPoints(lurd, lurd_undistort,
+                          this->Camera.cv_camK_lr[lr],
+                          this->Camera.cv_dist_coeff_lr[lr]);
+      this->Camera.lurd_lr[lr][0] = lurd_undistort[0].x;
+      this->Camera.lurd_lr[lr][1] = lurd_undistort[1].y;
+      this->Camera.lurd_lr[lr][2] = lurd_undistort[2].x;
+      this->Camera.lurd_lr[lr][3] = lurd_undistort[3].y;
   }
   this->Camera.undistort_map_op1_lr.resize(2);
   this->Camera.undistort_map_op2_lr.resize(2);
+  //左右目的校正变换矩阵
   vector<cv::Mat> R(2);
+  //左右目在新的映射下的投影矩阵
   vector<cv::Mat> P(2);
-  Matrix4f C0_T_C1 = this->Camera.D_T_C_lr[0].inverse() * this->Camera.D_T_C_lr[1];
-  Matrix4f C1_T_C0 = C0_T_C1.inverse();
+  Matrix4f C0_T_C1 = this->Camera.D_T_C_lr[0].inverse() * this->Camera.D_T_C_lr[1];//Tc0c1
+  Matrix4f C1_T_C0 = C0_T_C1.inverse();//Tc1c0
+  //cv形式为了立体矫正
   cv::Mat C0_R_C1(3, 3, CV_64F);
   cv::Mat C1_R_C0(3, 3, CV_64F);
   cv::Mat C1_t_C0(3, 1, CV_64F);
@@ -870,6 +880,7 @@ bool DuoCalibParam::initUndistortMap(const cv::Size& new_img_size) {
     C1_t_C0.at<double>(i, 0) = C1_T_C0(i, 3);
   }
   cv::Matx44d Q;
+  //立体矫正
   cv::stereoRectify(this->Camera.cv_camK_lr[0],
                     this->Camera.cv_dist_coeff_lr[0],
                     this->Camera.cv_camK_lr[1],
@@ -879,10 +890,15 @@ bool DuoCalibParam::initUndistortMap(const cv::Size& new_img_size) {
                     R[0], R[1],
                     P[0], P[1],
                     Q, cv::CALIB_ZERO_DISPARITY, 0, new_img_size);
+  //设置一下视差-深度映射矩阵
   this->Camera.Q = cv::Matx44f(Q);
   this->Camera.cv_undist_K_lr.resize(2);
   this->Camera.undist_D_T_C_lr.resize(2);
-  for (int lr = 0; lr < 2; lr++) {
+
+  //设置左右两目畸变矫正后的映射,以及设置新的内参,外参
+  for (int lr = 0; lr < 2; lr++)
+  {
+      //新的内参
     cv::Mat newK(3, 3, CV_32F);
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j) {
@@ -906,16 +922,19 @@ bool DuoCalibParam::initUndistortMap(const cv::Size& new_img_size) {
   // In undist_D_T_C_lr, we assume D_T_C_l is identity, which means,
   // the device {D} is *moved* to the new C_l (R[0] is actually Cl_new_R_Cl)
   // Therefore, D_T_I needs to be adjusted as well to undist_D_T_I.
+  //这里设备坐标系被移动到了新的双目矫正后的坐标系下,所以需要重新计算tdc1
   cv::Mat new_C0_t_C1 = R[0] * C0_t_C1;
   this->Camera.undist_D_T_C_lr[1](0, 3) = new_C0_t_C1.at<double>(0);
   this->Camera.undist_D_T_C_lr[1](1, 3) = new_C0_t_C1.at<double>(1);
   this->Camera.undist_D_T_C_lr[1](2, 3) = new_C0_t_C1.at<double>(2);
+  //旧的设备坐标系到新的设备坐标系下的变换
   Eigen::Matrix4f new_D_T_D = Eigen::Matrix4f::Identity();
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
       new_D_T_D(i, j) = static_cast<float>(R[0].at<double>(i, j));
     }
   }
+  //设置一下新的imu到设备坐标系的变换
   this->Imu.undist_D_T_I = new_D_T_D * this->Imu.D_T_I;
   return true;
 }
@@ -962,6 +981,8 @@ bool load_imu_calib_param(const std::string& device_id,
   }
   return duo_calib_param_ptr->LoadFromYaml(calib_file);
 }
+
+//读取相机以及imu的参数,同时对双目做畸变矫正,去畸变映射
 bool load_camera_calib_param(const std::string& calib_file,
                              DuoCalibParam* duo_calib_param_ptr) {
   cv::FileStorage calib_fs(calib_file, cv::FileStorage::READ);
@@ -1038,6 +1059,7 @@ bool load_camera_calib_param(const std::string& calib_file,
     calib_fs["img_size"] >> duo_calib_param.Camera.img_size;
   }
   // generate undistort map
+  //双目矫正&&去畸变映射
   CHECK(duo_calib_param.initUndistortMap(duo_calib_param.Camera.img_size));
   return true;
 }

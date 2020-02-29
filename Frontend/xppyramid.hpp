@@ -41,17 +41,17 @@ typedef struct _interpolation_param {
 
 // only works for win_size(7, 7)
 typedef struct _XPKeyPointRepo {
-  int16_t patch[52];  // image patch storage
-  float covariance_maxtrix[6];  // covariance matrix
-  int16_t xy_gradient[128];  // xy gradient
+  int16_t patch[52];  //7*7窗口的patch image patch storage
+  float covariance_maxtrix[6];  //协方差 covariance matrix
+  int16_t xy_gradient[128];  //xy方向梯度 xy gradient
 } XPKeyPointRepo;
-
+//最大4层金字塔
 typedef struct _XPKeyPointPyramidRepo {
   XPKeyPointRepo pyramids[4];
 } XPKeyPointPyramidRepo;
 
 
-static boost::object_pool<XPKeyPointPyramidRepo> g_xp_of_tracker_pool;
+static boost::object_pool<XPKeyPointPyramidRepo> g_xp_of_tracker_pool;//全局的对象内存池
 struct XPKeyPoint : public cv::KeyPoint {
   XPKeyPoint() {
     this->pt.x = 0.f;
@@ -96,13 +96,13 @@ struct XPKeyPoint : public cv::KeyPoint {
   // call this function to allocate memory for the patch of this keypoint,
   // if the patch of keypoint has already allocated, this function will not
   // reallocate memory.
-  void allocate() {
-    if (keypoint_repo) {
+  void allocate() {//给patch分配内存
+    if (keypoint_repo) {//如果已经分配过内存了，那么就不用再分配内存了
       return;
     }
     keypoint_repo = std::shared_ptr<XPKeyPointPyramidRepo>(
-        g_xp_of_tracker_pool.malloc(),
-        [](XPKeyPointPyramidRepo* ptr) {
+        g_xp_of_tracker_pool.malloc(),//分配内存
+        [](XPKeyPointPyramidRepo* ptr) {//指定删除器
           g_xp_of_tracker_pool.free(ptr);});
   }
   // repository of keypoint, the memory here is automaticcally handled

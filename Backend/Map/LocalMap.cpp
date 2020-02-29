@@ -35,18 +35,18 @@ void LocalMap::IBA_PushLocalFrame(const CameraLF &C) {
   m_CsLF.push_back(C);
   MT_WRITE_LOCK_END(m_MT, C.m_iFrm, MT_TASK_LM_IBA_PushLocalFrame);
 }
-
+//向局部地图中m_CsKF增加相机关键帧状态,以及m_iKF2d地图点历史数量的更新等
 void LocalMap::IBA_PushKeyFrame(const GlobalMap::InputKeyFrame &KF) {
   MT_WRITE_LOCK_BEGIN(m_MT, KF.m_T.m_iFrm, MT_TASK_LM_IBA_PushKeyFrame);
-  m_CsKF.push_back(CameraKF(KF.m_C.m_T, KF.m_T.m_iFrm));
+  m_CsKF.push_back(CameraKF(KF.m_Cam_state.m_Cam_pose, KF.m_T.m_iFrm));
   const int nKFs = static_cast<int>(m_iKF2d.size());
-  m_iKF2d.push_back(m_iKF2d.back());
-  const int NX = static_cast<int>(KF.m_Xs.size());
+  m_iKF2d.push_back(m_iKF2d.back());//和PushKeyFrame基本是差不多的
+  const int NX = static_cast<int>(KF.m_Xs.size());//当前关键帧的新地图点数量
   for (int iX1 = 0, iX2 = 0; iX1 < NX; iX1 = iX2) {
-    const int iKF = KF.m_Xs[iX1].m_iKF;
+    const int iKF = KF.m_Xs[iX1].m_iKF;//帧id
     for (iX2 = iX1 + 1; iX2 < NX && KF.m_Xs[iX2].m_iKF == iKF; ++iX2) {}
     const int id = m_iKF2d[iKF + 1], Nx = iX2 - iX1;
-    for (int jKF = iKF + 1; jKF <= nKFs; ++jKF) {
+    for (int jKF = iKF + 1; jKF <= nKFs; ++jKF) {//截至到后一帧来之前总的地图点数量
       m_iKF2d[jKF] += Nx;
     }
     m_ds.insert(m_ds.begin() + id, Nx, Depth::InverseGaussian());
@@ -73,7 +73,7 @@ void LocalMap::IBA_DeleteKeyFrame(const int iFrm, const int iKF) {
   m_uds.erase(m_uds.begin() + id1, m_uds.begin() + id2);
   MT_WRITE_LOCK_END(m_MT, iFrm, MT_TASK_LM_IBA_DeleteKeyFrame);
 }
-
+//和LBA中数据同步,用来获得LBA中的滑窗中的相机状态,关键帧的相机状态以及所有的地图点
 ubyte LocalMap::IBA_Synchronize(const int iFrm, std::list<CameraLF> &CsLF,
                                 std::vector<CameraKF> &CsKF,
                                 std::vector<Depth::InverseGaussian> &ds,
@@ -82,7 +82,8 @@ ubyte LocalMap::IBA_Synchronize(const int iFrm, std::list<CameraLF> &CsLF,
   MT_WRITE_LOCK_BEGIN(m_MT, iFrm, MT_TASK_LM_IBA_Synchronize);
   if (m_Uc) {
     if (m_Uc & LM_FLAG_FRAME_UPDATE_CAMERA_LF) {
-      CsLF = m_CsLF;
+
+        CsLF = m_CsLF;//获取滑窗中的所有相机状态
       for (std::list<CameraLF>::iterator C = m_CsLF.begin(); C != m_CsLF.end(); ++C) {
         C->m_uc = LM_FLAG_FRAME_DEFAULT;
       }
@@ -96,10 +97,11 @@ ubyte LocalMap::IBA_Synchronize(const int iFrm, std::list<CameraLF> &CsLF,
       UT_ASSERT(static_cast<int>(CsKF.size()) == nKFs && ds.size() == m_ds.size());
 #endif
       if (ud) {
-        m_uds.swap(uds);
+
+          m_uds.swap(uds);
         m_uds.assign(uds.size(), LM_FLAG_TRACK_DEFAULT);
       }
-      for (int iKF = 0; iKF < nKFs; ++iKF) {
+      for (int iKF = 0; iKF < nKFs; ++iKF) {//获得LBA中的所有关键帧和对应的地图点
         CameraKF &C1 = m_CsKF[iKF];
         if (C1.m_uc == LM_FLAG_FRAME_DEFAULT) {
           continue;
@@ -109,13 +111,14 @@ ubyte LocalMap::IBA_Synchronize(const int iFrm, std::list<CameraLF> &CsLF,
         UT_ASSERT(C1.m_iFrm == C2.m_iFrm);
 #endif
         if (C1.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) {
-          C2.m_C = C1.m_C;
+          C2.m_Cam_pose = C1.m_Cam_pose;
 #ifdef CFG_CHECK_REPROJECTION
           C2.m_e = C1.m_e;
 #endif
         }
         if (C1.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
-          const int id1 = m_iKF2d[iKF], id2 = m_iKF2d[iKF + 1], Nx = id2 - id1;
+
+            const int id1 = m_iKF2d[iKF], id2 = m_iKF2d[iKF + 1], Nx = id2 - id1;
           memcpy(ds.data() + id1, m_ds.data() + id1, sizeof(Depth::InverseGaussian) * Nx);
         }
         C2.m_uc = C1.m_uc;
@@ -127,32 +130,38 @@ ubyte LocalMap::IBA_Synchronize(const int iFrm, std::list<CameraLF> &CsLF,
   return Uc;
 }
 
-void LocalMap::LBA_Update(const int iFrm1, const int iFrm2, const std::vector<int> &ic2LF,
-                          const AlignedVector<Camera> &CsLF, const std::vector<ubyte> &ucsLF,
-                          const std::vector<int> &iFrmsKF, const AlignedVector<Rigid3D> &CsKF,
-                          const std::vector<ubyte> &ucsKF, const std::vector<int> &iKF2d,
-                          const std::vector<Depth::InverseGaussian> &ds,
-                          const std::vector<ubyte> &uds
+void LocalMap::LBA_Update(const int iFrm1/*滑窗中最老的帧的全局帧id*/, const int iFrm2/*滑窗中最新的帧的全局帧id*/,
+        const std::vector<int> &ic2LF/*ic,kf索引*/,const AlignedVector<Camera> &CsLF/*滑窗内的相机状态*/,
+        const std::vector<ubyte> &ucsLF,/*局部地图普通帧是否更新*/const std::vector<int> &iFrmsKF,/*关键帧对应的普通帧id,下标是关键帧索引,值是普通帧索引*/
+        const AlignedVector<Rigid3D> &CsKF,/*关键帧左相机位姿*/
+                  const std::vector<ubyte> &ucsKF/*局部地图关键帧是否更新*/, const std::vector<int> &iKF2d,/*kf和地图点之间的索引*/
+                  const std::vector<Depth::InverseGaussian> &ds,/*所有地图点*/
+                  const std::vector<ubyte> &uds/*地图点是否要更新*/
 #ifdef CFG_CHECK_REPROJECTION
-                        , const std::vector<std::pair<float, float> > &esLF,
-                          const std::vector<std::pair<float, float> > &esKF
+                        , const std::vector<std::pair<float, float> > &esLF,/*滑窗帧和共视的关键帧之间的重投影误差*/
+                          const std::vector<std::pair<float, float> > &esKF/*所有的关键帧的地图点的平均重投影误差还有与它共视的关键帧之间的重投影误差*/
 #endif
-                        ) {
+                        )
+{
   MT_WRITE_LOCK_BEGIN(m_MT, iFrm2, MT_TASK_LM_LBA_Update);
   const int nLFs = CsLF.Size();
 #ifdef CFG_DEBUG
   UT_ASSERT(static_cast<int>(m_CsLF.size()) >= nLFs);
 #endif
-  while (m_CsLF.front().m_iFrm != iFrm1) {
+  while (m_CsLF.front().m_iFrm != iFrm1) //将m_CsLF不在滑窗中的帧弹出
+  {
     m_CsLF.pop_front();
   }
 #ifdef CFG_DEBUG
   UT_ASSERT(static_cast<int>(m_CsLF.size()) >= nLFs);
 #endif
+  //更新m_CsLF中存储的滑窗中的相机pose,是否更新了的flags
   std::list<CameraLF>::iterator C = m_CsLF.begin();
-  for (int ic = 0; ic < nLFs; ++ic, ++C) {
+  for (int ic = 0; ic < nLFs; ++ic, ++C)
+  {
     const int iLF = ic2LF[ic];
-    if (!ucsLF[iLF]) {
+    if (!ucsLF[iLF]) //如果这帧不需要更新就跳过
+    {
       continue;
     }
     C->m_C = CsLF[iLF];
@@ -162,24 +171,31 @@ void LocalMap::LBA_Update(const int iFrm1, const int iFrm2, const std::vector<in
     C->m_e = esLF[iLF];
 #endif
   }
+   //更新m_CsKF中存储的相机pose,以及地图点逆深度,是否更新了的flags
   std::vector<CameraKF>::iterator i = m_CsKF.begin();
   const int nKFs = CsKF.Size();
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const ubyte uc = ucsKF[iKF];
-    if (!uc) {
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {
+    const ubyte uc = ucsKF[iKF]; //如果这个关键帧不需要更新就跳过
+    if (!uc)
+    {
       continue;
     }
     const int iFrm = iFrmsKF[iKF];
     i = std::lower_bound(i, m_CsKF.end(), iFrm);
-    if (i == m_CsKF.end()) {
+    if (i == m_CsKF.end())
+    {
       break;
-    } else if (i->m_iFrm != iFrm) {
+    } else if (i->m_iFrm != iFrm)
+    {
       continue;
     }
-    if (uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) {
-      i->m_C = CsKF[iKF];
+    if (uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF)
+    {
+      i->m_Cam_pose = CsKF[iKF];
     }
-    if (uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
+    if (uc & LM_FLAG_FRAME_UPDATE_DEPTH)
+    {//更新地图点的深度
       const int _iKF = static_cast<int>(i - m_CsKF.begin());
       const int id1 = iKF2d[iKF], id2 = iKF2d[iKF + 1], Nx = id2 - id1;
       const int _id1 = m_iKF2d[_iKF], _id2 = m_iKF2d[_iKF + 1];
@@ -189,7 +205,8 @@ void LocalMap::LBA_Update(const int iFrm1, const int iFrm2, const std::vector<in
       memcpy(m_ds.data() + _id1, ds.data() + id1, sizeof(Depth::InverseGaussian) * Nx);
       const ubyte *uds1 = uds.data() + id1;
       ubyte *uds2 = m_uds.data() + _id1;
-      for (int ix = 0; ix < Nx; ++ix) {
+      for (int ix = 0; ix < Nx; ++ix)
+      {
         uds2[ix] |= uds1[ix];
       }
     }
@@ -241,7 +258,7 @@ void LocalMap::AssertConsistency() {
   const int nKFs = static_cast<int>(m_CsKF.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const CameraKF &C = m_CsKF[iKF];
-    C.m_C.AssertOrthogonal();
+    C.m_Cam_pose.AssertOrthogonal();
     Uc |= C.m_uc;
   }
   UT_ASSERT(m_Uc == Uc);

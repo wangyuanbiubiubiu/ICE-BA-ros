@@ -26,11 +26,11 @@
 
 #define LM_FLAG_TRACK_DEFAULT       0
 #define LM_FLAG_TRACK_UPDATE_DEPTH  1
-
+//局部地图
 class LocalMap {
 
  public:
-
+//局部帧的一个类
   class CameraLF {
    public:
     inline CameraLF() {}
@@ -43,13 +43,13 @@ class LocalMap {
     inline bool operator < (const int iFrm) const { return m_iFrm < iFrm; }
    public:
     Camera m_C;
-    int m_iFrm;
+    int m_iFrm;//帧id
     ubyte m_uc;
 #ifdef CFG_CHECK_REPROJECTION
-    std::pair<float, float> m_e;
+    std::pair<float, float> m_e;//残差
 #endif
   };
-
+//关键帧相机状态
   class CameraKF : public GlobalMap::Camera {
    public:
     inline CameraKF() : GlobalMap::Camera() {}
@@ -61,7 +61,7 @@ class LocalMap {
     }
    public:
 #ifdef CFG_CHECK_REPROJECTION
-    std::pair<float, float> m_e;
+    std::pair<float, float> m_e;//关键帧中地图点的重投影误差
 #endif
   };
 
@@ -90,13 +90,13 @@ class LocalMap {
 
  protected:
 
-  std::list<CameraLF> m_CsLF;
-  std::vector<CameraKF> m_CsKF;
-  std::vector<Depth::InverseGaussian> m_ds;
-  std::vector<int> m_iKF2d;
-  ubyte m_Uc;
+  std::list<CameraLF> m_CsLF;//存着滑窗内所有局部相机状态
+  std::vector<CameraKF> m_CsKF;//所有的关键帧相机状态
+  std::vector<Depth::InverseGaussian> m_ds;//所有地图点对应的逆深度
+  std::vector<int> m_iKF2d;//记录的是这个关键帧来之前所有的关键帧数量,比如[1]=70，意思就是第1帧来之前有70个特征点
+  ubyte m_Uc;//是否有滑窗中的帧更新了
   std::vector<ubyte> m_uds;
-  boost::shared_mutex m_MT;
+  boost::shared_mutex m_MT;//读写锁
 
 };
 

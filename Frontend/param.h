@@ -78,6 +78,7 @@ class AlgorithmParam : public ParamBase {
   } Tracking;
 };
 
+//内外参
 class DuoCalibParam : public ParamBase {
  public:
   DuoCalibParam();
@@ -95,28 +96,32 @@ class DuoCalibParam : public ParamBase {
 
   struct Imu_t {
     Eigen::Matrix3f accel_TK;
-    Eigen::Vector3f accel_bias;
+    Eigen::Vector3f accel_bias;//加速度偏置
     Eigen::Matrix3f gyro_TK;
-    Eigen::Vector3f gyro_bias;
+    Eigen::Vector3f gyro_bias;//陀螺仪偏置
     Eigen::Vector3f accel_noise_var;  // m / sec^2
     Eigen::Vector3f angv_noise_var;  // rad / sec
-    Eigen::Matrix4f D_T_I;
-    Eigen::Matrix4f undist_D_T_I;
+    Eigen::Matrix4f D_T_I;//imu到设备系的变换
+    Eigen::Matrix4f undist_D_T_I;//立体矫正后imu到设备坐标系下的变换
   } Imu;
 
+  //双目相机的标定参数
   struct Camera_t {
+      //左右相机到设备坐标系的变换,即Tdc0,Tdc1,设备坐标系固连于左相机坐标系
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> D_T_C_lr;
-    std::vector<Eigen::Matrix3f, Eigen::aligned_allocator<Eigen::Matrix3f>> cameraK_lr;
-    std::vector<cv::Matx33f> cv_camK_lr;
-    std::vector<cv::Mat_<float>> cv_dist_coeff_lr;
+    std::vector<Eigen::Matrix3f, Eigen::aligned_allocator<Eigen::Matrix3f>> cameraK_lr;//eigen形式的左右相机内参
+    std::vector<cv::Matx33f> cv_camK_lr;//cv形式的左右相机内参
+    std::vector<cv::Mat_<float>> cv_dist_coeff_lr;//左右相机的畸变参数
     // the boundary of images in uv coordinate
+    //分别是左右相机的边界,顺序是左x上y右x下y
     std::vector<Eigen::Vector4f, Eigen::aligned_allocator<Eigen::Vector4f>> lurd_lr;
+    //双目立体矫正去畸变后的x,y的映射
     std::vector<cv::Mat> undistort_map_op1_lr;
     std::vector<cv::Mat> undistort_map_op2_lr;
-    std::vector<cv::Matx33f> cv_undist_K_lr;
-    std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> undist_D_T_C_lr;
-    cv::Matx44f Q;  // 4x4 convert disparity to depth. See cv::reprojectImageTo3D
-    cv::Size img_size;
+    std::vector<cv::Matx33f> cv_undist_K_lr;//双目矫正后的新的内参
+    std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> undist_D_T_C_lr;//立体矫正后的双目到设备坐标系的变换,一样是设备坐标系固连在左相机上
+    cv::Matx44f Q;  // //视差深度映射矩阵4x4 convert disparity to depth. See cv::reprojectImageTo3D
+    cv::Size img_size;//图像大小
   } Camera;
 
   Eigen::Matrix3f C_R_B;

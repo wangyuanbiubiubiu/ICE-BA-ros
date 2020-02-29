@@ -429,7 +429,7 @@ template<typename TYPE> class SymmetricMatrix9x9 {
   }
   // TODO(yanghongtian) : update comments here for this function.
   static inline void ABTTo00(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
-                             SymmetricMatrix9x9<TYPE> &ABT) {
+                             SymmetricMatrix9x9<TYPE> &ABT) {//只算上三角
     ABT.m00() = (A.m_00_01_02_r0() * B.m_00_01_02_r0()).vsum_012();
     ABT.m01() = (A.m_00_01_02_r0() * B.m_10_11_12_r1()).vsum_012();
     ABT.m02() = (A.m_00_01_02_r0() * B.m_20_21_22_r2()).vsum_012();
@@ -449,7 +449,7 @@ template<typename TYPE> class SymmetricMatrix9x9 {
     ABT.m24() = (A.m_20_21_22_r2() * B.m_10_11_12_r1()).vsum_012();
     ABT.m25() = (A.m_20_21_22_r2() * B.m_20_21_22_r2()).vsum_012();
   }
-  // this is confusing too, A * BT is not promised to be a symmetrix matrix.
+  // this is confusing too, A * BT is not promised to be acc symmetrix matrix.
   static inline void ABTTo33(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
                              SymmetricMatrix9x9<TYPE> &ABT) {
     ABT.m33() = (A.m_00_01_02_r0() * B.m_00_01_02_r0()).vsum_012();

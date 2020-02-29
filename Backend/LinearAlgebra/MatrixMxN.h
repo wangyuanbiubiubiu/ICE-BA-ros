@@ -166,7 +166,7 @@ class SIMD_ALIGN_DECLSPEC AlignedMatrixMxNf {
     UT_ASSERT(i >= 0 && i + 3 <= M);
     UT_ASSERT(j >= 0 && j + 3 <= N);
 #endif
-    memcpy(&B.m00(), m_rows[i].m_data + j, 12);
+    memcpy(&B.m00(), m_rows[i].m_data + j, 12);//float的话对应3列
     memcpy(&B.m10(), m_rows[i + 1].m_data + j, 12);
     memcpy(&B.m20(), m_rows[i + 2].m_data + j, 12);
   }
@@ -648,11 +648,11 @@ class SIMD_ALIGN_DECLSPEC AlignedMatrix7x8f : public AlignedMatrixMxNf<7, 8> {
  public:
   inline void Get(float &M00, Vector6f &M01, float &M02, SymmetricMatrix6x6f &M11,
                   Vector6f &M12) const {
-    M00 = m_rows[0][0];
-    memcpy(M01, m_rows[0] + 1, 24);
-    M02 = m_rows[0][7];
-    GetBlockDiagonal(1, M11);
-    GetBlock(1, 7, M12);
+    M00 = m_rows[0][0];//获取左上角1×1的矩阵块，这个就是逆深度和逆深度的H
+    memcpy(M01, m_rows[0] + 1, 24);//获取block<1,6>(0,1)的矩阵块 逆深度和普通帧pose的H
+    M02 = m_rows[0][7];//获取block<1,1>(0,7)的逆深度的-b
+    GetBlockDiagonal(1, M11);//获取block<6,6>(1,1)的矩阵块,这个就是普通帧pose和普通帧pose的H
+    GetBlock(1, 7, M12);//获取block<6,1>(1,7)的普通帧pose的-b
   }
   static inline void ATBToUpper(const AlignedMatrix2x7f &A, const AlignedMatrix2x8f &B,
                                 AlignedMatrix7x8f &ATB) {
@@ -1157,15 +1157,15 @@ class SIMD_ALIGN_DECLSPEC AlignedMatrix13x14f : public AlignedMatrixMxNf<13, 14>
   inline void Get(float &M00, Vector6f &M01, Vector6f &M02, float &M03, SymmetricMatrix6x6f &M11,
                   AlignedMatrix6x6f &M12, Vector6f &M13,
                   SymmetricMatrix6x6f &M22, Vector6f &M23) const {
-    M00 = m_rows[0][0];
-    memcpy(M01, m_rows[0] + 1, 24);
-    memcpy(M02, m_rows[0] + 7, 24);
-    M03 = m_rows[0][13];
-    GetBlockDiagonal(1, M11);
-    GetBlock(1, 7, M12);
-    GetBlock(1, 13, M13);
-    GetBlockDiagonal(7, M22);
-    GetBlock(7, 13, M23);
+    M00 = m_rows[0][0];//逆深度x逆深度
+    memcpy(M01, m_rows[0] + 1, 24);//逆深度 x 投影前pose
+    memcpy(M02, m_rows[0] + 7, 24);//逆深度 x 投影后pose
+    M03 = m_rows[0][13];//逆深度的-b
+    GetBlockDiagonal(1, M11);//投影前pose x 投影前pose
+    GetBlock(1, 7, M12);//投影前pose x 投影后pose
+    GetBlock(1, 13, M13);//投影前pose的-b
+    GetBlockDiagonal(7, M22);//投影后pose x 投影后pose
+    GetBlock(7, 13, M23);//投影后pose的-b
   }
 
   static inline void AddATBToUpper(const AlignedMatrix2x13f &A, const AlignedMatrix2x14f &B,
@@ -3240,16 +3240,16 @@ class AlignedMatrixXd : public AlignedMatrixX<double> {
       Invalidate();
       return false;
     }
-  }
+  }//_A.block(i,i)(N,N)这个矩阵块是某个状态在H中的对角部分,要merge这个状态
   inline bool MarginalizeLDL(const int i, const int N, AlignedVectorXd &b,
                              AlignedVectorXd *work, const double *eps = NULL) {
 #ifdef CFG_DEBUG
     UT_ASSERT(m_Nr == m_Nc);
 #endif
     work->Resize(m_Nc);
-    const bool scc = LS::MarginalizeLDL(m_Nr, m_rows.data(), b.Data(), i, N, work->Data(), eps);
-    Erase(i, N);
-    b.Erase(i, N);
+    const bool scc = LS::MarginalizeLDL(m_Nr, m_rows.data(), b.Data(), i, N, work->Data(), eps);//mergeH|b中这个状态,就是舒尔补的矩阵操作
+    Erase(i, N);//边缘化以后把这个状态对应的行列删除,后面的状态整体前移
+    b.Erase(i, N);//b也是删除了以后,后面的状态整体前移
     return scc;
   }
   inline void Print(const bool e = false) const {
@@ -3918,14 +3918,16 @@ class EigenMatrixX : public Eigen::Matrix<TYPE, Eigen::Dynamic, Eigen::Dynamic, 
     e_M.block(0, j, Nr, Nc3) = this->block(0, j + Nc, Nr, Nc3);
     this->swap(e_M);
   }
-  inline void Marginalize(const int i, const int Ni, const TYPE *eps = NULL, const bool erase = true,
+  //要边缘化this->block(i, i, Ni, Ni)这个所对应的变量
+  inline void Marginalize(const int i,/*2*/ const int Ni/*9*/, const TYPE *eps = NULL, const bool erase = true,
                           const bool upperLeft = true, const bool zero = false) {
-    const int Nr = GetRows(), Nc = GetColumns();
-    const int j = i + Ni, N1 = i, N2r = Nr - i - Ni, N2c = Nc - j;
+    const int Nr = GetRows()/*26*/, Nc = GetColumns();/*27*/
+    const int j = i + Ni/*11*/, N1 = i/*2*/, N2r = Nr - i - Ni/*15*/, N2c = Nc - j/*16*/;
     const EigenMatrixX<TYPE> e_Aii = EigenMatrixX<TYPE>(this->block(i, i, Ni, Ni));
     //const EigenMatrixX<TYPE> e_Mii = EigenMatrixX<TYPE>(e_Aii.inverse()); {
     EigenMatrixX<TYPE> e_Mii = e_Aii;
-    if (e_Mii.InverseLDL(eps)) {
+    if (e_Mii.InverseLDL(eps))
+    {
       const EigenMatrixX<TYPE> e_Ai1 = EigenMatrixX<TYPE>(this->block(i, 0, Ni, N1));
       const EigenMatrixX<TYPE> e_Ai2 = EigenMatrixX<TYPE>(this->block(i, j, Ni, N2c));
       const EigenMatrixX<TYPE> e_Mi1 = EigenMatrixX<TYPE>(e_Mii * e_Ai1);
@@ -3936,20 +3938,20 @@ class EigenMatrixX : public Eigen::Matrix<TYPE, Eigen::Dynamic, Eigen::Dynamic, 
       const EigenMatrixX<TYPE> e_M1i = EigenMatrixX<TYPE>(e_A1i * e_Mii);
       const EigenMatrixX<TYPE> e_M2i = EigenMatrixX<TYPE>(e_A2i * e_Mii);
       if (upperLeft) {
-        this->block(0, 0, N1, N1) -= e_A1i * e_Mi1;
-        this->block(0, j, N1, N2c) -= e_A1i * e_Mi2;
+        this->block(0, 0, N1, N1) -= e_A1i * e_Mi1;//merge 老motion状态量对于Sgg的影响
+        this->block(0, j, N1, N2c) -= e_A1i * e_Mi2;//merge 老motion状态量对于Sg_p2m2以及sg的影响
         //this->block(j, 0, N2r, N1) -= e_A2i * e_Mi1;
-        this->block(j, 0, N2r, N1) = this->block(0, j, N1, N2r).transpose();
+        this->block(j, 0, N2r, N1) = this->block(0, j, N1, N2r).transpose();//merge 老motion状态量对于Sp2m2_g的影响
       }
       //if (UT::Debugging()) {
       //  UT::Print("%e - %e * %e = %e", (*this)(20, 20), e_A2i(20 - i - 1, 0), e_Mi2(0, 20 - i - 1),
       //                                 (*this)(20, 20) - e_A2i(20 - i - 1, 0) * e_Mi2(0, 20 - i - 1));
       //}
-      this->block(j, j, N2r, N2c) -= e_A2i * e_Mi2;
+      this->block(j, j, N2r, N2c) -= e_A2i * e_Mi2;//merge 老motion状态量对于Sp2m2_p2m2以及sp2,sm2的影响
       //if (UT::Debugging()) {
       //  UT::Print(" --> %e\n", (*this)(20, 20));
       //}
-      this->block(i, i, Ni, Ni) = -e_Mii;
+      this->block(i, i, Ni, Ni) = -e_Mii;//将motion的自己的块置0
       if (upperLeft) {
         this->block(i, 0, Ni, N1) = -e_Mi1;
         this->block(0, i, N1, Ni) = -e_M1i;
@@ -3967,7 +3969,7 @@ class EigenMatrixX : public Eigen::Matrix<TYPE, Eigen::Dynamic, Eigen::Dynamic, 
       this->block(j, i, N2r, Ni).setZero();
     }
     if (erase) {
-      Erase(i, Ni);
+      Erase(i, Ni);//删除m1对应的位置
     } else if (zero) {
       this->block(i, 0, Ni, Nc).setZero();
       this->block(0, i, Nr, Ni).setZero();

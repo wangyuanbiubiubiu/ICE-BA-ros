@@ -24,7 +24,7 @@
 #define GM_FLAG_FRAME_DEFAULT       0
 #define GM_FLAG_FRAME_UPDATE_CAMERA 1
 #define GM_FLAG_FRAME_UPDATE_DEPTH  2
-
+//全局地图
 class GlobalMap {
 
  public:
@@ -32,12 +32,12 @@ class GlobalMap {
   class InputCamera {
    public:
     inline InputCamera() {}
-    inline InputCamera(const Rigid3D &C, const int iFrm) : m_C(C), m_iFrm(iFrm) {}
+    inline InputCamera(const Rigid3D &C, const int iFrm) : m_Cam_pose(C), m_iFrm(iFrm) {}
     inline bool operator < (const int iFrm) const { return m_iFrm < iFrm; }
     inline bool operator < (const InputCamera &C) const { return m_iFrm < C.m_iFrm; }
    public:
-    Rigid3D m_C;
-    int m_iFrm;
+    Rigid3D m_Cam_pose;//相机的pose,
+    int m_iFrm;//这帧图像的id
   };
 
   class Camera : public InputCamera {
@@ -87,18 +87,18 @@ class GlobalMap {
       }
     }
    public:
-    int m_iKF;
-    FTR::Source m_x;
-    LA::SymmetricMatrix2x2f m_W;
-    std::vector<FTR::Measurement> m_zs;
-    Depth::InverseGaussian m_d;
+    int m_iKF;//在哪个关键帧被首次观测到的,存的是关键帧的局部id
+    FTR::Source m_x;//首次被观测到时的左右目的无畸变归一化坐标以及其他东西
+    LA::SymmetricMatrix2x2f m_W;//左目观测畸变部分H矩阵
+    std::vector<FTR::Measurement> m_zs;//这个地图点除首次观测到它的那帧以外其他帧的观测
+    Depth::InverseGaussian m_d;//左相机坐标系下特征点的逆深度以及协方差
   };
-
+//构造输入关键帧
   class InputKeyFrame : public FRM::Frame {
    public:
     //inline InputKeyFrame() {}
-    //inline InputKeyFrame(const FRM::Frame &F, const Camera &C, const std::vector<Point> &Xs) :
-    //                     FRM::Frame(F), m_C(C), m_Xs(Xs) {}
+    //inline InputKeyFrame(const FRM::Frame &F, const Camera &Cam_state, const std::vector<Point> &Xs) :
+    //                     FRM::Frame(F), m_Cam_pose(Cam_state), m_Xs(Xs) {}
     inline void AssertConsistency() const {
       const int NX = static_cast<int>(m_Xs.size());
       for (int iX = 0; iX < NX; ++iX) {
@@ -110,8 +110,8 @@ class GlobalMap {
       }
     }
    public:
-    ::Camera m_C;
-    std::vector<Point> m_Xs;
+    ::Camera m_Cam_state;//相机的状态,pvq,bias
+    std::vector<Point> m_Xs;//关键帧新观测到的地图点
   };
 
   class KeyFrame : public FRM::Frame {
@@ -147,7 +147,7 @@ class GlobalMap {
       }
     }
    public:
-    std::vector<FTR::Source> m_xs;
+    std::vector<FTR::Source> m_xs;/*所有新地图点（由当前关键帧产生）的观测*/
   };
 
   class KeyFrameBA : public KeyFrame {
@@ -168,12 +168,12 @@ class GlobalMap {
       m_Ards.Resize(0);
 #endif
     }
-    inline void PushFeatures(const std::vector<FTR::Source> &xs) {
-      KeyFrame::PushFeatures(xs);
+    inline void PushFeatures(const std::vector<FTR::Source> &xs/*所有新地图点（由当前关键帧产生）的观测*/) {
+      KeyFrame::PushFeatures(xs/*所有新地图点（由当前关键帧产生）的观测*/);//将xs保存到m_xs里
       const int ix = m_Apds.Size(), Nx = static_cast<int>(m_xs.size()) - ix;
-      m_Apds.InsertZero(ix, Nx, NULL);
+      m_Apds.InsertZero(ix, Nx, NULL);//左目因子扩容
 #ifdef CFG_STEREO
-      m_Ards.InsertZero(ix, Nx, NULL);
+      m_Ards.InsertZero(ix, Nx, NULL);//右目扩容
 #endif
     }
     inline void InvalidateFeatures(const ubyte *mxs) {
@@ -216,10 +216,10 @@ class GlobalMap {
       UT_ASSERT(m_Ards.Size() == Nx);
 #endif
     }
-   public:
-    AlignedVector<Depth::Prior::Factor> m_Apds;
+   public://下面两个因子都是关于新地图点的
+    AlignedVector<Depth::Prior::Factor> m_Apds;//只有左目观测时的因子 costfun(Uc0)：||地图点逆深度 - 关键帧平均逆深度||^2 马氏
 #ifdef CFG_STEREO
-    AlignedVector<FTR::Factor::Stereo> m_Ards;
+    AlignedVector<FTR::Factor::Stereo> m_Ards;//两目都有观测时的因子,cost_F(Uc0) = ||归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1)||^2（马氏距离下）
 #endif
   };
 
@@ -247,8 +247,8 @@ class GlobalMap {
 
  protected:
 
-  std::vector<Camera> m_Cs;
-  ubyte m_Uc;
+  std::vector<Camera> m_Cs;//存储了所有关键帧的pose(还有这帧的id),会在优化完以后被更新
+  ubyte m_Uc;//全局地图是否要更新状态,确定一下这个啥时候更新
   boost::shared_mutex m_MT;
 
 };

@@ -59,17 +59,22 @@ class InverseGaussian {
   inline void Invalidate() { u() = 0.0f; }
   inline bool Converge() const { return s2() <= DEPTH_VARIANCE_CONVERGE; }
 
-  inline void Project(const Rigid3D &T12, const Point2D &x1, LA::Vector2f &x2) const {
+  inline void Project(const Rigid3D &T12/*这里应该表达成T21更准确一些*/, const Point2D &x1, LA::Vector2f &x2) const {
     Project(T12, x1, u(), x2);
   }
-  inline void Project(const LA::AlignedVector3f &t12, const Point2D &x1, LA::Vector2f &x2) const {
-    Project(t12, x1, u(), x2);
+  inline void Project(const LA::AlignedVector3f &t12/*-tc0_c1*/, const Point2D &x1/*Pc0归一化坐标*/, LA::Vector2f &x2/*重投影误差*/) const {
+    Project(t12/*-tc0_c1*/, x1/*Pc0归一化坐标*/, u()/*Pc0逆深度*/, x2/*重投影误差*/);
   }
   inline void Project(const LA::AlignedVector3f &t12, const LA::Vector3f &Rx1, LA::Vector2f &x2) const {
     Project(t12, Rx1, u(), x2);
   }
-  static inline void Project(const LA::AlignedVector3f &t12, const Point2D &x1, const float d1,
-                             LA::Vector2f &x2) {
+
+    // 投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+    // Pc0 = Rc0c1 * Pc1 + tc0c1 ==>>  (1/Uc0) * Pnc0 = Rc0c1 * (1/Uc1) * Pnc1 + tc0c1
+    // ==>> Rc0c1 *Pnc1* (Uc0/Uc1) = Pnc0 - Uc0 * tc0c1
+    // ==> 对Pnc0 - Uc0 * tc0c1进行归一化,因为之前对Pnc1也做了（Rc0c1 *Pnc1)归一化坐标,存在z.m_z里
+  static inline void Project(const LA::AlignedVector3f &t12/*-tc0_c1*/, const Point2D &x1/*Pc0归一化坐标*/, const float d1/*逆深度*/,
+                             LA::Vector2f &x2/*重投影误差*/) {
     const LA::AlignedVector3f t = t12 * d1;
     const float d12 = 1.0f / (t.z() + 1.0f);
     x2.x() = (x1.x() + t.x()) * d12;
@@ -114,8 +119,8 @@ class InverseGaussian {
     x2.y() = (T12.r10_r11_r12_ty() * t).vsum_all() * d12;
     Jx2.x() = (T12.tx() - x2.x() * T12.tz()) * d12;
     Jx2.y() = (T12.ty() - x2.y() * T12.tz()) * d12;
-  }
-  inline void Project(const LA::AlignedVector3f &t12, const Point2D &x1, LA::Vector2f &x2,
+  }//看下面的注释吧,输入的参数是一模一样的,Rx1.z()因为是齐次表示,其实就是1
+  inline void Project(const LA::AlignedVector3f &t12/*-tc0c1*/, const Point2D &x1, LA::Vector2f &x2,
                       LA::Vector2f &Jx2) const {
     const LA::AlignedVector3f t = t12 * u();
     const float d12 = 1.0f / (t.z() + 1.0f);
@@ -124,24 +129,32 @@ class InverseGaussian {
     Jx2.x() = (t12.x() - x2.x() * t12.z()) * d12;
     Jx2.y() = (t12.y() - x2.y() * t12.z()) * d12;
   }
-  inline void Project(const LA::AlignedVector3f &t12, const LA::Vector3f &Rx1, LA::Vector2f &x2,
-                      LA::Vector2f &Jx2) const {
+
+
+  // 投影 Pc0 Pc1代表相机坐标下的特征点 Pnc0 和 Pnc1代表了归一化以后的点,齐次转换就省略了 Uc0,Uc1表示两个坐标系下的逆深度
+  // Pc0 = Rc0c1 * Pc1 + tc0c1 ==>>  (1/Uc0) * Pnc0 = Rc0c1 * (1/Uc1) * Pnc1 + tc0c1
+  // ==>> Rc0c1 *Pnc1* (Uc0/Uc1) = Pnc0 - Uc0 * tc0c1
+  // ==> 对Pnc0 - Uc0 * tc0c1进行归一化,因为之前对Pnc1也做了（Rc0c1 *Pnc1)归一化坐标,存在z.m_z里
+  inline void Project(const LA::AlignedVector3f &t12/*-tc0c1*/, const LA::Vector3f &Rx1/* 左目的无畸变归一化坐标*/, LA::Vector2f &x2/*残差*/,
+                      LA::Vector2f &Jx2/*残差关于逆深度的雅克比*/) const {
     const LA::AlignedVector3f t = t12 * u();
     const float d12 = 1.0f / (t.z() + Rx1.z());
-    x2.x() = (Rx1.x() + t.x()) * d12;
+    x2.x() = (Rx1.x() + t.x()) * d12;      //Pnc0 - Uc0 * tc0c1进行归一化以后的0 1维
     x2.y() = (Rx1.y() + t.y()) * d12;
-    Jx2.x() = (t12.x() - x2.x() * t12.z()) * d12;
-    Jx2.y() = (t12.y() - x2.y() * t12.z()) * d12;
+    Jx2.x() = (t12.x() - x2.x() * t12.z()) * d12;//div(x2.x())/div(u) 求残差关于逆深度的雅克比
+    Jx2.y() = (t12.y() - x2.y() * t12.z()) * d12;//div(x2.y())/div(u)
   }
-  inline void Project(const Rigid3D &T12, const Point2D &x1, LA::Vector2f &x2, float &d2,
+  inline void Project(const Rigid3D &T12/*这里给的变换明明是T21,这代码有毒*/, const Point2D &x1, LA::Vector2f &x2, float &d2,
                       LA::Vector2f &Jx2) const {
     const xp128f t = xp128f::get(x1.x(), x1.y(), 1.0f, u());
-    const float d12 = 1.0f / (T12.r20_r21_r22_tz() * t).vsum_all();
+    const float d12 = 1.0f / (T12.r20_r21_r22_tz() * t).vsum_all();//这点在1中深度 / 这点在2中深度
     x2.x() = (T12.r00_r01_r02_tx() * t).vsum_all() * d12;
-    x2.y() = (T12.r10_r11_r12_ty() * t).vsum_all() * d12;
-    d2 = d12 * u();
-    Jx2.x() = (T12.tx() - x2.x() * T12.tz()) * d12;
-    Jx2.y() = (T12.ty() - x2.y() * T12.tz()) * d12;
+    x2.y() = (T12.r10_r11_r12_ty() * t).vsum_all() * d12;//投到2以后,2的归一化坐标
+    d2 = d12 * u();//2中的逆深度
+    // x2.x() = (r00 * x1.x() + r01 * x1.y() + r02 + tx() * u()) / (r20 * x1.x() + r21 * x1.y() + r22 + tx() * u())
+    // div(x2.x())/div(u)就是下面这个 即kf中逆深度对于投影到LF中的归一化坐标的影响
+    Jx2.x() = (T12.tx() - x2.x() * T12.tz()) * d12;//div(x2.x())/div(u)
+    Jx2.y() = (T12.ty() - x2.y() * T12.tz()) * d12;//div(x2.y())/div(u)
   }
   inline void Project(const Rigid3D &T12, const Point2D &x1, LA::Vector2f &x2, float &d12, float &d2,
                       LA::Vector2f &Jx2) const {
@@ -229,14 +242,14 @@ class InverseGaussian {
     const xp128f t = xp128f::get(x1.x(), x1.y(), 1.0f, u());
     return (T12.r20_r21_r22_tz() * t).vsum_all() / u();
   }
-  inline bool ProjectD(const Rigid3D::Row &T12z, const Point2D &x1, InverseGaussian &d2) const {
-    const xp128f t1 = T12z.r0_r1_r2_t() * xp128f::get(x1.x(), x1.y(), 1.0f, u());
-    const float t2 = t1.vsum_012(), t3 = 1.0f / (t2 + t1[3]);
-    d2.u() = u() * t3;
+  inline bool ProjectD(const Rigid3D::Row &T12z/*(Tc0w(当前帧) * Twc0(关键帧)).row(z)*/, const Point2D &x1/*首次被观测到的归一化坐标*/, InverseGaussian &d2) const {
+    const xp128f t1 = T12z.r0_r1_r2_t() * xp128f::get(x1.x(), x1.y(), 1.0f, u());//Pc(当前帧)[2]= u * (Tc0w(当前帧) * Twc0(关键帧)).row(2) * Pc0(关键帧)
+    const float t2 = t1.vsum_012(), t3 = 1.0f / (t2 + t1[3]);//(t2 + t1[3] ) * (1/u() = Pc(当前帧)[2], 取倒数 d2.u() = t3* u()
+    d2.u() = u() * t3;//这点在当前帧中的逆深度
     if (d2.u() < FLT_EPSILON) {
       return false;
     }
-    const float j = t2 * t3 * t3;
+    const float j = t2 * t3 * t3;//这个应该是考虑的平移的影响来定义的协方差吧
     d2.s2() = j * j * s2();
     return true;
   }
@@ -294,7 +307,7 @@ class InverseGaussian {
 
  protected:
 
-  float m_u, m_s2;
+  float m_u/*逆深度,0时代表不合法*/, m_s2/*协方差*/;
 };
 
 class InverseGaussianBeta : public InverseGaussian {
@@ -345,14 +358,14 @@ class InverseGaussianBeta : public InverseGaussian {
 
   float m_a, m_b;
 };
-
+//深度的先验//J.t*(Wrobust * W)*J * deltax = -w * (Wrobust * W)*A.m_e => H * deltax = -b ，costFun(d) = ||d - m_d||^2 （m_w下的）
 class Prior {
  public:
   class Factor {
    public:
     inline void MakeZero() { memset(this, 0, sizeof(Factor)); }
    public:
-    float m_e, m_F, m_a, m_b;
+    float m_e/*实际逆深度 - 场景平均逆深度*/, m_F/*costFun*/, m_a/*hessian*/, m_b;//-b
   };
   class Reduction {
    public:
@@ -361,13 +374,13 @@ class Prior {
  public:
   inline Prior(const float d, const float w) : m_d(d), m_w(w) {}
   template<int ME_FUNCTION>
-  inline void GetFactor(const float w, const float d, Factor &A) const {
-    A.m_e = d - m_d;
-    const float r2 = m_w * A.m_e * A.m_e;
-    const float _w = w * ME::Weight<ME_FUNCTION>(r2);
-    A.m_F = _w * r2;
-    A.m_a = _w * m_w;
-    A.m_b = A.m_a * A.m_e;
+  inline void GetFactor(const float w/*权重*/, const float d/*这个地图点的逆深度*/, Factor &A) const {
+    A.m_e = d - m_d;//实际逆深度 - 场景平均逆深度
+    const float r2 = m_w * A.m_e * A.m_e;//马氏距离下的残差
+    const float _w = w * ME::Weight<ME_FUNCTION>(r2);//w*rho'(r2)
+    A.m_F = _w * r2; //F就是代价函数,这里用鲁邦核修正过了 ||d - m_d||^2 （m_w下的）
+    A.m_a = _w * m_w;//构造H矩阵 这里雅克比就是1,所以没有体现出来
+    A.m_b = A.m_a * A.m_e;//J.t*(Wrobust * W)*J * deltax = -w * (Wrobust * W)*A.m_e => Hx = -b
   }
   inline float GetCost(const Factor &A, const float e) const {
     return A.m_a * e * e;
@@ -384,7 +397,7 @@ class Prior {
     Rp.m_dF = A.m_F - (Rp.m_F = GetCost(A, Rp.m_e));
   }
  public:
-  float m_d, m_w;
+  float m_d/*当前逆深度双目观测到的地图点的平均逆深度*/, m_w/*平均逆深度的信息矩阵*/;
 };
 
 class Measurement {
@@ -400,10 +413,10 @@ class Measurement {
     m_W = W;
   }
  public:
-  const LA::AlignedVector3f *m_t;
-  LA::Vector3f m_Rx;
-  Point2D m_z;
-  LA::SymmetricMatrix2x2f m_W;
+  const LA::AlignedVector3f *m_t;//-tc0_c1
+  LA::Vector3f m_Rx;//关键帧中左目的无畸变归一化坐标
+  Point2D m_z;//关键帧中右目的无畸变归一化坐标左乘了Rc0c1以后进行了归一化
+  LA::SymmetricMatrix2x2f m_W;//右目特征点的畸变部分协方差,用来做马氏距离归一化
 };
 
 float ComputeError(const int N, const Measurement *zs, const InverseGaussian &d);

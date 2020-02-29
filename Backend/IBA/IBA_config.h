@@ -42,7 +42,7 @@ typedef float PCG_TYPE;
 //#define CFG_DEBUG
 #endif
 #ifdef CFG_DEBUG
-#define CFG_DEBUG_EIGEN
+//#define CFG_DEBUG_EIGEN
 #endif
 //#define CFG_DEBUG_MT
 

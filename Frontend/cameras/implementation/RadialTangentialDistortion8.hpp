@@ -65,6 +65,7 @@ RadialTangentialDistortion8::RadialTangentialDistortion8()
 }
 
 // Constructor initialising ki
+//畸变模型
 RadialTangentialDistortion8::RadialTangentialDistortion8(float k1, float k2,
                                                          float p1, float p2,
                                                          float k3, float k4,
@@ -385,7 +386,7 @@ bool RadialTangentialDistortion8::distortT_slow(
   (*pointDistorted)[0] = u0 * rad_dist_u + 2.f * p1_ * mxy_u + p2_ * (rho_u + 2.f * mx_u);
   (*pointDistorted)[1] = u1 * rad_dist_u + 2.f * p2_ * mxy_u + p1_ * (rho_u + 2.f * my_u);
 
-  // next the Jacobian w.r.t. changes on the undistorted point
+  // next the Jacobian gyr.r.t. changes on the undistorted point
   Eigen::Matrix<T, 2, 2> & J = *pointJacobian;
   J(0,0) = p1_*u1*2.0+p2_*u0*6.0+(rho_u*(k1_+rho_u*(k2_+k3_*rho_u))+1.0)/(rho_u*(k4_+rho_u*(k5_+k6_*rho_u))+1.0)+(u0*(rho_u*(u0*(k2_+k3_*rho_u)*2.0+k3_*u0*rho_u*2.0)+u0*(k1_+rho_u*(k2_+k3_*rho_u))*2.0))/(rho_u*(k4_+rho_u*(k5_+k6_*rho_u))+1.0)-u0*(rho_u*(u0*(k5_+k6_*rho_u)*2.0+k6_*u0*rho_u*2.0)+u0*(k4_+rho_u*(k5_+k6_*rho_u))*2.0)*(rho_u*(k1_+rho_u*(k2_+k3_*rho_u))+1.0)*1.0/c2;  // NOLINT
   J(0,1) = p1_*u0*2.0+p2_*u1*2.0+(u0*(rho_u*(u1*(k2_+k3_*rho_u)*2.0+k3_*u1*rho_u*2.0)+u1*(k1_+rho_u*(k2_+k3_*rho_u))*2.0))/(rho_u*(k4_+rho_u*(k5_+k6_*rho_u))+1.0)-u0*(rho_u*(u1*(k5_+k6_*rho_u)*2.0+k6_*u1*rho_u*2.0)+u1*(k4_+rho_u*(k5_+k6_*rho_u))*2.0)*(rho_u*(k1_+rho_u*(k2_+k3_*rho_u))+1.0)*1.0/c2;  // NOLINT
@@ -393,7 +394,7 @@ bool RadialTangentialDistortion8::distortT_slow(
   J(1,1) = p1_*u1*6.0+p2_*u0*2.0+(rho_u*(k1_+rho_u*(k2_+k3_*rho_u))+1.0)/(rho_u*(k4_+rho_u*(k5_+k6_*rho_u))+1.0)+(u1*(rho_u*(u1*(k2_+k3_*rho_u)*2.0+k3_*u1*rho_u*2.0)+u1*(k1_+rho_u*(k2_+k3_*rho_u))*2.0))/(rho_u*(k4_+rho_u*(k5_+k6_*rho_u))+1.0)-u1*(rho_u*(u1*(k5_+k6_*rho_u)*2.0+k6_*u1*rho_u*2.0)+u1*(k4_+rho_u*(k5_+k6_*rho_u))*2.0)*(rho_u*(k1_+rho_u*(k2_+k3_*rho_u))+1.0)*1.0/c2;  // NOLINT
 
   if (parameterJacobian) {
-    // the Jacobian w.r.t. intrinsics parameters
+    // the Jacobian gyr.r.t. intrinsics parameters
     const T rho_u2 = rho_u*rho_u;
     const T rho_u3 = rho_u*rho_u2;
     Eigen::Matrix<T, 2, Eigen::Dynamic> & Jp = *parameterJacobian;
@@ -455,7 +456,7 @@ bool RadialTangentialDistortion8::distortWithExternalParameters(
     (*pointDistorted)[1] = u1 * rad_dist_u + 2.0 * p2 * mxy_u
         + p1 * (rho_u + 2.0 * my_u);
 
-  // next the Jacobian w.r.t. changes on the undistorted point
+  // next the Jacobian gyr.r.t. changes on the undistorted point
   Eigen::Matrix2d & J = *pointJacobian;
   J(0,0) = p1*u1*2.0+p2*u0*6.0+(rho_u*(k1+rho_u*(k2+k3*rho_u))+1.0)/(rho_u*(k4+rho_u*(k5+k6*rho_u))+1.0)+(u0*(rho_u*(u0*(k2+k3*rho_u)*2.0+k3*u0*rho_u*2.0)+u0*(k1+rho_u*(k2+k3*rho_u))*2.0))/(rho_u*(k4+rho_u*(k5+k6*rho_u))+1.0)-u0*(rho_u*(u0*(k5+k6*rho_u)*2.0+k6*u0*rho_u*2.0)+u0*(k4+rho_u*(k5+k6*rho_u))*2.0)*(rho_u*(k1+rho_u*(k2+k3*rho_u))+1.0)*1.0/c2;  // NOLINT
   J(0,1) = p1*u0*2.0+p2*u1*2.0+(u0*(rho_u*(u1*(k2+k3*rho_u)*2.0+k3*u1*rho_u*2.0)+u1*(k1+rho_u*(k2+k3*rho_u))*2.0))/(rho_u*(k4+rho_u*(k5+k6*rho_u))+1.0)-u0*(rho_u*(u1*(k5+k6*rho_u)*2.0+k6*u1*rho_u*2.0)+u1*(k4+rho_u*(k5+k6*rho_u))*2.0)*(rho_u*(k1+rho_u*(k2+k3*rho_u))+1.0)*1.0/c2;  // NOLINT
@@ -463,7 +464,7 @@ bool RadialTangentialDistortion8::distortWithExternalParameters(
   J(1,1) = p1*u1*6.0+p2*u0*2.0+(rho_u*(k1+rho_u*(k2+k3*rho_u))+1.0)/(rho_u*(k4+rho_u*(k5+k6*rho_u))+1.0)+(u1*(rho_u*(u1*(k2+k3*rho_u)*2.0+k3*u1*rho_u*2.0)+u1*(k1+rho_u*(k2+k3*rho_u))*2.0))/(rho_u*(k4+rho_u*(k5+k6*rho_u))+1.0)-u1*(rho_u*(u1*(k5+k6*rho_u)*2.0+k6*u1*rho_u*2.0)+u1*(k4+rho_u*(k5+k6*rho_u))*2.0)*(rho_u*(k1+rho_u*(k2+k3*rho_u))+1.0)*1.0/c2;  // NOLINT
 
   if (parameterJacobian) {
-    // the Jacobian w.r.t. intrinsics parameters
+    // the Jacobian gyr.r.t. intrinsics parameters
     const float rho_u2 = rho_u*rho_u;
     const float rho_u3 = rho_u*rho_u2;
     Eigen::Matrix2Xd & Jp = *parameterJacobian;
@@ -772,7 +773,7 @@ bool RadialTangentialDistortion8::undistort(const Eigen::Vector2d & pointDistort
       (*pointUndistorted)[1] = undistort_lookup_table_.v_(v_lt, u_lt);
       success = true;
     } else {
-      // LOG(ERROR) << "a point at the margin of the image cannot be undistorted by lookup table"
+      // LOG(ERROR) << "acc point at the margin of the image cannot be undistorted by lookup table"
       //            << " (double) v_lt " << v_lt << " u_lt " << u_lt;
     }
   } else {
@@ -811,7 +812,7 @@ bool RadialTangentialDistortion8::undistort(const Eigen::Vector2f & pointDistort
       (*pointUndistorted)[1] = undistort_lookup_table_.v_(v_lt, u_lt);
       success = true;
     } else {
-      LOG(ERROR) << "a point at the margin of the image cannot be undistorted by lookup table"
+      LOG(ERROR) << "acc point at the margin of the image cannot be undistorted by lookup table"
                  << " (float) v_lt " << v_lt << " u_lt " << u_lt;
     }
   } else {
@@ -866,7 +867,7 @@ bool RadialTangentialDistortion8::undistort(const Eigen::Vector2f& pointDistorte
       (*pointJacobian)(1, 1) = undistort_lookup_table_.J11_(v_lt, u_lt);
       success = true;
     } else {
-      // LOG(ERROR) << "a point at the margin of the image cannot be undistorted by lookup table"
+      // LOG(ERROR) << "acc point at the margin of the image cannot be undistorted by lookup table"
       // << " (float) v_lt " << v_lt << " u_lt " << u_lt;
     }
   } else {

@@ -52,7 +52,7 @@
 # are set with valid values _in the CMake cache_. This means that if these
 # variables are set directly in the cache, either by the user in the CMake GUI,
 # or by the user passing -DVAR=VALUE directives to CMake when called (which
-# explicitly defines a cache variable), then they will be used verbatim,
+# explicitly defines acc cache variable), then they will be used verbatim,
 # bypassing the HINTS variables and other hard-coded search locations.
 #
 # GLOG_INCLUDE_DIR: Include directory for glog, not including the
@@ -89,7 +89,7 @@ MACRO(GLOG_REPORT_NOT_FOUND REASON_MSG)
   ELSEIF (Glog_FIND_REQUIRED)
     MESSAGE(FATAL_ERROR "Failed to find glog - " ${REASON_MSG} ${ARGN})
   ELSE()
-    # Neither QUIETLY nor REQUIRED, use no priority which emits a message
+    # Neither QUIETLY nor REQUIRED, use no priority which emits acc message
     # but continues configuration and allows generation.
     MESSAGE("-- Failed to find glog - " ${REASON_MSG} ${ARGN})
   ENDIF ()

@@ -21,21 +21,21 @@
 #include "GlobalMap.h"
 #include "CameraPrior.h"
 #include "Timer.h"
-
+//相机相关的
 #define GBA_FLAG_FRAME_DEFAULT                  0
-#define GBA_FLAG_FRAME_UPDATE_CAMERA            1
-#define GBA_FLAG_FRAME_UPDATE_DEPTH             2
-#define GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION 4
-#define GBA_FLAG_FRAME_UPDATE_DELTA             8
+#define GBA_FLAG_FRAME_UPDATE_CAMERA            1 //第1位是否更新相机
+#define GBA_FLAG_FRAME_UPDATE_DEPTH             2 //第2位是否更新深度
+#define GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION 4 //第3位是否更新轨迹
+#define GBA_FLAG_FRAME_UPDATE_DELTA             8 //第4位是否更新求解的pose增量
 #define GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION 16
 #define GBA_FLAG_FRAME_UPDATE_SCHUR_COMPLEMENT  32
-
+//特征点相关的flags
 #define GBA_FLAG_TRACK_DEFAULT                  0
 //#define GBA_FLAG_TRACK_MEASURE                1
 #define GBA_FLAG_TRACK_INVALID                  1
 #define GBA_FLAG_TRACK_UPDATE_DEPTH             2
-#define GBA_FLAG_TRACK_UPDATE_INFORMATION       4
-#define GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO  8
+#define GBA_FLAG_TRACK_UPDATE_INFORMATION       4//第3位是否更新轨迹信息
+#define GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO  8//第4位是深度的增量更新成0
 #define GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION 16
 
 #define GBA_FLAG_CAMERA_MOTION_DEFAULT                  0
@@ -51,7 +51,7 @@
 class GlobalBundleAdjustor : public MT::Thread {
 
  public:
-
+//GBA里的输入关键帧
   class InputKeyFrame : public GlobalMap::InputKeyFrame {
    public:
     inline InputKeyFrame() : GlobalMap::InputKeyFrame() {}
@@ -63,8 +63,8 @@ class GlobalBundleAdjustor : public MT::Thread {
                        , const float d
 #endif
                        ) : GlobalMap::InputKeyFrame(IKF) {
-      m_us.Set(us);
-      m_dzs = dzs;
+      m_us.Set(us);//设置一下imu观测
+      m_dzs = dzs;//设置一下观测到的地图点的逆深度
 #ifdef CFG_HANDLE_SCALE_JUMP
       m_d = d;
 #endif
@@ -94,8 +94,8 @@ class GlobalBundleAdjustor : public MT::Thread {
 #endif
     }
    public:
-    AlignedVector<IMU::Measurement> m_us;
-    std::vector<Depth::InverseGaussian> m_dzs;
+    AlignedVector<IMU::Measurement> m_us;/*在当前帧时间戳之前的imu测量,转到了(Rc0_i*)左相机坐标系下*/
+    std::vector<Depth::InverseGaussian> m_dzs;//观测到的地图点的逆深度
 #ifdef CFG_HANDLE_SCALE_JUMP
     float m_d;
 #endif
@@ -136,7 +136,7 @@ class GlobalBundleAdjustor : public MT::Thread {
   virtual void SetCallback(const IBA::Solver::IbaCallback& callback_iba);
 
  public:
-
+//全局地图中的关键帧结构
   class KeyFrame : public GlobalMap::KeyFrameBA {
    public:
     inline KeyFrame() : KeyFrameBA() {}
@@ -159,11 +159,11 @@ class GlobalBundleAdjustor : public MT::Thread {
       m_iAp2kp = KF.m_iAp2kp;
       m_ikp2KF = KF.m_ikp2KF;
       m_SAps.Set(KF.m_SAps);
-    }
-    inline void Initialize(const InputKeyFrame &IKF) {
+    }//就是转换了一下数据结构
+    inline void Initialize(const InputKeyFrame &IKF/*关键帧*/) {
       KeyFrameBA::Initialize(IKF);
-      m_us.Set(IKF.m_us);
-      const int Nz = static_cast<int>(m_zs.size()), NZ = static_cast<int>(m_Zs.size());
+      m_us.Set(IKF.m_us);//保存imu时间戳
+      const int Nz = static_cast<int>(m_zs.size()), NZ = static_cast<int>(m_Zs.size());//相关矩阵的扩容
       m_Lzs.Resize(Nz);     m_Lzs.MakeZero();
       m_Azs1.Resize(Nz);    m_Azs1.MakeZero();
       m_Azs2.Resize(Nz);    m_Azs2.MakeZero();
@@ -172,12 +172,13 @@ class GlobalBundleAdjustor : public MT::Thread {
       m_SAcxzs.Resize(NZ);  m_SAcxzs.MakeZero();
       m_Zm.Initialize();
 
-      m_iKFsPrior.resize(0);
+      m_iKFsPrior.resize(0);//运动先验部分置0
       m_iAp2kp.resize(0);
       m_ikp2KF = m_iKFsMatch;
       m_SAps.Resize(0);
     }
-    inline void PushFeatures(const std::vector<FTR::Source> &xs) {
+    //保存观测
+    inline void PushFeatures(const std::vector<FTR::Source> &xs/*所有新地图点（由当前关键帧产生）的观测*/) {
       KeyFrameBA::PushFeatures(xs);
       const int ix = m_Axs.Size(), Nx = static_cast<int>(xs.size());
       m_Axs.InsertZero(ix, Nx, NULL);
@@ -349,16 +350,16 @@ class GlobalBundleAdjustor : public MT::Thread {
     inline int PushCameraPrior(const int iKF, AlignedVector<float> *work) {
       const std::vector<int>::iterator ip = std::lower_bound(m_iKFsPrior.begin(),
                                                              m_iKFsPrior.end(), iKF);
-      if (ip != m_iKFsPrior.end() && *ip == iKF) {
+      if (ip != m_iKFsPrior.end() && *ip == iKF) {//如果已经有了这个关键帧的先验约束
         return -1;
       }
       int _ip;
-      const int ik = SearchMatchKeyFrame(iKF);
-      const int ikp = ik == -1 ? static_cast<int>(m_ikp2KF.size()) : ik;
+      const int ik = SearchMatchKeyFrame(iKF);//在靠后的这个关键帧中的共视帧数据中找到靠前的这个关键帧所在的位置
+      const int ikp = ik == -1 ? static_cast<int>(m_ikp2KF.size()) : ik;//如果找到的话,ikp就等于这个先验关键帧在这个关键帧m_ikp2KF中的索引
       if (ip == m_iKFsPrior.end()) {
         _ip = int(m_iKFsPrior.size());
-        m_iKFsPrior.push_back(iKF);
-        m_iAp2kp.push_back(ikp);
+        m_iKFsPrior.push_back(iKF);//在这个靠后的关键帧中插入这个靠前的关键帧的id
+        m_iAp2kp.push_back(ikp);//这个先验关键帧在这个关键帧m_ikp2KF中的索引
         m_SAps.Resize(_ip + 1, true);
       } else {
         _ip = int(ip - m_iKFsPrior.begin());
@@ -368,9 +369,10 @@ class GlobalBundleAdjustor : public MT::Thread {
       }
       m_SAps[_ip].MakeZero();
       if (ik == -1) {
-        m_ikp2KF.push_back(iKF);
+        m_ikp2KF.push_back(iKF);//如果这个关键帧中没有和这个先验的关键帧之间是共视的关系,
+        // 那么就push进m_ikp2KF,m_ikp2KF初始是包含了m_iKFsMatch的,如果加进来的关键帧先验有不在m_iKFsMatch里的,那么就push进m_ikp2KF中
       }
-      return _ip;
+      return _ip;//
     }
     inline int SearchPriorKeyFrame(const int iKF) const {
       const std::vector<int>::const_iterator ip = std::lower_bound(m_iKFsPrior.begin(),
@@ -459,22 +461,25 @@ class GlobalBundleAdjustor : public MT::Thread {
       UT_ASSERT(static_cast<int>(m_ikp2KF.size()) == SNkp);
     }
    public:
-    AlignedVector<IMU::Measurement> m_us;
-    AlignedVector<FTR::Factor::Full::Source::A> m_Axs;
-    AlignedVector<FTR::Factor::Full::Source::M1> m_Mxs1;
-    AlignedVector<FTR::Factor::Full::Source::M2> m_Mxs2;
-    AlignedVector<FTR::Factor::Full::L> m_Lzs;
-    AlignedVector<FTR::Factor::Full::A1> m_Azs1;
-    AlignedVector<FTR::Factor::Full::A2> m_Azs2;
-    AlignedVector<FTR::Factor::Full::M1> m_Mzs1;
-    AlignedVector<FTR::Factor::Full::M2> m_Mzs2;
-    AlignedVector<Camera::Factor::Binary::CC> m_SAcxzs;
-    FRM::MeasurementMatch m_Zm;
-    std::vector<int> m_iKFsPrior, m_iAp2kp, m_ikp2KF;
-    AlignedVector<Camera::Factor::Binary::CC> m_SAps;
+    AlignedVector<IMU::Measurement> m_us;/*在当前关键帧时间戳之前的imu测量,转到了(Rc0_i*)左相机坐标系下*/
+    AlignedVector<FTR::Factor::Full::Source::A> m_Axs;/*m_Sadx.m_adx.m_add存储所有新的地图点的逆深度和逆深度的H,逆深度的-b,m_Sadx.m_adx.m_adc保存的是投影前pose x 逆深度*/
+    AlignedVector<FTR::Factor::Full::Source::M1> m_Mxs1;/*m_add.m_a中保存Huu^-1|Huu^-1*-bu,m_mdx.m_adc保存H投影前pose_u * Huu^-1*/
+    AlignedVector<FTR::Factor::Full::Source::M2> m_Mxs2;//维护了每一个地图点的Hpose_u * Huu^-1 * Hpose_u.t|Hpose_u * Huu^-1 * -bu
+    AlignedVector<FTR::Factor::Full::L> m_Lzs;/*投影后关键帧中对这个地图点观测的重投影误差e,J(对投影前后的pose,对关键帧点的逆深度),cost*/
+    AlignedVector<FTR::Factor::Full::A1> m_Azs1;//维护每一个地图点带来的视觉约束的m_adcz存储H的投影后pose x 逆深度部分
+    AlignedVector<FTR::Factor::Full::A2> m_Azs2;//维护每一个地图点带来的视觉约束,m_adx.m_add是逆深度x逆深度的H|-b,m_adx.m_adc是投影前pose x 逆深度的H
+    // ,m_Acxx是投影前pose x 投影前pose的H|-b,m_Aczz是投影后pose x 投影后pose的H|-b,m_Acxz是投影前pose x 投影后pose的H
+    AlignedVector<FTR::Factor::Full::M1> m_Mzs1;//m_Mzs1[iz]->m_adczA = H当前关键帧pose_u *Huu^-1
+    AlignedVector<FTR::Factor::Full::M2> m_Mzs2;//m_Mzs2[iz]->m_Mcxz = H当前关键帧所观测到的关键帧pose_u * Huu^-1 * H当前关键帧pose_u.t
+      //m_Mzs2[iz]->m_Mczz = H投影后pose_u *Huu^-1 * H投影后pose_u.t |H投影后pose_u *Huu^-1 *-bu
+    AlignedVector<Camera::Factor::Binary::CC> m_SAcxzs;//维护所有观测投影帧的投影前(观测关键帧)pose x 投影后pose的H
+    FRM::MeasurementMatch m_Zm;//存储当前关键帧与它的共视关键帧观测到了哪些地图点(存储的是这个地图点在这两帧中各自的索引)
+    std::vector<int> m_iKFsPrior/*当前关键帧之前的关键帧的先验pose约束所对应的关键帧id*/, m_iAp2kp/*这个先验关键帧在这个关键帧m_ikp2KF中的索引*/,
+    m_ikp2KF/*m_ikp2KF初始是包含了m_iKFsMatch的,如果加进来的关键帧先验有不在m_iKFsMatch里的,那么就push进m_ikp2KF中*/;
+    AlignedVector<Camera::Factor::Binary::CC> m_SAps;//H老帧posex新帧pose,存储在新帧中
   };
   
-  class CameraPriorMotion : public CameraPrior::Motion {
+  class CameraPriorMotion : public CameraPrior::Motion {//关键帧的运动先验
    public:
     inline void Set(const int iKF, const CameraPrior::Motion &Zp) {
       m_iKF = iKF;
@@ -499,7 +504,7 @@ class GlobalBundleAdjustor : public MT::Thread {
     inline void SaveB(FILE *fp) const { CameraPrior::Motion::SaveB(fp); UT::SaveB(m_iKF, fp); }
     inline void LoadB(FILE *fp) { CameraPrior::Motion::LoadB(fp); UT::LoadB(m_iKF, fp); }
    public:
-    int m_iKF;
+    int m_iKF;//是哪一个关键帧的运动先验
   };
 
   enum TimerType { TM_TOTAL, TM_SYNCHRONIZE, TM_FACTOR, TM_SCHUR_COMPLEMENT, TM_CAMERA, TM_DEPTH,
@@ -531,12 +536,12 @@ class GlobalBundleAdjustor : public MT::Thread {
    public:
     float m_r2, m_F;
   };
-  class History {
+  class History {//用来debug的
    public:
     inline void MakeZero() { memset(this, 0, sizeof(History)); }
    public:
     // m_history >= 1
-    double m_ts[TM_TYPES];
+    double m_ts[TM_TYPES];//每种时间的平均耗时
     //int m_Nd;
     // m_history >= 2
     ES m_ESa, m_ESb, m_ESp;
@@ -734,39 +739,41 @@ class GlobalBundleAdjustor : public MT::Thread {
 
   enum InputType { IT_KEY_FRAME, IT_DELETE_KEY_FRAME, IT_DELETE_MAP_POINTS, IT_UPDATE_CAMERAS,
                    IT_CAMERA_PRIOR_POSE, IT_CAMERA_PRIOR_MOTION };
-  std::list<InputType> m_ITs1, m_ITs2;
-  std::list<InputKeyFrame> m_IKFs1, m_IKFs2;
+  std::list<InputType> m_ITs1/*记录一下m_IKFs1push进的输入的类型*/, m_ITs2;/*之前的m_ITs1的内容*/
+  std::list<InputKeyFrame> m_IKFs1/*保存关键帧信息*/, m_IKFs2;/*保存关键帧信息*/
   std::list<int> m_IDKFs1, m_IDKFs2;
   std::list<std::vector<int> > m_IDMPs1, m_IDMPs2;
   std::list<std::vector<GlobalMap::InputCamera> > m_IUCs1, m_IUCs2;
-  std::list<CameraPrior::Pose> m_IZps1, m_IZps2;
-  CameraPriorMotion m_IZpLM1, m_IZpLM2;
+  std::list<CameraPrior::Pose> m_IZps1/*存储g和观测关键帧以及参考关键帧的先验约束*/, m_IZps2;/*存储g和观测关键帧以及参考关键帧的先验约束*/
+  CameraPriorMotion m_IZpLM1/*关键帧运动先验*/, m_IZpLM2;/*关键帧运动先验*/
 
   Timer m_ts[TM_TYPES];
 #ifdef CFG_HISTORY
-  std::vector<History> m_hists;
+  std::vector<History> m_hists;//所有的历史记录
 #endif
   std::vector<HistoryCamera> m_CsDel;
 
   int m_iIter, m_iIterPCG, m_iIterDL;
-  float m_delta2;
+  float m_delta2;/*信赖域半径*/
 
-  Camera::Fix::Origin m_Zo;
-  Camera::Fix::Origin::Factor m_Ao;
-  std::vector<CameraPrior::Pose> m_Zps;
-  SIMD::vector<CameraPrior::Pose::Factor> m_Aps;
-  CameraPriorMotion m_ZpLM;
-  CameraPrior::Motion::Factor m_ApLM;
+  Camera::Fix::Origin m_Zo;//GBA首帧相关
+  Camera::Fix::Origin::Factor m_Ao;//GBA固定第一帧的因子,H,b存在m_A中,costfun存在m_F,m_Je里是J和残差
+  std::vector<CameraPrior::Pose> m_Zps;//所有位姿的先验存储g和观测关键帧以及参考关键帧的先验约束
+  SIMD::vector<CameraPrior::Pose::Factor> m_Aps;//m_Aps里存储所有先验的所有关键帧
+  CameraPriorMotion m_ZpLM;//运动先验约束,当一个最老帧(同时是关键帧)从滑窗中边缘化以后,会存储最老帧坐标系下的Rc0w*vw,ba,bw,
+  // 以及这个最老帧motion部分的先验,m_iKF是哪个关键帧id是motion约束
+  CameraPrior::Motion::Factor m_ApLM;//GBA与LBA观测之间motion残差的因子,比如雅克比，H，b对应的部分都保存在这里
 
-  std::vector<KeyFrame> m_KFs;
-  std::vector<int> m_iFrms;
-  AlignedVector<Rigid3D> m_Cs;
-  AlignedVector<Camera> m_CsLM;
+  std::vector<KeyFrame> m_KFs;//GBA中所有的关键帧
+  std::vector<int> m_iFrms;//关键帧和普通帧之间的id对应 m_iFrms[关键帧id] = 帧的全局id
+  AlignedVector<Rigid3D> m_Cs;//记录了所有关键帧的左相机位姿,增量会更新到这里
+  AlignedVector<Camera> m_CsLM;//记录了所有关键帧的左相机状态,motion的增量会更新到这里
 #ifdef CFG_GROUND_TRUTH
   AlignedVector<Rigid3D> m_CsKFGT;
   AlignedVector<Camera> m_CsLMGT;
 #endif
-  std::vector<ubyte> m_ucs, m_ucmsLM;
+  std::vector<ubyte> m_ucs/*这个关键里地图点是否需要更新的flags*/,
+  m_ucmsLM/*运动更新的flag*/;
 #ifdef CFG_GROUND_TRUTH
   std::vector<ubyte> m_ucsGT;
 #endif
@@ -774,78 +781,85 @@ class GlobalBundleAdjustor : public MT::Thread {
   std::vector<float> m_dsKF;
 #endif
 #ifdef CFG_INCREMENTAL_PCG
-  AlignedVector<LA::Vector6f> m_xcs;
-  AlignedVector<LA::Vector9f> m_xmsLM;
+  AlignedVector<LA::Vector6f> m_xcs;//存的是pose的增量
+  AlignedVector<LA::Vector9f> m_xmsLM;//存的motion的增量
 #endif
-  AlignedVector<IMU::Delta> m_DsLM;
+  AlignedVector<IMU::Delta> m_DsLM;//GBA中的预积分约束
 #ifdef CFG_GROUND_TRUTH
   AlignedVector<IMU::Delta> m_DsLMGT;
 #endif
-  AlignedVector<IMU::Delta::Factor> m_AdsLM;
+  AlignedVector<IMU::Delta::Factor> m_AdsLM;/*当前imu因子,m_A11存储着H中前一帧的c,m x 前一帧的c,m,以及对应的-b,m_A22存储着H中后一帧的c,m x 后一帧的c,m,以及对应的-b*/
 
-  AlignedVector<Camera::Fix::PositionZ::Factor> m_Afps;
-  AlignedVector<Camera::Fix::Motion::Factor> m_AfmsLM;
+  AlignedVector<Camera::Fix::PositionZ::Factor> m_Afps;//z方向fix的因子
+  AlignedVector<Camera::Fix::Motion::Factor> m_AfmsLM;//fix motion的因子
 
-  std::vector<int> m_iKF2d;
-  std::vector<Depth::InverseGaussian> m_ds;
+  std::vector<int> m_iKF2d;//i里存的是第i个关键帧之前一共有多少个地图点
+  std::vector<Depth::InverseGaussian> m_ds;//所有地图点对应的逆深度,逆深度的增量会更新到这里
 #ifdef CFG_GROUND_TRUTH
   std::vector<Depth::InverseGaussian> *m_dsGT;
 #endif
-  std::vector<ubyte> m_uds;
+  std::vector<ubyte> m_uds;/*每个地图点逆深度的一些状态更新的东西,每一位是一个更新flags*/
 #ifdef CFG_GROUND_TRUTH
   std::vector<ubyte> m_udsGT;
 #endif
 
-  AlignedVector<Camera::Factor::Unitary::CC> m_SAcus, m_SMcus;
-  AlignedVector<Camera::Factor> m_SAcmsLM;
+  AlignedVector<Camera::Factor::Unitary::CC> m_SAcus/*维护每一个关键帧自己的pose x pose对应的H|-b(m_Acxx是专门维护这个关键
+ * 帧作为观测关键帧时的约束,m_Aczz是专门维护这个关键帧作为投影后关键帧时的约束)*/,
+  m_SMcus;//维护了每个关键帧舒尔补矩阵要减去的∑Hpose_u * Huu^-1 * Hpose_u.t|∑Hpose_u * Huu^-1 * -bu(∑为所有地图点)
+  AlignedVector<Camera::Factor> m_SAcmsLM;/*m_Au存储了每一个关键帧的Hcm以及Hmm(对角线上跟运动相关)和-mb部分,这里Hcm是CiMi而不会存储CiMj,
+ * m_Ab中存储的是这个关键帧和前一关键帧之间的约束,即前一帧Pose x 后一帧Pose,前一帧Pose x 后一帧M,前一帧M x 后一帧Pose,前一帧M x 后一帧M*/
 
-  std::vector<ubyte> m_Ucs/*, m_Uds*/;
+  std::vector<ubyte> m_Ucs/*更新的flags, m_Uds*/;
 
-  std::vector<int> m_iKF2cb;
-  AlignedVector<LA::AlignedMatrix6x6f> m_Acus, m_Acbs, m_AcbTs;
-  AlignedVector<LA::AlignedMatrix9x9f> m_AmusLM;
+  std::vector<int> m_iKF2cb;//m_iKF2cb存储这个关键帧来之前其他的关键帧总共有多少个共视,为的是方便索引
+  AlignedVector<LA::AlignedMatrix6x6f> m_Acus/*保存的是每个关键帧舒尔补以后S矩阵pq对应的对角线部分*/, m_Acbs/*存储非对角线舒尔补以后上三角部分*/, m_AcbTs;//m_AcbTs[] = m_Acbs[].t
+  AlignedVector<LA::AlignedMatrix9x9f> m_AmusLM;//保存的是每个关键帧舒尔补以后S矩阵v,bias acc,bias gyr对应的
   //LA::AlignedVectorXf m_ss;
-  AlignedVector<Camera::Conditioner::C> m_Mcs;
-  AlignedVector<Camera::Conditioner::M> m_MmsLM;
-  AlignedMatrixX<LA::AlignedMatrix6x6f> m_Mcc, m_MccT;
-  AlignedMatrixX<LA::AlignedMatrix6x9f> m_McmLM, m_MmcTLM;
-  AlignedMatrixX<LA::AlignedMatrix9x6f> m_MmcLM, m_McmTLM;
-  AlignedMatrixX<LA::AlignedMatrix9x9f> m_MmmLM, m_MmmTLM;
+  AlignedVector<Camera::Conditioner::C> m_Mcs;//pose部分的M^-1预优矩阵
+  AlignedVector<Camera::Conditioner::M> m_MmsLM;//motion部分的M^-1预优矩阵
+  AlignedMatrixX<LA::AlignedMatrix6x6f> m_Mcc/*舒尔补以后S矩阵pq对应的对角线部分*/, m_MccT;
+  AlignedMatrixX<LA::AlignedMatrix6x9f> m_McmLM/*舒尔补以后S矩阵pose和motion对应的非对角部分*/, m_MmcTLM;
+  AlignedMatrixX<LA::AlignedMatrix9x6f> m_MmcLM, m_McmTLM/*舒尔补以后S矩阵pose和motion对应的非对角部分.t*/;
+  AlignedMatrixX<LA::AlignedMatrix9x9f> m_MmmLM/*舒尔补以后S矩阵motion对应的对角线部分*/, m_MmmTLM;
   AlignedVector<LA::ProductVector6f> m_bcs;
   AlignedVector<LA::AlignedVector9f> m_bmsLM;
-  LA::AlignedVectorXf m_bs;
+  LA::AlignedVectorXf m_bs;//舒尔补以后p,q,v,ba,bg对应的-g
 #ifdef CFG_PCG_DOUBLE
   LA::AlignedVectorXd m_xs, m_rs, m_ps, m_zs, m_drs, m_dxs, m_e2s;
-#else
-  LA::AlignedVectorXf m_xs, m_rs, m_ps, m_zs, m_drs, m_dxs, m_e2s;
+#else//PCG部分
+  LA::AlignedVectorXf m_xs/*优化变量(pose+motion)*/, m_rs/*残差*/, m_ps/*PCG的下降方向*/,
+  m_zs/*梯度方向*/, m_drs/*中间变量*/, m_dxs/*x的增量*/, m_e2s/*m_rs.t*m_zs*/;
 #endif
-  LA::AlignedVectorXf m_xp2s, m_xr2s, m_xv2s, m_xba2s, m_xbw2s, m_xds, m_x2s, m_axds;
-  AlignedVector<LA::ProductVector6f> m_xcsP;
+  LA::AlignedVectorXf m_xp2s/*位置部分优化变量增量的^2*/, m_xr2s/*朝向部分优化变量增量的^2*/, m_xv2s/*v部分优化变量增量的^2*/,
+  m_xba2s/*acc bias部分优化变量增量的^2*/, m_xbw2s/*gyr bias部分优化变量增量的^2*/, m_xds/**/,
+  m_x2s/*边缘化以后求解出的pose+motion部分的优化变量增量^2*/, m_axds;//逆深度增量的绝对值
+  AlignedVector<LA::ProductVector6f> m_xcsP;//delta_x中pose的部分
   AlignedVector<LA::AlignedVector6f> m_Axcs;
   AlignedVector<LA::AlignedVector3f> m_xps, m_xrs;
   std::vector<const LA::AlignedVector3f *> m_xpsP, m_xrsP;
-  std::vector<int> m_iKF2X;
+  std::vector<int> m_iKF2X;//每个关键帧来之前总共有多少个地图点
+//优化时的一些备份状态
+  AlignedVector<Rigid3D> m_CsBkp;//备份了优化时所有关键帧的左相机位姿
+  AlignedVector<Camera> m_CsLMBkp;//备份了优化时所有关键帧的左相机状态
+  std::vector<Depth::InverseGaussian> m_dsBkp;//备份了优化时逆深度的增量
+  AlignedVector<LA::Vector6f> m_xcsBkp;//备份了优化时pose的增量
+  AlignedVector<LA::Vector9f> m_xmsLMBkp;//备份了优化时motion的增量
 
-  AlignedVector<Rigid3D> m_CsBkp;
-  AlignedVector<Camera> m_CsLMBkp;
-  std::vector<Depth::InverseGaussian> m_dsBkp;
-  AlignedVector<LA::Vector6f> m_xcsBkp;
-  AlignedVector<LA::Vector9f> m_xmsLMBkp;
-
-  LA::AlignedVectorXf m_xsGN, m_xsGD, m_xsDL, m_xsGT;
+  LA::AlignedVectorXf m_xsGN/*增量,在PCG求解时是-x*/, m_xsGD/*pU点*/, m_xsDL/*dogleg求出的增量*/, m_xsGT;
   AlignedVector<LA::ProductVector6f> m_gcs;
   LA::AlignedVectorXf m_gds, m_Agds, m_Ags;
-  float m_x2GN, m_x2GD, m_x2DL, m_bl, m_gTAg, m_beta, m_dFa, m_dFp, m_rho;
+  float m_x2GN/*m_xsGN.dot(m_xsGN)*/, m_x2GD/*pU点的欧式距离*/, m_x2DL/*dogleg增量的欧式距离*/, m_bl, m_gTAg, m_beta/*比例因子*/,
+  m_dFa/*实际下降的*/, m_dFp/*理论下降值,直接用J*dx近似下降值了*/, m_rho/*实际/理论的比值*/;
   bool m_update, m_converge, m_empty;
 
   AlignedVector<LA::AlignedVector3f> m_t12s;
   std::vector<Depth::Measurement> m_zds;
 
   std::vector<ubyte> m_marksTmp1, m_marksTmp2, m_marksTmp3;
-  std::vector<int> m_idxsTmp1, m_idxsTmp2, m_idxsTmp3;
+  std::vector<int> m_idxsTmp1/*关键帧之前有多少个地图点*/, m_idxsTmp2/*记录的是双目观测的地图点的索引:[局部id]= 是第几个观测的特征点(无效就是-1)*/, m_idxsTmp3;
   std::vector<std::vector<int> > m_idxsListTmp;
   std::vector<std::vector<FRM::Measurement>::iterator> m_iKF2Z;
-  std::vector<FTR::Source> m_xsTmp;
+  std::vector<FTR::Source> m_xsTmp;//缓存变量,只保存当前这个关键帧中所有的新地图点的观测相关的信息
   std::vector<FTR::Measurement> m_zsTmp;
   std::vector<std::vector<FTR::Measurement> > m_zsListTmp;
   std::vector<FTR::Measurement::Match> m_izmsTmp;
@@ -855,7 +869,7 @@ class GlobalBundleAdjustor : public MT::Thread {
   AlignedVector<float> m_work;
 
   // Callback function that will be triggered after GBA::run() finishes
-  IBA::Solver::IbaCallback m_callback;
+  IBA::Solver::IbaCallback m_callback;//
 
 #ifdef CFG_DEBUG_EIGEN
  protected:

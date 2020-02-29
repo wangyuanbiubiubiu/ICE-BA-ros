@@ -58,53 +58,59 @@ void GlobalMap::LBA_DeleteKeyFrame(const int iFrm, const int iKF) {
   }
   MT_WRITE_LOCK_END(m_MT, iFrm, MT_TASK_GM_LBA_DeleteKeyFrame);
 }
-
-ubyte GlobalMap::LBA_Synchronize(const int iFrm, AlignedVector<Rigid3D> &Cs,
-                                 AlignedVector<Rigid3D> &CsBkp, std::vector<ubyte> &ucs
+//
+ubyte GlobalMap::LBA_Synchronize(const int iFrm/*最新的关键帧对应的普通帧的id*/, AlignedVector<Rigid3D> &Cs,/*关键帧左相机位姿*/
+                                 AlignedVector<Rigid3D> &CsBkp/*关键帧左相机位姿备份*/, std::vector<ubyte> &ucs/*最新的共视关键帧中地图点是否有子轨迹生成*/
 #ifdef CFG_HANDLE_SCALE_JUMP
                                , std::vector<float> &ds, std::vector<float> &dsBkp
 #endif
-                               ) {
+                               )
+{
   ubyte ret;
   MT_WRITE_LOCK_BEGIN(m_MT, iFrm, MT_TASK_GM_LBA_Synchronize);
-  if (m_Uc == GM_FLAG_FRAME_DEFAULT) {
+  if (m_Uc == GM_FLAG_FRAME_DEFAULT)
+  {
     ret = GM_FLAG_FRAME_DEFAULT;
-  } else {
-    m_Uc = GM_FLAG_FRAME_DEFAULT;
-    const int N = static_cast<int>(m_Cs.size());
+  } else
+  {
+      m_Uc = GM_FLAG_FRAME_DEFAULT;
+      const int N = static_cast<int>(m_Cs.size());
 #ifdef CFG_DEBUG
-    UT_ASSERT(Cs.Size() == N);
+      UT_ASSERT(Cs.Size() == N);
 #endif
-    CsBkp.Resize(N);
-    ucs.assign(N, GM_FLAG_FRAME_DEFAULT);
+      CsBkp.Resize(N);
+      ucs.assign(N, GM_FLAG_FRAME_DEFAULT);
 #ifdef CFG_HANDLE_SCALE_JUMP
-    dsBkp.resize(N);
+      dsBkp.resize(N);
 #endif
-    for (int i = 0; i < N; ++i) {
-      Camera &C = m_Cs[i];
-      if (C.m_uc == GM_FLAG_FRAME_DEFAULT) {
-        continue;
-      }
-      if (C.m_uc & GM_FLAG_FRAME_UPDATE_CAMERA) {
-        CsBkp[i] = Cs[i];
-        Cs[i] = C.m_C;
-      }
-      ucs[i] = C.m_uc;
+      for (int i = 0; i < N; ++i)
+      {
+          Camera &C = m_Cs[i];
+          if (C.m_uc == GM_FLAG_FRAME_DEFAULT)
+          {
+              continue;
+          }
+          if (C.m_uc & GM_FLAG_FRAME_UPDATE_CAMERA)
+          {
+              CsBkp[i] = Cs[i];
+              Cs[i] = C.m_Cam_pose;
+          }
+          ucs[i] = C.m_uc;//将需要更新的关键帧记录下来
 #ifdef CFG_HANDLE_SCALE_JUMP
-      if (C.m_uc & GM_FLAG_FRAME_UPDATE_DEPTH) {
+          if (Cam_state.m_uc & GM_FLAG_FRAME_UPDATE_DEPTH) {
         dsBkp[i] = ds[i];
-        ds[i] = C.m_d;
+        ds[i] = Cam_state.m_d;
       }
 #endif
-      C.m_uc = GM_FLAG_FRAME_DEFAULT;
-    }
-    ret = GM_FLAG_FRAME_UPDATE_CAMERA;
+          C.m_uc = GM_FLAG_FRAME_DEFAULT;//设置成不需要更新
+      }
+      ret = GM_FLAG_FRAME_UPDATE_CAMERA;
   }
   MT_WRITE_LOCK_END(m_MT, iFrm, MT_TASK_GM_LBA_Synchronize);
-  return ret;
+    return ret;
 }
-
-void GlobalMap::GBA_Update(const std::vector<int> &iFrms, const AlignedVector<Rigid3D> &Cs,
+//更新GlobalMap里m_Cs的pose
+void GlobalMap::GBA_Update(const std::vector<int> &iFrms/*关键帧和普通帧之间的id对应*/, const AlignedVector<Rigid3D> &Cs/*更新以后的相机状态*/,
                            const std::vector<ubyte> &ucs
 #ifdef CFG_HANDLE_SCALE_JUMP
                          , const std::vector<float> &ds
@@ -113,12 +119,12 @@ void GlobalMap::GBA_Update(const std::vector<int> &iFrms, const AlignedVector<Ri
   MT_WRITE_LOCK_BEGIN(m_MT, iFrms.back(), MT_TASK_GM_GBA_Update);
   std::vector<Camera>::iterator i = m_Cs.begin();
   const int N = static_cast<int>(iFrms.size());
-  for (int j = 0; j < N; ++j) {
+  for (int j = 0; j < N; ++j) {//遍历所有关键帧
     const ubyte uc = ucs[j];
     if (uc == GM_FLAG_FRAME_DEFAULT) {
       continue;
     }
-    const int iFrm = iFrms[j];
+    const int iFrm = iFrms[j];//关键帧id对应的全局帧id
     i = std::lower_bound(i, m_Cs.end(), iFrm);
     if (i == m_Cs.end()) {
       break;
@@ -126,7 +132,7 @@ void GlobalMap::GBA_Update(const std::vector<int> &iFrms, const AlignedVector<Ri
       continue;
     }
     if (uc & GM_FLAG_FRAME_UPDATE_CAMERA) {
-      i->m_C = Cs[j];
+      i->m_Cam_pose = Cs[j];
       i->m_uc |= GM_FLAG_FRAME_UPDATE_CAMERA;
       m_Uc |= GM_FLAG_FRAME_UPDATE_CAMERA;
     }
@@ -161,7 +167,7 @@ void GlobalMap::AssertConsistency() {
   const int N = static_cast<int>(m_Cs.size());
   for (int i = 0; i < N; ++i) {
     const Camera &C = m_Cs[i];
-    C.m_C.AssertOrthogonal();
+    C.m_Cam_pose.AssertOrthogonal();
     Uc |= C.m_uc;
   }
   UT_ASSERT(m_Uc == Uc);

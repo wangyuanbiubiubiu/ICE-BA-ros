@@ -553,7 +553,7 @@ class AlignedMatrix3x3f {
     Ab[1] += (A.m_10_11_12_r1() * b.v012r()).vsum_012();
     Ab[2] += (A.m_20_21_22_r2() * b.v012r()).vsum_012();
   }
-  template<typename TYPE>
+  template<typename TYPE>  //Ab += A*b
   static inline void AddAbTo(const AlignedMatrix3x3f &A, const AlignedVector3f &b, TYPE *Ab) {
     const float *Ar0 = &A.m00(), *Ar1 = &A.m10(), *Ar2 = &A.m20();
     const float *br = b;
@@ -581,18 +581,18 @@ class AlignedMatrix3x3f {
     AmB.m_10_11_12_r1() = A.m_10_11_12_r1() - B.m_10_11_12_r1();
     AmB.m_20_21_22_r2() = A.m_20_21_22_r2() - B.m_20_21_22_r2();
   }
-  // this is confusing, fucntion name AB means C = A * B, but in fact, it's A * BT
+  // this is confusing, fucntion name AB means Cam_state = A * B, but in fact, it's A * BT
   static inline void AB(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
                         AlignedMatrix3x3f &AB) {
     const AlignedMatrix3x3f BT = B.GetTranspose();
     ABT(A, BT, AB);
   }
-  // this is confusing, fucntion name AB means C += A * B, but in fact, it's A * BT
+  // this is confusing, fucntion name AB means Cam_state += A * B, but in fact, it's A * BT
   static inline void AddABTo(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
                              AlignedMatrix3x3f &AB) {
     const AlignedMatrix3x3f BT = B.GetTranspose();
     AddABTTo(A, BT, AB);
-  }
+  }//ABT = A*B.t
   static inline void ABT(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
                          AlignedMatrix3x3f &ABT) {
     ABT.m00() = (A.m_00_01_02_r0() * B.m_00_01_02_r0()).vsum_012();
@@ -616,7 +616,7 @@ class AlignedMatrix3x3f {
     ABT.m20() = (A.m_20_21_22_r2() * B.m_00_01_02_r0()).vsum_012();
     ABT.m21() = (A.m_20_21_22_r2() * B.m_10_11_12_r1()).vsum_012();
     ABT.m22() = (A.m_20_21_22_r2() * B.m_20_21_22_r2()).vsum_012();
-  }
+  }//0代表第一行的意思
   static inline void ABT(const AlignedMatrix3x3f &A, const AlignedMatrix3x3f &B,
                          float *ABT0, float *ABT1, float *ABT2) {
     ABT0[0] = (A.m_00_01_02_r0() * B.m_00_01_02_r0()).vsum_012();

@@ -185,7 +185,7 @@ void LocalBundleAdjustor::LoadB(FILE *fp) {
     const int nKFs = m_CsKF.Size();
     m_CsKFGT.Resize(nKFs);
     for (int iKF = 0; iKF < nKFs; ++iKF) {
-      m_CsKFGT[iKF] = m_CsGT[m_KFs[iKF].m_T.m_iFrm].m_T;
+      m_CsKFGT[iKF] = m_CsGT[m_KFs[iKF].m_T.m_iFrm].m_Cam_pose;
     }
   }
 #endif
@@ -273,7 +273,7 @@ FTR::ES LocalBundleAdjustor::ComputeErrorStatisticFeaturePriorDepth(const Aligne
   const int nLFs = int(m_LFs.size());
   for (int ic = 0; ic < nLFs; ++ic) {
     const int iLF = m_ic2LF[ic];
-    AccumulateErrorStatisticFeature(&m_LFs[iLF], CsLF[iLF].m_T, CsKF, ds, &ES, true);
+    AccumulateErrorStatisticFeature(&m_LFs[iLF], CsLF[iLF].m_Cam_pose, CsKF, ds, &ES, true);
   }
   const int nKFs = int(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
@@ -305,7 +305,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeature(const FRM::Frame *F, c
     for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
 //#ifdef CFG_DEBUG
 #if 0
-      if (F->m_T.m_iFrm == 1010 && iz == 29) {
+      if (F->m_Cam_pose.m_iFrm == 1010 && iz == 29) {
         UT::DebugStart();
         UT::DebugStop();
       }
@@ -339,12 +339,12 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeature(const FRM::Frame *F, c
       }
 #else
       const float r2 = LA::SymmetricMatrix2x2f::MahalanobisDistance(z.m_W, e.m_e);
-      //const float F = w * ME::Cost<LBA_ME_FUNCTION>(r2);
-      const float F = w * ME::Weight<LBA_ME_FUNCTION>(r2) * r2;
+      //const float F = gyr * ME::Cost<LBA_ME_FUNCTION>(r2);
+      const float F = gyr * ME::Weight<LBA_ME_FUNCTION>(r2) * r2;
       const bool r = r2 < r2Max;
 //#ifdef CFG_DEBUG
 #if 0
-      if (F->m_T.m_iFrm == 1) {
+      if (F->m_Cam_pose.m_iFrm == 1) {
         UT::Print("%d: %e + %e = %e\n", iz, F, ES->m_ESx.m_SF, F + ES->m_ESx.m_SF);
       }
 #endif
@@ -352,7 +352,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeature(const FRM::Frame *F, c
 #endif
 //#ifdef CFG_DEBUG
 #if 0
-      if (F->m_T.m_iFrm == 117 && iz == 4) {
+      if (F->m_Cam_pose.m_iFrm == 117 && iz == 4) {
         Tr.Print("Tr = ", false);
         UT::Print("d  = %f\n", _ds[ix].u());
         (e.m_ex * LA::Vector2f(m_K.fx(), m_K.fy())).Print("ex = ", false);
@@ -362,7 +362,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeature(const FRM::Frame *F, c
   }
 //#ifdef CFG_DEBUG
 #if 0
-  UT::Print("[%d] %e\n", F->m_T.m_iFrm, ES->Total());
+  UT::Print("[%d] %e\n", F->m_Cam_pose.m_iFrm, ES->Total());
 #endif
 }
 
@@ -453,7 +453,7 @@ Camera::Fix::Origin::ES LocalBundleAdjustor::ComputeErrorStatisticFixOrigin(cons
   const int iLF = m_ic2LF[0], iFrm = m_LFs[iLF].m_T.m_iFrm;
   if (iFrm == 0) {
     Camera::Fix::Origin::Error e;
-    m_Zo.GetError(CsLF[iLF].m_T, e, BA_ANGLE_EPSILON);
+    m_Zo.GetError(CsLF[iLF].m_Cam_pose, e, BA_ANGLE_EPSILON);
     const float F = m_Zo.GetCost(e);
     ES.Accumulate(e, F, iFrm);
   }
@@ -608,7 +608,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureLF(const AlignedVector<
     const LA::ProductVector6f *xc = !updateOnly || (m_ucsLF[iLF] & LBA_FLAG_FRAME_UPDATE_CAMERA) ?
                                     &xcs[ic] : NULL;
 #ifdef LBA_DEBUG_ACTUAL_COST
-    const Rigid3D C = xc ? Rigid3D(CsLF[iLF].m_T, &xc->Get012(), &xc->Get345()) : CsLF[iLF].m_T;
+    const Rigid3D Cam_state = xc ? Rigid3D(CsLF[iLF].m_Cam_pose, &xc->Get012(), &xc->Get345()) : CsLF[iLF].m_Cam_pose;
 #endif
     //float SFx = 0.0f;
     const LocalFrame &LF = m_LFs[iLF];
@@ -617,7 +617,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureLF(const AlignedVector<
       const FRM::Measurement &Z = LF.m_Zs[iZ];
 #ifdef LBA_DEBUG_ACTUAL_COST
       Rigid3D Tr[2];
-      *Tr = C / CsKF[Z.m_iKF];
+      *Tr = Cam_state / CsKF[Z.m_iKF];
 #ifdef CFG_STEREO
       Tr[1] = Tr[0];
       Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());
@@ -633,8 +633,8 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureLF(const AlignedVector<
       for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
 //#ifdef CFG_DEBUG
 #if 0
-        if (LF.m_T.m_iFrm == 1010 && iz == 29 ||
-            LF.m_T.m_iFrm == 1037 && iz == 3) {
+        if (LF.m_Cam_pose.m_iFrm == 1010 && iz == 29 ||
+            LF.m_Cam_pose.m_iFrm == 1037 && iz == 3) {
           UT::DebugStart();
           UT::DebugStop();
         }
@@ -715,7 +715,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureLF(const AlignedVector<
 #endif
       }
     }
-    //UT::Print("[%d] %e\n", LF.m_T.m_iFrm, g_ESx.Total());
+    //UT::Print("[%d] %e\n", LF.m_Cam_pose.m_iFrm, g_ESx.Total());
   }
 }
 
@@ -733,7 +733,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureKF(const AlignedVector<
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
 #ifdef LBA_DEBUG_ACTUAL_COST
-    const Rigid3D &C = CsKF[iKF];
+    const Rigid3D &Cam_state = CsKF[iKF];
 #endif
     const KeyFrame &KF = m_KFs[iKF];
     const int NZ = static_cast<int>(KF.m_Zs.size());
@@ -745,7 +745,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureKF(const AlignedVector<
       const Rigid3D _C = CsKF[_iKF];
       const Depth::InverseGaussian *_ds = ds + id;
       Rigid3D Tr[2];
-      *Tr = C / _C;
+      *Tr = Cam_state / _C;
 #ifdef CFG_STEREO
       Tr[1] = Tr[0];
       Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());
@@ -829,7 +829,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticFeatureKF(const AlignedVector<
 #endif
       }
     }
-    //UT::Print("[%d] %e\n", KF.m_T.m_iFrm, g_ESx.Total());
+    //UT::Print("[%d] %e\n", KF.m_Cam_pose.m_iFrm, g_ESx.Total());
   }
 }
 
@@ -867,7 +867,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticPriorDepth(const Depth::Invers
         ES->Accumulate(m_K.m_Kr, er, F, idx);
 //#ifdef CFG_DEBUG
 #if 0
-        dF = a.m_F - F + dF;
+        dF = acc.m_F - F + dF;
 #endif
       } else
 #endif
@@ -883,7 +883,7 @@ void LocalBundleAdjustor::AccumulateErrorStatisticPriorDepth(const Depth::Invers
         ES->Accumulate(e, F, idx);
 //#ifdef CFG_DEBUG
 #if 0
-        dF = a.m_F - F + dF;
+        dF = acc.m_F - F + dF;
 #endif
       }
     }
@@ -1747,7 +1747,7 @@ void LocalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkSc
         _SaddsST[iST] = SaddST;
 #if 0
 //#if 1
-        //if (m_iIter == 0 && KF.m_T.m_iFrm == 103 && ix == 8 && iST == iST1) {
+        //if (m_iIter == 0 && KF.m_Cam_pose.m_iFrm == 103 && ix == 8 && iST == iST1) {
         if (iKF == 0 && ix == 39 && iST == iST1 + 1) {
           UT::PrintSeparator();
           UT::Print("  SaddST = %e\n", SaddST.m_a);
@@ -1772,10 +1772,10 @@ void LocalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkSc
         for (int iST = iST1; iST < iST2; ++iST) {
 #if 0
 //#if 1
-          //if (m_iIter == 0 && KF.m_T.m_iFrm == 103 && ix == 8 && iST == iST0) {
+          //if (m_iIter == 0 && KF.m_Cam_pose.m_iFrm == 103 && ix == 8 && iST == iST0) {
           if (Z.m_iKF == 0 && ix == 4 && iST == iST0 + 1) {
             UT::Print("  SaddST = %e + %e = %e [%d]\n", addST.m_a, _SaddsST[iST].m_a,
-                                                        addST.m_a + _SaddsST[iST].m_a, LF.m_T.m_iFrm);
+                                                        addST.m_a + _SaddsST[iST].m_a, LF.m_Cam_pose.m_iFrm);
           }
 #endif
           _SaddsST[iST] += addST;
@@ -1837,12 +1837,12 @@ void LocalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkSc
 #if 0
 //#if 1
             //if (m_iIter == 0 && iLF == 5 && iz == 52) {
-            if (m_iIter == 0 && LF.m_T.m_iFrm == 105 && iz == 52) {
+            if (m_iIter == 0 && LF.m_Cam_pose.m_iFrm == 105 && iz == 52) {
               if (iST == iST1) {
                 UT::PrintSeparator();
                 UT::Print("iST = [%d, %d)\n", iST1, iST2);
               }
-              UT::Print("  addST = %e, SmddST = %e + %e = %e\n", a, m, _SmddST.m_a, m + _SmddST.m_a);
+              UT::Print("  addST = %e, SmddST = %e + %e = %e\n", acc, m, _SmddST.m_a, m + _SmddST.m_a);
             }
 #endif
             _SmddST += KF.m_MxsST[iST].m_mdd;
@@ -1966,8 +1966,8 @@ void LocalBundleAdjustor::AccumulateFactorFeatureDD(const FRM::Frame *F,
         if (Sa.m_a == 0.0f) {
           UT::PrintSeparator();
         }
-        UT::Print("+[%d] %d: [%d] %e + %e = %e\n", m_LFs[m_ic2LF.back()].m_T.m_iFrm, m_iIter,
-                  F->m_T.m_iFrm, Sa.m_a, a.m_a, Sa.m_a + a.m_a);
+        UT::Print("+[%d] %d: [%d] %e + %e = %e\n", m_LFs[m_ic2LF.back()].m_Cam_pose.m_iFrm, m_iIter,
+                  F->m_Cam_pose.m_iFrm, Sa.m_a, acc.m_a, Sa.m_a + acc.m_a);
       }
 #endif
       Sa += a;

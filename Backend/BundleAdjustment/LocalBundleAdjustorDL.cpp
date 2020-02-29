@@ -22,27 +22,28 @@
 #if defined WIN32 && defined CFG_DEBUG && defined CFG_GROUND_TRUTH
 //#define LBA_DEBUG_GROUND_TRUTH_MEASUREMENT
 #endif
-
+//三种情况,1：GN极值点在域内直接变成无约束条件 2:GN和pU点都在域外,那么就在给pU点的步长一个比例因子(域半径/自己的步长^2（因为用的是最小2乘）),让它刚好落在域半径上
+//3:GN在域外,pU点在域内,那么增量就是GN极值点和pU点的连线与信赖域的交点
 void LocalBundleAdjustor::SolveDogLeg() {
-  if (m_x2GN <= m_delta2 || BA_DL_MAX_ITERATIONS == 0) {
+  if (m_x2GN <= m_delta2 || BA_DL_MAX_ITERATIONS == 0) {//如果G-N的极值在信赖域内,那么就是一个无约束问题,就直接用GN法求出的增量就可以
     m_xsDL.Set(m_xsGN);
     m_x2DL = m_x2GN;
     m_beta = 1.0f;
-  } else if (m_x2GD >= m_delta2) {
-    if (m_delta2 == 0.0f) {
+  } else if (m_x2GD >= m_delta2) {//如果G-N和pU点求的最优点都在信赖域外
+    if (m_delta2 == 0.0f) {//信赖域为0,直接用pU点求得最优值
       m_xsDL.Set(m_xsGD);
       m_x2DL = m_x2GD;
     } else {
-      m_xsGD.GetScaled(sqrtf(m_delta2 / m_x2GD), m_xsDL);
+      m_xsGD.GetScaled(sqrtf(m_delta2 / m_x2GD), m_xsDL);//乘比例因子
       m_x2DL = m_delta2;
     }
     m_beta = 0.0f;
-  } else {
-    LA::AlignedVectorXf::AmB(m_xsGN, m_xsGD, m_dxs);
+  } else {//GN在域外,pU点在域内,那么增量就是GN极值点和pU点的连线与信赖域的交点
+    LA::AlignedVectorXf::AmB(m_xsGN, m_xsGD, m_dxs);//方向 m_xsDL = m_xsGN - m_xsGD
     const float d = m_xsGD.Dot(m_dxs), dx2 = m_dxs.SquaredLength();
     //m_beta = static_cast<float>((-d + sqrt(static_cast<double>(d) * d +
     //                            (m_delta2 - m_x2GD) * static_cast<double>(dx2))) / dx2);
-    m_beta = (-d + sqrtf(d * d + (m_delta2 - m_x2GD) * dx2)) / dx2;
+    m_beta = (-d + sqrtf(d * d + (m_delta2 - m_x2GD) * dx2)) / dx2;//算得是在域外那段连线的长度
     m_dxs *= m_beta;
     m_xsDL.Set(m_xsGD);
     m_xsDL += m_dxs;
@@ -50,24 +51,24 @@ void LocalBundleAdjustor::SolveDogLeg() {
   }
   const int pc = 6, pm = 9;
   const int Nc = int(m_LFs.size()), Ncp = Nc * pc, Nmp = Nc * pm, Ncmp = Ncp + Nmp;
-  ConvertCameraUpdates(m_xsDL.Data(), &m_xp2s, &m_xr2s);
-  ConvertMotionUpdates(m_xsDL.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);
-  ConvertDepthUpdates(m_xsDL.Data() + Ncmp, &m_xds);
+  ConvertCameraUpdates(m_xsDL.Data(), &m_xp2s, &m_xr2s);//计算一下pose增量的欧式距离
+  ConvertMotionUpdates(m_xsDL.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);//计算一下motion增量的欧式距离
+  ConvertDepthUpdates(m_xsDL.Data() + Ncmp, &m_xds);//保存逆深度增量
 }
-
+//求解pU点,方向是负梯度方向,步长g.t*g/g.t*A*g,下面的步骤基本都是在构造A*g
 void LocalBundleAdjustor::SolveGradientDescent() {
   const int pc = 6, pm = 9;
   const int Nc = int(m_LFs.size()), Nd = m_xds.Size();
   const int Ncp = Nc * pc, Nmp = Nc * pm, Ncmp = Ncp + Nmp;
   m_xsGD.Resize(0);
-  for (int ic = 0; ic < Nc; ++ic) {
+  for (int ic = 0; ic < Nc; ++ic) {//遍历滑窗中所有的帧,保存每帧pose对应的-b
     m_xsGD.Push(m_SAcusLF[m_ic2LF[ic]].m_b, 6);
   }
-  for (int ic = 0; ic < Nc; ++ic) {
+  for (int ic = 0; ic < Nc; ++ic) {//遍历滑窗中所有的帧,保存每帧motion对应的-b
     m_xsGD.Push(m_SAcmsLF[m_ic2LF[ic]].m_Au.m_Amm.m_b, 9);
   }
   const int nKFs = int(m_KFs.size());
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有关键帧里的地图点,保存每个点逆深度对应的-b
     const int iX = m_iKF2X[iKF];
     if (iX == -1) {
       continue;
@@ -81,26 +82,26 @@ void LocalBundleAdjustor::SolveGradientDescent() {
       }
     }
   }
-  m_bl = sqrtf(m_xsGD.SquaredLength());
+  m_bl = sqrtf(m_xsGD.SquaredLength());//sqrtf(b.t*b)
   if (m_bl != 0.0f) {
-    m_xsGD /= m_bl;
+    m_xsGD /= m_bl;//现在m_xsGD就是梯度
   }
-  ConvertCameraUpdates((LA::Vector6f *) m_xsGD.Data(), &m_gcs);
-  ConvertDepthUpdates(m_xsGD.Data() + Ncmp, &m_gds);
+  ConvertCameraUpdates((LA::Vector6f *) m_xsGD.Data(), &m_gcs);//pose的梯度
+  ConvertDepthUpdates(m_xsGD.Data() + Ncmp, &m_gds);//深度的梯度
 
   LA::AlignedMatrix6x6f A66;
-  m_Ags.Resize(Ncmp);
+  m_Ags.Resize(Ncmp);//普通帧pose自己和自己的H,Agcs[ic] = Acc * gc
   LA::Vector6f *Agcs = (LA::Vector6f *) m_Ags.Data();
   for (int ic = 0; ic < Nc; ++ic) {
     m_SAcusLF[m_ic2LF[ic]].m_A.GetAlignedMatrix6x6f(A66);
     LA::AlignedMatrix6x6f::Ab(A66, m_gcs[ic], (float *) &Agcs[ic]);
   }
-
+//这里在算Acm，Amc和Amm部分*g
   ApplyAcm(m_gcs.Data(), (LA::Vector9f *) (m_xsGD.Data() + Ncp), Agcs,
            (LA::Vector9f *) (m_Ags.Data() + Ncp));
 
   m_Agds.Resize(Nd);
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有的关键帧的地图点,计算地图点Auu*gu
     const int iX = m_iKF2X[iKF];
     if (iX == -1) {
       continue;
@@ -118,7 +119,7 @@ void LocalBundleAdjustor::SolveGradientDescent() {
   }
 
   LA::AlignedVector6f Agc;
-  for (int ic = 0; ic < Nc; ++ic) {
+  for (int ic = 0; ic < Nc; ++ic) {//遍历所有滑窗中的帧,Acu部分*g
     const LocalFrame &LF = m_LFs[m_ic2LF[ic]];
     const LA::AlignedVector6f &gc = m_gcs[ic];
     Agc.Set(Agcs[ic]);
@@ -137,7 +138,7 @@ void LocalBundleAdjustor::SolveGradientDescent() {
         if (!(uds[ix] & LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {
           continue;
         }
-        const LA::AlignedVector6f &adcz = LF.m_Azs1[iz].m_adczA;
+        const LA::AlignedVector6f &adcz = LF.m_Azs1[iz].m_adczA;//m_adcz是Hcu
         Agds[ix] = adcz.Dot(gc) + Agds[ix];
         LA::AlignedVector6f::AddsaTo(gds[ix], adcz, Agc);
       }
@@ -145,10 +146,10 @@ void LocalBundleAdjustor::SolveGradientDescent() {
     Agc.Get(Agcs[ic]);
   }
   PushDepthUpdates(m_Agds, &m_Ags);
-  m_gTAg = m_xsGD.Dot(m_Ags);
+  m_gTAg = m_xsGD.Dot(m_Ags);//g.t*g/g.t*A*g 这个就是步长
   const float xl = m_bl / m_gTAg;
-  m_xsGD *= -xl;
-  m_x2GD = xl * xl;
+  m_xsGD *= -xl;//负梯度方向
+  m_x2GD = xl * xl;//pU点的增量方向
 //#ifdef CFG_DEBUG
 #if 0
   if (m_debug) {
@@ -157,23 +158,23 @@ void LocalBundleAdjustor::SolveGradientDescent() {
   }
 #endif
 }
-
+//计算一下所有因子的实际下降和理论下降,然后计算rho = 实际/理论
 void LocalBundleAdjustor::ComputeReduction() {
-  m_dFa = m_dFp = 0.0f;
+  m_dFa /*实际下降的cost*/= m_dFp/*理论下降的cost*/ = 0.0f;
   if (m_update) {
-    ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data(), &m_xcsP);
+    ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data(), &m_xcsP);//m_xcsP = dogleg求出的pose增量
     ComputeReductionFeaturePriorDepth();
     ComputeReductionPriorCameraMotion();
-    ComputeReductionIMU();
+    ComputeReductionIMU();//
     //ComputeReductionFixOrigin();
-    ComputeReductionFixPositionZ();
+    ComputeReductionFixPositionZ();//这两个也没用,我都注释了
     ComputeReductionFixMotion();
     m_rho = m_dFa > 0.0f && m_dFp > 0.0f ? m_dFa / m_dFp : -1.0f;
   } else {
     m_rho = 0.0f;
   }
 }
-
+//计算一下cost实际下降和理论下降J*dx
 void LocalBundleAdjustor::ComputeReductionFeaturePriorDepth() {
   ComputeReductionFeatureLF();
   ComputeReductionFeatureKF();
@@ -185,37 +186,39 @@ void LocalBundleAdjustor::ComputeReductionFeatureLF() {
   Rigid3D Tr[2];
   FTR::Reduction Ra, Rp;
   const int nLFs = int(m_LFs.size());
-  for (int ic = 0; ic < nLFs; ++ic) {
+  for (int ic = 0; ic < nLFs; ++ic) {//遍历所有滑窗中的帧
     const int iLF = m_ic2LF[ic];
-    const LocalFrame &LF = m_LFs[iLF];
-    const Rigid3D &C = m_CsLF[iLF].m_T;
-    const LA::ProductVector6f *xc = (m_ucsLF[iLF] & LBA_FLAG_FRAME_UPDATE_CAMERA) ? &m_xcsP[ic] : NULL;
+    const LocalFrame &LF = m_LFs[iLF];//当前普通帧
+    const Rigid3D &C = m_CsLF[iLF].m_Cam_pose;//当前这个普通帧的pose
+    const LA::ProductVector6f *xc /*pose的增量*/= (m_ucsLF[iLF] & LBA_FLAG_FRAME_UPDATE_CAMERA) ? &m_xcsP[ic] : NULL;
     dFa = dFp = 0.0f;
     const int NZ = int(LF.m_Zs.size());
-    for (int iZ = 0; iZ < NZ; ++iZ) {
-      const FRM::Measurement &Z = LF.m_Zs[iZ];
+    for (int iZ = 0; iZ < NZ; ++iZ) {//遍历所有对于关键帧的观测
+      const FRM::Measurement &Z = LF.m_Zs[iZ];//
       const int iKF = Z.m_iKF;
       if (!xc && !(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH)) {
         continue;
       }
-      *Tr = C / m_CsKF[iKF];
+      *Tr = C / m_CsKF[iKF];//Tc0(LF)_c0(KF) = Tc0w(LF) * Tc0w.t(KF)
 #ifdef CFG_STEREO
       Tr[1] = Tr[0];
-      Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());
+      Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());//Tc1(LF)_c0(KF) //这里是考虑成外参的R是I了
 #endif
       const int id = m_iKF2d[iKF], iX = m_iKF2X[iKF];
       const Depth::InverseGaussian *ds = m_ds.data() + id;
       const ubyte *uds = m_uds.data() + id;
       const float *xds = iX == -1 ? NULL : m_xds.Data() + iX;
       const KeyFrame &KF = m_KFs[iKF];
-      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
+      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {//局部帧对于这个关键帧中地图点的观测
         const FTR::Measurement &z = LF.m_zs[iz];
-        const int ix = z.m_ix;
-        const float *xd = xds && (uds[ix] & LBA_FLAG_TRACK_UPDATE_DEPTH) ? &xds[ix] : NULL;
+        const int ix = z.m_ix;//局部id
+        const float *xd = xds && (uds[ix] & LBA_FLAG_TRACK_UPDATE_DEPTH) ? &xds[ix] : NULL;//如果要更新深度的话,就给上逆深度的增量
         if (!xc && !xd) {
           continue;
         }
-        FTR::GetReduction(LF.m_Lzs[iz], Tr, KF.m_xs[ix], ds[ix], z, xc, xd, Ra, Rp);
+        FTR::GetReduction(LF.m_Lzs[iz]/*当前帧中对每个地图点观测的重投影误差e,J(对当前帧的pose,对关键帧点的逆深度),cost*/,
+                Tr/*Tc(LF)_c0(KF)*/, KF.m_xs[ix]/*关键帧对这个地图点的观测*/, ds[ix]/*逆深度*/, z/*当前帧对这个地图点的观测*/,
+                xc/*pose部分增量*/, xd/*逆深度部分的增量*/, Ra, Rp);
         dFa = Ra.m_dF + dFa;
         dFp = Rp.m_dF + dFp;
 //#ifdef CFG_DEBUG
@@ -226,8 +229,8 @@ void LocalBundleAdjustor::ComputeReductionFeatureLF() {
 #endif
       }
     }
-    m_dFa = dFa + m_dFa;
-    m_dFp = dFp + m_dFp;
+    m_dFa = dFa + m_dFa;//实际下降
+    m_dFp = dFp + m_dFp;//理论下降
 //#ifdef CFG_DEBUG
 #if 0
     if (m_iIter == 0) {
@@ -276,7 +279,7 @@ void LocalBundleAdjustor::ComputeReductionFeatureKF() {
 //#ifdef CFG_DEBUG
 #if 0
         if (iKF == 43) {
-          UT::Print("[%d] %d %d %f\n", _KF.m_T.m_iFrm, ix, iz, Ra.m_dF);
+          UT::Print("[%d] %d %d %f\n", _KF.m_Cam_pose.m_iFrm, ix, iz, Ra.m_dF);
         }
 #endif
         dFa = Ra.m_dF + dFa;
@@ -429,7 +432,7 @@ void LocalBundleAdjustor::ComputeReductionFixOrigin() {
   LA::AlignedVector3f xp, xr;
   Camera::Fix::Origin::Reduction Ra, Rp;
   m_xcsP[0].Get(xp, xr);
-  m_Zo.GetReduction(m_Ao, m_CsLF[iLF].m_T, xp, xr, Ra, Rp, BA_ANGLE_EPSILON);
+  m_Zo.GetReduction(m_Ao, m_CsLF[iLF].m_Cam_pose, xp, xr, Ra, Rp, BA_ANGLE_EPSILON);
   m_dFa = Ra.m_dF + m_dFa;
   m_dFp = Rp.m_dF + m_dFp;
 }
@@ -489,49 +492,52 @@ void LocalBundleAdjustor::ComputeReductionFixMotion() {
     }
   }
 }
-
+//备份状态以及更新状态
+//step1: 先备份状态和之前的增量(如果没更新的话)
+//step2: 遍历所有滑窗中的帧,判断状态是否要更新(r,p,v,ba,bg),要的话更新在m_CsLF中,m_ucmsLF[iLF]记录了都哪些状态量更新了
+//step3: 遍历所有关键帧中的地图点,判断是否要更新逆深度(m_ds中更新)，如果要更新的话,就将该地图点的逆深度和协方差进行更新
 bool LocalBundleAdjustor::UpdateStatesPropose() {
 #ifdef CFG_VERBOSE
   int SNc = 0, SNm = 0, SNk = 0;
 #endif
   LA::AlignedVector3f dp, dr, dv, dba, dbw, p;
   Rotation3D dR;
-  m_CsLFBkp.Set(m_CsLF);
+  m_CsLFBkp.Set(m_CsLF);//备份状态和前一次优化的增量
 #ifdef CFG_INCREMENTAL_PCG
   m_xcsLFBkp.Set(m_xcsLF);
   m_xmsLFBkp.Set(m_xmsLF);
 #endif
-  m_update = false;
-  m_converge = false;
+  m_update = false;//是否需要更新
+  m_converge = false;//是否收敛
   const int Nc = int(m_LFs.size());
-  const LA::Vector6f *xcsDL = (LA::Vector6f *) m_xsDL.Data();
-  const LA::Vector9f *xmsDL = (LA::Vector9f *) (xcsDL + Nc);
+  const LA::Vector6f *xcsDL = (LA::Vector6f *) m_xsDL.Data();//dogleg法的pose增量
+  const LA::Vector9f *xmsDL = (LA::Vector9f *) (xcsDL + Nc);//dogleg法的motion增量
 #ifdef CFG_INCREMENTAL_PCG
-  const LA::Vector6f *xcsGN = (LA::Vector6f *) m_xsGN.Data();
-  const LA::Vector9f *xmsGN = (LA::Vector9f *) (xcsGN + Nc);
+  const LA::Vector6f *xcsGN = (LA::Vector6f *) m_xsGN.Data();//GN法的pose增量
+  const LA::Vector9f *xmsGN = (LA::Vector9f *) (xcsGN + Nc);//GN法的motion增量
 #endif
-  for (int ic = 0; ic < Nc; ++ic) {
+  for (int ic = 0; ic < Nc; ++ic) {//遍历滑窗中的每帧的pose增量,如果大于阈值,则认为需要更新增量,更新到p,r上
     const int iLF = m_ic2LF[ic];
     Camera &C = m_CsLF[iLF];
     const bool ur = m_xr2s[ic] >= BA_UPDATE_ROTATION, up = m_xp2s[ic] >= BA_UPDATE_POSITION;
     if (ur || up) {
       xcsDL[ic].Get(dp, dr);
-      dR.SetRodrigues(dr, BA_ANGLE_EPSILON);
-      C.m_T = Rotation3D(C.m_T) * dR;
-      C.m_p += dp;
-      C.m_T.SetPosition(C.m_p);
-      m_ucsLF[iLF] |= LBA_FLAG_FRAME_UPDATE_CAMERA;
+      dR.SetRodrigues(dr, BA_ANGLE_EPSILON);//dr是增量
+      C.m_Cam_pose = Rotation3D(C.m_Cam_pose) * dR;//Rc0w * dR(exp[-th])
+      C.m_p += dp;//twc0 + dt
+      C.m_Cam_pose.SetPosition(C.m_p);//转成tc0w
+      m_ucsLF[iLF] |= LBA_FLAG_FRAME_UPDATE_CAMERA;//需要更新相机pose
 #ifdef CFG_INCREMENTAL_PCG
-      m_xcsLF[iLF].MakeZero();
+      m_xcsLF[iLF].MakeZero();//增量置0
 #endif
       m_update = true;
-    } else {
+    } else {//如果小于阈值则不用更新,保存GN的增量
       m_ucsLF[iLF] &= ~LBA_FLAG_FRAME_UPDATE_CAMERA;
 #ifdef CFG_INCREMENTAL_PCG
       m_xcsLF[iLF] = xcsGN[ic];
 #endif
     }
-    ubyte &ucm = m_ucmsLF[iLF];
+    ubyte &ucm = m_ucmsLF[iLF];//记录都更新了哪些状态量
     if (ur) {
       ucm |= LBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION;
     } else {
@@ -547,9 +553,9 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
     const LA::Vector9f &xmGN = xmsGN[ic];
     LA::Vector9f &xm = m_xmsLF[iLF];
 #endif
-    if (m_xv2s[ic] >= BA_UPDATE_VELOCITY) {
+    if (m_xv2s[ic] >= BA_UPDATE_VELOCITY) {//v是否要更新
       xmDL.Get012(dv);
-      C.m_v += dv;
+      C.m_v += dv;//加上增量
       ucm |= LBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY;
 #ifdef CFG_INCREMENTAL_PCG
       xm.MakeZero012();
@@ -561,7 +567,7 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
       xm.Set012(&xmGN.v0());
 #endif
     }
-    if (m_xba2s[ic] >= BA_UPDATE_BIAS_ACCELERATION) {
+    if (m_xba2s[ic] >= BA_UPDATE_BIAS_ACCELERATION) {//ba是否要更新
       xmDL.Get345(dba);
       C.m_ba += dba;
       ucm |= LBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION;
@@ -575,7 +581,7 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
       xm.Set345(&xmGN.v3());
 #endif
     }
-    if (m_xbw2s[ic] >= BA_UPDATE_BIAS_GYROSCOPE) {
+    if (m_xbw2s[ic] >= BA_UPDATE_BIAS_GYROSCOPE) {//bg是否要更新
       xmDL.Get678(dbw);
       C.m_bw += dbw;
       ucm |= LBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE;
@@ -601,7 +607,7 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
     }
 #endif
   }
-
+//判断是否要更新逆深度
 #ifdef CFG_VERBOSE
   int SNx = 0, SNX = 0, SNu = 0, SNU = 0;
 #endif
@@ -609,27 +615,27 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
   m_dsBkp.resize(m_xds.Size());
   const int nKFs = int(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_CAMERA;
+    m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_CAMERA;//将所有关键帧置于不更新pose状态
     const int id = m_iKF2d[iKF];
     ubyte *uds = m_uds.data() + id;
     const KeyFrame &KF = m_KFs[iKF];
     const int Nx = static_cast<int>(KF.m_xs.size());
-    if (m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH) {
+    if (m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH) {//将所有关键帧置于不更新深度状态,地图点也置于不更新深度状态
       m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_DEPTH;
       for (int ix = 0; ix < Nx; ++ix) {
         uds[ix] &= ~LBA_FLAG_TRACK_UPDATE_DEPTH;
       }
     }
-    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
+    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {//说明这个关键帧里有需要反求深度的地图点
       continue;
     }
     //m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;
     const int iX = m_iKF2X[iKF];
     Depth::InverseGaussian *ds = m_ds.data() + id, *dsBkp = m_dsBkp.data() + iX;
-    memcpy(dsBkp, ds, Nx * sizeof(Depth::InverseGaussian));
+    memcpy(dsBkp, ds, Nx * sizeof(Depth::InverseGaussian));//备份一下逆深度
     const float *xds = m_xds.Data() + iX;
     for (int ix = 0; ix < Nx; ++ix) {
-      if (!(uds[ix] & LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {
+      if (!(uds[ix] & LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {//有反求的逆深度的点
         continue;
       }
       //uds[ix] &= ~LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;
@@ -638,24 +644,24 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
         ++SNx;
       }
 #endif
-      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {
+      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {//不是一个有效的观测
         continue;
       }
-      const float axd = fabs(xds[ix]);
+      const float axd = fabs(xds[ix]);//逆深度的增量
 //#ifdef CFG_DEBUG
 #if 0
       if (axd > 40.0f) {
         UT::DebugStart();
-        UT::Print("[%d] %d %f\n", KF.m_T.m_iFrm, ix, xds[ix]);
+        UT::Print("[%d] %d %f\n", KF.m_Cam_pose.m_iFrm, ix, xds[ix]);
         UT::DebugStop();
       }
 #endif
-      if (axd < BA_UPDATE_DEPTH) {
+      if (axd < BA_UPDATE_DEPTH) {//逆深度的增量太小的话也不用更新
         continue;
       }
       Depth::InverseGaussian &d = ds[ix];
-      d.u() += xds[ix];
-      d.s2() = DEPTH_VARIANCE_EPSILON + KF.m_Mxs[ix].m_mdd.m_a * BA_WEIGHT_FEATURE;
+      d.u() += xds[ix];//更新这点的逆深度和协方差
+      d.s2() = DEPTH_VARIANCE_EPSILON + KF.m_Mxs[ix].m_mdd.m_a /*Huu^-1等同于协方差*/* BA_WEIGHT_FEATURE;
       //if (!d.Valid()) {
       //  d = dsBkp[ix];
       //  continue;
@@ -671,8 +677,8 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
       //  d.u() = KF.m_d.u();
       //}
       m_axds.Push(axd);
-      m_ucsKF[iKF] |= LBA_FLAG_FRAME_UPDATE_DEPTH;
-      uds[ix] |= LBA_FLAG_TRACK_UPDATE_DEPTH;
+      m_ucsKF[iKF] |= LBA_FLAG_FRAME_UPDATE_DEPTH;//将需要更新深度的地图点所在的关键帧flags中深度更新设成true
+      uds[ix] |= LBA_FLAG_TRACK_UPDATE_DEPTH;//将需要更新深度的地图点所在的flags中深度更新设成true
       m_update = true;
 #ifdef CFG_VERBOSE
       if (m_verbose >= 3) {
@@ -704,25 +710,30 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
 #endif
   return m_update;
 }
-
+//通过rho来判断近似效果的好坏,近似的不好需要回滚更新,接受这次更新的话就要将预积分重新算。将所有的回滚flags设成0,要更新的量对应的flags设成1
 bool LocalBundleAdjustor::UpdateStatesDecide() {
-  const int nLFs = static_cast<int>(m_LFs.size()), nKFs = static_cast<int>(m_KFs.size());
-  if (m_update && m_rho < BA_DL_GAIN_RATIO_MIN) {
+  const int nLFs = static_cast<int>(m_LFs.size()), nKFs = static_cast<int>(m_KFs.size());//局部帧和关键帧数量
+  if (m_update && m_rho < BA_DL_GAIN_RATIO_MIN)
+  {//rho < 0.25 如果大于0说明近似的不好,需要减小信赖域,减小近似的范围。如果<0就说明是错误的近似,那么就拒绝这次的增量
     m_delta2 *= BA_DL_RADIUS_FACTOR_DECREASE;
-    if (m_delta2 < BA_DL_RADIUS_MIN) {
+    if (m_delta2 < BA_DL_RADIUS_MIN)
+    {
       m_delta2 = BA_DL_RADIUS_MIN;
     }
-    m_CsLF.Swap(m_CsLFBkp);
+    m_CsLF.Swap(m_CsLFBkp);//回滚状态
 #ifdef CFG_INCREMENTAL_PCG
-    m_xcsLF.Swap(m_xcsLFBkp);
+    m_xcsLF.Swap(m_xcsLFBkp);//回滚增量
     m_xmsLF.Swap(m_xmsLFBkp);
 #endif
-    for (int iLF = 0; iLF < nLFs; ++iLF) {
+    for (int iLF = 0; iLF < nLFs; ++iLF) //遍历所有滑窗帧,更新flags设成false
+    {
       m_ucsLF[iLF] &= ~LBA_FLAG_FRAME_UPDATE_CAMERA;
       m_ucmsLF[iLF] = LBA_FLAG_CAMERA_MOTION_DEFAULT;
     }
-    for (int iKF = 0; iKF < nKFs; ++iKF) {
-      if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH)) {
+    for (int iKF = 0; iKF < nKFs; ++iKF) //遍历所有关键帧以及地图点,对应的flags也设成0
+    {
+      if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH))
+      {
         continue;
       }
       m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_DEPTH;
@@ -730,36 +741,44 @@ bool LocalBundleAdjustor::UpdateStatesDecide() {
       const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
       memcpy(m_ds.data() + id, m_dsBkp.data() + iX, Nx * sizeof(Depth::InverseGaussian));
       ubyte *uds = m_uds.data() + id;
-      for (int ix = 0; ix < Nx; ++ix) {
+      for (int ix = 0; ix < Nx; ++ix)
+      {
         uds[ix] &= ~LBA_FLAG_TRACK_UPDATE_DEPTH;
       }
     }
     m_update = false;
     m_converge = false;
-    return false;
-  } else if (m_rho > BA_DL_GAIN_RATIO_MAX) {
+    return false;//这次不更新
+  } else if (m_rho > BA_DL_GAIN_RATIO_MAX)  //rho > 0.75,可以扩大信赖域半径
+  {
     //m_delta2 *= BA_DL_RADIUS_FACTOR_INCREASE;
     m_delta2 = std::max(m_delta2, BA_DL_RADIUS_FACTOR_INCREASE * m_x2DL);
-    if (m_delta2 > BA_DL_RADIUS_MAX) {
+    if (m_delta2 > BA_DL_RADIUS_MAX) //信赖域半径最大值
+    {
       m_delta2 = BA_DL_RADIUS_MAX;
     }
   }
-  for (int iLF = 0; iLF < nLFs; ++iLF) {
-    if (m_ucmsLF[iLF]) {
+  for (int iLF = 0; iLF < nLFs; ++iLF) //遍历滑窗帧,对应flags要设置成1
+  {
+    if (m_ucmsLF[iLF])
+    {
       m_UcsLF[iLF] |= LM_FLAG_FRAME_UPDATE_CAMERA_LF;
     }
   }
-  for (int ic1 = 0, ic2 = 1; ic2 < nLFs; ic1 = ic2++) {
-    const int iLF1 = m_ic2LF[ic1], iLF2 = m_ic2LF[ic2];
-    if (!(m_ucmsLF[iLF1] & LBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE)) {
+  for (int ic1 = 0, ic2 = 1; ic2 < nLFs; ic1 = ic2++)//遍历滑窗中前后帧
+  {
+    const int iLF1 = m_ic2LF[ic1], iLF2 = m_ic2LF[ic2];//imu约束连接的前后两帧
+    if (!(m_ucmsLF[iLF1] & LBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE))
+    {
       continue;
     }
-    IMU::Delta &D = m_DsLF[iLF2];
+    IMU::Delta &D = m_DsLF[iLF2];//对应的imu预积分
     //if (ic1 == 5) {
     //  UT::DebugStart();
-    //}
-    IMU::PreIntegrate(m_LFs[iLF2].m_us, m_LFs[iLF1].m_T.m_t, m_LFs[iLF2].m_T.m_t, m_CsLF[iLF1], &D,
-                      &m_work, true, D.m_u1.Valid() ? &D.m_u1 : NULL,
+    //}//imu预积分也要重新用更新后的状态量预积分一下
+    IMU::PreIntegrate(m_LFs[iLF2].m_us/*当前帧和之前帧之间的imu测量*/, m_LFs[iLF1].m_T.m_t/*上一帧的时间戳*/,
+            m_LFs[iLF2].m_T.m_t/*当前帧的时间戳*/, m_CsLF[iLF1]/*上一帧的状态*/, &D,/*预积分部分*/
+                      &m_work, true/*是否要输出雅克比*/, D.m_u1.Valid() ? &D.m_u1/*上一帧最后一个imu测量*/ : NULL,
                       D.m_u2.Valid() ? &D.m_u2 : NULL, BA_ANGLE_EPSILON);
 #ifdef LBA_DEBUG_GROUND_TRUTH_MEASUREMENT
     if (!m_CsLFGT.Empty()) {
@@ -770,32 +789,40 @@ bool LocalBundleAdjustor::UpdateStatesDecide() {
     //  UT::DebugStop();
     //}
   }
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    if (m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_CAMERA) {
+    //遍历所有关键帧,如果关键帧需更新,对应flags设成1,取消关键帧以及地图点回滚的flags,如果地图点需要更新,把地图点和它所属的KF的更新flags设成1
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {
+    if (m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_CAMERA)
+    {
       m_UcsKF[iKF] |= LM_FLAG_FRAME_UPDATE_CAMERA_KF;
     }
-    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
+    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION))
+    {
       continue;
     }
     m_ucsKF[iKF] &= ~LBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;
     const int id = m_iKF2d[iKF];
     ubyte *uds = m_uds.data() + id;
     const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
+    for (int ix = 0; ix < Nx; ++ix)
+    {
       uds[ix] &= ~LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;
     }
-    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH)) {
+    if (!(m_ucsKF[iKF] & LBA_FLAG_FRAME_UPDATE_DEPTH))
+    {
       continue;
     }
     m_UcsKF[iKF] |= LM_FLAG_FRAME_UPDATE_DEPTH;
     ubyte *Uds = m_Uds.data() + id;
-    for (int ix = 0; ix < Nx; ++ix) {
-      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_DEPTH) {
+    for (int ix = 0; ix < Nx; ++ix)
+    {
+      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_DEPTH)
+      {
         Uds[ix] |= LM_FLAG_TRACK_UPDATE_DEPTH;
       }
     }
     //m_dsKF[iKF] = AverageDepths(m_ds.data() + id, Nx);
-  }
+  }//增量全部小于阈值,则认为收敛
   m_converge = m_xr2s.Maximal() < BA_CONVERGE_ROTATION && m_xp2s.Maximal() < BA_CONVERGE_POSITION &&
                m_xv2s.Maximal() < BA_CONVERGE_VELOCITY && m_xba2s.Maximal() < BA_CONVERGE_BIAS_ACCELERATION &&
                m_xbw2s.Maximal() < BA_CONVERGE_BIAS_GYROSCOPE &&
@@ -864,7 +891,7 @@ void LocalBundleAdjustor::ConvertCameraMotionResiduals(const LA::AlignedVectorXf
                                                        float *Se2, float *e2Max) {
   const int N = rs.Size();
 #ifdef CFG_DEBUG
-  UT_ASSERT(zs.Size() == N);
+  UT_ASSERT(feat_measures.Size() == N);
 #endif
   m_x2s.Resize(N);
   SIMD::Multiply(N, rs.Data(), zs.Data(), m_x2s.Data());
@@ -945,7 +972,7 @@ void LocalBundleAdjustor::ConvertDepthUpdates(const float *xs, LA::AlignedVector
   }
 }
 
-void LocalBundleAdjustor::PushDepthUpdates(const LA::AlignedVectorXf &xds,
+void LocalBundleAdjustor::PushDepthUpdates(const LA::AlignedVectorXf &xds,/*逆深度的增量*/
                                            LA::AlignedVectorXf *xs) {
   const int nKFs = int(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
@@ -957,7 +984,7 @@ void LocalBundleAdjustor::PushDepthUpdates(const LA::AlignedVectorXf &xds,
     const ubyte *uds = m_uds.data() + m_iKF2d[iKF];
     const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
     for (int ix = 0; ix < Nx; ++ix) {
-      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION) {
+      if (uds[ix] & LBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION) {//如果这个逆深度是需要反求的
         xs->Push(_xds[ix]);
       }
     }

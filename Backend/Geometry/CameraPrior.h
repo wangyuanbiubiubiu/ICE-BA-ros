@@ -78,7 +78,7 @@ class JC {
  public:
   LA::AlignedMatrix3x3f m_Jpp1, m_Jpr1, m_Jrr1, m_Jpp2, m_Jrr2;
 };
-class EC {
+class EC {//参考帧和观测到的关键帧之间的相对pose的约束
  public:
   inline void Set(const float *e) { m_ep.Set(e); m_er.Set(e + 3); }
   inline void Set(const double *e) { m_ep.Set(e); m_er.Set(e + 3); }
@@ -86,7 +86,7 @@ class EC {
   inline void Get(double *e) const { m_ep.Get(e); m_er.Get(e + 3); }
   inline void Get(C *e) const { e->Set(m_ep, m_er); } 
  public:
-  LA::AlignedVector3f m_ep, m_er;
+  LA::AlignedVector3f m_ep/*Rc0w(参考关键帧) * twc0(观测到的关键帧) + tc0w(参考关键帧) - tc0(参考关键帧)c0(观测到的关键帧)(测量)*/, m_er;//ec.m_er = -ln(Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧))
 };
 class EM {
  public:
@@ -101,7 +101,7 @@ class EM {
     m_ebw += e.m_ebw;
   }
  public:
-  LA::AlignedVector3f m_ev, m_eba, m_ebw;
+  LA::AlignedVector3f m_ev, m_eba, m_ebw;//速度，bias左相机坐标系中的残差
 };
 class RR : public LA::SymmetricMatrix2x2f {
  public:
@@ -533,7 +533,7 @@ inline void AddAbTo(const AlignedVector<BLOCK_A> &A, const BLOCK_B &b,
 }
 
 #ifdef CFG_DEBUG_EIGEN
-inline EigenVectorXf EigenConvert(const C &b) {
+inline EigenVectorXf EigenConvert(const Cam_state &b) {
   EigenVectorXf e_b;
   const int N = b.Size();
   e_b.Resize(N * 6);
@@ -545,7 +545,7 @@ inline EigenVectorXf EigenConvert(const C &b) {
   }
   return e_b;
 }
-inline void EigenConvert(const EigenVectorXf &e_b, C &b) {
+inline void EigenConvert(const EigenVectorXf &e_b, Cam_state &b) {
   const int Nx6 = e_b.Size(), N = Nx6 / 6;
 #ifdef CFG_DEBUG
   UT_ASSERT(Nx6 % 6 == 0);
@@ -599,7 +599,7 @@ inline void EigenConvert(const EigenMatrixXf &e_V, CM &V) {
     V[i] = EigenMatrix6x9f(e_V.block<6, 9>(j, 0)).GetAlignedMatrixMxNf();
   }
 }
-inline bool EigenAssertEqual(const EigenVectorXf &e_b, const C &b,
+inline bool EigenAssertEqual(const EigenVectorXf &e_b, const Cam_state &b,
                              const int verbose = 1, const std::string str = "") {
   const int Nx6 = e_b.Size(), N = b.Size();
   UT_ASSERT(N == 0 || Nx6 == N * 6);
@@ -866,8 +866,8 @@ class Pose {
     inline void SaveB(FILE *fp) const { UT::SaveB(m_er, fp); m_ec.SaveB(fp); }
     inline void LoadB(FILE *fp) { UT::LoadB(m_er, fp); m_ec.LoadB(fp); }
    public:
-    LA::Vector2f m_er;
-    Vector::EC m_ec;
+    LA::Vector2f m_er;//参考关键帧Rc0w自身的约束的残差
+    Vector::EC m_ec;//参考关键帧和观测到的关键帧之间的相对pose的约束的残差
   };
   class Jacobian {
    public:
@@ -884,8 +884,8 @@ class Pose {
     inline void LoadB(FILE *fp) { UT::LoadB(m_Jr, fp); m_Jc.LoadB(fp); }
    public:
     //LA::Matrix2x3f m_Jr;
-    LA::AlignedMatrix2x3f m_Jr;
-    Vector::JC m_Jc;
+    LA::AlignedMatrix2x3f m_Jr;//残差对参考关键帧r的
+    Vector::JC m_Jc;//参考关键帧和观测关键帧之间的约束
   };
   class ErrorJacobian {
    public:
@@ -924,8 +924,8 @@ class Pose {
                       const xp128f &w, const Element::RR &Arr, const Vector::RC &Arc,
                       const Matrix::CC &Acc) {
         //m_g = !Arc.Empty();
-        m_g = g;
-        Je.m_J.m_Jc.GetTranspose(m_JcT);
+        m_g = g;//是否考虑重力
+        Je.m_J.m_Jc.GetTranspose(m_JcT);//Jc.t
         const int N = m_JcT.Size(), _N = N + 1;
 #ifdef CFG_DEBUG
         if (m_g) {
@@ -943,10 +943,10 @@ class Pose {
           LA::AlignedVector3f _Aec;
           SArp.MakeZero();
           Arr.GetScaled(w[0], wArr);
-          const LA::AlignedMatrix2x3f &Jr = Je.m_J.m_Jr;
+          const LA::AlignedMatrix2x3f &Jr = Je.m_J.m_Jr;//残差对参考关键帧r的
           LA::AlignedMatrix2x3f::AB(wArr, Jr, SArr);
-          const LA::Vector2f &er = Je.m_e.m_er;
-          LA::SymmetricMatrix2x2f::Ab(wArr, er, m_Aer);
+          const LA::Vector2f &er = Je.m_e.m_er;//参考关键帧Rc0w自身的约束的残差
+          LA::SymmetricMatrix2x2f::Ab(wArr, er, m_Aer);//
           const xp128f erx = xp128f::get(er.x()), ery = xp128f::get(er.y());
           for (int i = 0; i < N; ++i) {
             Arc[i].GetScaled(w, wArc);
@@ -1089,7 +1089,7 @@ class Pose {
         A->SetLowerFromUpper();
       }
      public:
-      bool m_g;
+      bool m_g;//是否包含重力
       Vector::JC m_JcT;
       Element::RC m_JTArT0;
       Vector::CC m_JTAc0;
@@ -1168,7 +1168,7 @@ class Pose {
    public:
     ErrorJacobian m_Je;
     float m_w, m_F;
-    Matrix::CC m_A;
+    Matrix::CC m_A;//[0]是之前的参考关键帧,之后就是观测关键帧+最老关键帧对应的关键帧
     Vector::C m_b;
   };
   class Reduction {
@@ -1263,11 +1263,11 @@ class Pose {
     m_br.Invalidate();
     m_bc.Resize(0);
   }
-
-  inline void Initialize(const float w, const int iKFr, const Rigid3D &Tr, const float s2r,
-                         const bool newKF, const Rigid3D *T0 = NULL,
+///m_Zps里存的是Rwc0
+  inline void Initialize(const float w, const int iKFr/*参考关键帧*/, const Rigid3D &Tr/*参考关键帧对应Tc0w(kf)*/, const float s2r,
+                         const bool newKF/*是否是新的关键帧*/, const Rigid3D *T0 = NULL,
                          const float s2cp = 0.0f, const float s2cr = 0.0f) {
-    m_iKFr = iKFr;
+    m_iKFr = iKFr;/*参考关键帧id*/
     //Rr.GetTranspose(m_RrT);
     const float arr = UT::Inverse(s2r, w);
     m_Arr.Set(arr, 0.0f, arr);
@@ -1279,7 +1279,7 @@ class Pose {
       m_Acc.Resize(0, 0, true);
       m_bc.Resize(0);
     } else {
-      m_iKFs.resize(1);         m_iKFs[0] = INT_MAX;
+      m_iKFs.resize(1);         m_iKFs[0] = INT_MAX;//设置一个大的数是为了后续的观测关键帧方便插入
       m_Zps.Resize(1);          m_Zps[0].Invalidate();
       m_Arc.Resize(1);          m_Arc[0].MakeZero();
       m_Acc.Resize(1, 1, true); m_Acc[0][0].MakeZero();
@@ -1289,7 +1289,7 @@ class Pose {
       }
       m_Acc[0][0].SetDiagonal(UT::Inverse(s2cp, w), UT::Inverse(s2cr, w));
     }
-    Tr.Rotation3D::GetTranspose(m_Zps.Push());
+    Tr.Rotation3D::GetTranspose(m_Zps.Push());//m_Zps里存的是Rwc0
   }
   inline bool Initialize(const float w, const int iKF1, const int iKF2, const Rigid3D &T,
                          const LA::AlignedMatrix6x6f &S) {
@@ -1322,14 +1322,15 @@ class Pose {
   }
 #endif
   
-  inline void Insert(const float w, const int i, const int iKF, const Rigid3D &T, const float s2p,
+  inline void Insert(const float w, const int i/*这个是这个关键帧在m_iKFs里的索引*/, const int iKF/*观测到的这个关键帧*/,
+          const Rigid3D &T/*Tc0(观测到的关关键帧)c0(参考关键帧)*/, const float s2p,
                      const float s2r, AlignedVector<float> *work) {
 #ifdef CFG_DEBUG
     UT_ASSERT(i < static_cast<int>(m_iKFs.size()));
 #endif
-    m_iKFs.insert(m_iKFs.begin() + i, iKF);
+    m_iKFs.insert(m_iKFs.begin() + i, iKF);//在m_iKFs了存储了这个kf的id
     m_Zps.Insert(i);
-    T.GetInverse(m_Zps[i]);
+    T.GetInverse(m_Zps[i]);//m_Zps[i]里存储的是Tc0(参考关键帧)c0(观测到的关键帧),i是和m_iKFs对应的
     m_Arc.InsertZero(i);
     m_Acc.InsertZero(i, 1, work);
     m_Acc[i][i].SetDiagonal(UT::Inverse(s2p, w), UT::Inverse(s2r, w));
@@ -1368,12 +1369,13 @@ class Pose {
     m_Arc.Erase(j);
     m_Acc.Erase(j);
     m_bc.Erase(j);
-  }
-  inline void SetPose(const Rigid3D &Tr, const int i, const Rigid3D &Ti) {
+  }//更新m_Zps[i]所存储的
+  inline void SetPose(const Rigid3D &Tr/*参考关键帧Tc0w*/, const int i, const Rigid3D &Ti/*次老帧的Tc0w*/) {
 #ifdef CFG_DEBUG
     UT_ASSERT(i < static_cast<int>(m_iKFs.size()));
 #endif
-    Rigid3D::ABI(Tr, Ti, m_Zps[i]);
+
+    Rigid3D::ABI(Tr/*参考关键帧Tc0w*/, Ti/*次老帧的Tc0w*/, m_Zps[i]/**/);
   }
 //  inline void GetReferencePose(const Rigid3D &Tr, Rigid3D *_Tr, Rigid3D *TrI) const {
 //#ifdef CFG_DEBUG
@@ -1389,13 +1391,13 @@ class Pose {
 //    TrI->SetTranslation(pr);
 //    TrI->GetInverse(*_Tr);
 //  }
-  inline void GetReferencePose(const Rigid3D &Tr, Rigid3D *_Tr, Rigid3D *TrI) const {
+  inline void GetReferencePose(const Rigid3D &Tr/*当前最老帧的最近关键帧的Tc0w*/, Rigid3D *_Tr/*Tc0w(参考关键帧)*/, Rigid3D *TrI/*Twc0(参考关键帧)*/) const {
 #ifdef CFG_DEBUG
     UT_ASSERT(m_Zps.Size() == static_cast<int>(m_iKFs.size()) + 1);
 #endif
-    *TrI = m_Zps.Back();
-    const Point3D pr = Tr.GetPosition();
-    TrI->SetTranslation(pr);
+    *TrI = m_Zps.Back();//Rwc0(参考关键帧)
+    const Point3D pr = Tr.GetPosition();//twc0(参考关键帧)
+    TrI->SetTranslation(pr);//Twc0(参考关键帧)
     TrI->GetInverse(*_Tr);
   }
 //  inline void GetPose(const Rigid3D &TrI, const int i, Rigid3D *Tri, Rigid3D *Ti) const {
@@ -1489,7 +1491,7 @@ class Pose {
   inline void GetError(const AlignedVector<Rigid3D> &Cs, Error *e, const float eps) const {
     Rotation3D eR, Rt;
     LA::AlignedVector3f p2, p12;
-    const Rigid3D &C1 = Cs[m_iKFr];
+    const Rigid3D &C1 = Cs[m_iKFr];//参考关键帧的朝向 Rc0w(参考关键帧)
     const int N = static_cast<int>(m_iKFs.size());
     //if (m_Zps.Size() == N) {
     //  e->m_er.Invalidate();
@@ -1502,16 +1504,16 @@ class Pose {
     } else {
 #ifdef CFG_DEBUG
       UT_ASSERT(m_Zps.Size() == N + 1);
-#endif
-      Rotation3D::AB(m_Zps.Back(), C1, eR);
-      eR.GetRodriguesXY(e->m_er, eps);
+#endif//eR = Rwc0(观测) * Rc0w
+      Rotation3D::AB(m_Zps.Back()/*最后一维保存的是这个LBA中参考kf首次被定义为参考kf时的Rwc0*/, C1/*Rc0w*/, eR);
+      eR.GetRodriguesXY(e->m_er, eps);//e->m_er = -ln(eR).xy
     }
-    const LA::AlignedVector3f t1 = C1.GetTranslation();
+    const LA::AlignedVector3f t1 = C1.GetTranslation();//tc0w(参考关键帧)
     e->Resize(N);
     for (int i = 0; i < N; ++i) {
-      const Rigid3D &T21 = m_Zps[i];
+      const Rigid3D &T21 = m_Zps[i];//Tc0(参考关键帧)c0(观测到的关键帧)
       const int iKF = m_iKFs[i];
-      const Rigid3D &C2 = iKF == INT_MAX ? Cs.Back() : Cs[iKF];
+      const Rigid3D &C2 = iKF == INT_MAX ? Cs.Back() : Cs[iKF];//Tc0w(观测到的关键帧)
       Element::EC &ec = e->m_ec[i];
 #if 0
       Rotation3D::ABT(C1, C2, R21);
@@ -1523,14 +1525,14 @@ class Pose {
       Rotation3D::ABT(T21, R21, eR);
       eR.GetRodrigues(ec.m_er);
 #else
-      C2.GetPosition(p2);
-      C1.ApplyRotation(p2, ec.m_ep);
-      ec.m_ep += t1;
-      T21.GetTranslation(p12);
-      ec.m_ep -= p12;
-      Rotation3D::AB(T21, C2, Rt);
-      Rotation3D::ABT(Rt, C1, eR);
-      eR.GetRodrigues(ec.m_er, eps);
+      C2.GetPosition(p2);//twc0(观测到的关键帧)
+      C1.ApplyRotation(p2, ec.m_ep);//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧)
+      ec.m_ep += t1;//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧) + tc0w(参考关键帧)
+      T21.GetTranslation(p12);//tc0(参考关键帧)c0(观测到的关键帧)
+      ec.m_ep -= p12;//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧) + tc0w(参考关键帧) - tc0(参考关键帧)c0(观测到的关键帧)(测量)
+      Rotation3D::AB(T21, C2, Rt);//Rt = Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
+      Rotation3D::ABT(Rt, C1, eR);//eR = Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧)
+      eR.GetRodrigues(ec.m_er, eps);//ec.m_er = -ln(eR)
 #endif
     }
   }
@@ -1566,12 +1568,31 @@ class Pose {
       }
     }
   }
+
+////er = -ln(eR) = -ln(Rwc0(观测) * Rc0w).xy  eR是wc0(观测) * Rc0w
+//  Rc0w右乘扰动 => -ln{Rwc0(观测) * Rc0w*exp[-th]x }v.xy -(-ln(eR).xy)
+// 伴随性质      = -ln{exp[eR*-th]x * eR}v.xy + ln(eR).xy
+//BCH           = - (Jl^-1(-er(因为是ln(eR))) *eR* -th + ln(eR)).xy + ln(eR).xy
+//div(er)/div(Rc0w) = Jl^-1(-er) * eR =  Jr^-1(er).xy * eR
+////m_ep = Rc0w(参考关键帧) * (twc0(观测到的关键帧) - twc0(参考关键帧)) - tc0(参考关键帧)c0(观测到的关键帧)(测量)
+//  div(m_ep)/div(Rc0w(参考关键帧)) = Rc0w(参考关键帧) * [twc0(观测到的关键帧) - twc0(参考关键帧)]x
+//                   = [Rc0w(参考关键帧)twc0 * (观测到的关键帧) - twc0(参考关键帧)]x * Rc0w(参考关键帧)
+// div(m_ep)/div(twc0(参考关键帧) = -Rc0w(参考关键帧)
+//  div(m_ep)/div(twc0(观测到的关键帧) = Rc0w(参考关键帧)
+////m_er = -ln(Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧))v
+//  Rc0w(参考关键帧)右乘扰动 => -ln(Rm *Rc0w(2) * (Rc0w*exp[-th]x).t(1))v 我简写了
+// div(m_er)/div(Rc0w(参考关键帧)  = -ln(Rm *Rc0w(2) * exp[th]x * Rc0w.t(1))v
+//                               =  -ln (exp[Rm *Rc0w(2)*th]x * Rm *Rc0w(2)* Rc0w.t(1))v
+//                              = -Jl^-1(-m_er)*Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
+//                              = -Jr^-1(m_er)*Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
+//div(m_er)/div(Rc0w(观测到的关键帧)  = -ln(Rm *Rc0w(2)*exp[-th]x * Rc0w.t(1))v
+//                               = Jr^-1(m_er)*Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
   inline void GetErrorJacobian(const AlignedVector<Rigid3D> &Cs, ErrorJacobian *Je
                                /*, LA::AlignedMatrix2x3f *Jr*/, const float eps) const {
     Rotation3D eR, Rt;
     LA::AlignedVector3f er, t1, p2, p12;
-    const Rigid3D &C1 = Cs[m_iKFr];
-    C1.GetTranslation(t1);
+    const Rigid3D &C1 = Cs[m_iKFr];//参考关键帧 Tc0w(参考关键帧)
+    C1.GetTranslation(t1);//tc0w(参考关键帧)
     const int N = static_cast<int>(m_iKFs.size());
     //if (N == m_Zps.Size()) {
     //  Je->m_e.m_er.Invalidate();
@@ -1586,39 +1607,41 @@ class Pose {
     if (N == m_Zps.Size()) {
       Je->m_e.m_er.Invalidate();
       Je->m_J.m_Jr.Invalidate();
-    } else {
-      Rotation3D::AB(m_Zps.Back(), C1, eR);
-      eR.GetRodrigues(er, eps);
-      Je->m_e.m_er.Set(er);
-      LA::AlignedMatrix2x3f &Jr = Je->m_J.m_Jr;
-      Rotation3D::GetRodriguesJacobianInverseXY(er, Jr, eps);
-      Jr = Jr * eR;
+    } else {//eR = Rwc0(观测) * Rc0w
+      Rotation3D::AB(m_Zps.Back()/*最后一维保存的是这个LBA中参考kf首次被定义为参考kf时的Rwc0*/, C1/*Rc0w*/, eR);
+      eR.GetRodrigues(er, eps);//er = -ln(eR) = -ln(Rwc0(观测) * Rc0w)
+      Je->m_e.m_er.Set(er);//只保存前两维
+      LA::AlignedMatrix2x3f &Jr = Je->m_J.m_Jr;//
+      Rotation3D::GetRodriguesJacobianInverseXY(er, Jr, eps);//div(er)/div(Rc0w) = Jr^-1(er).xy
+      Jr = Jr * eR;//div(er)/div(Rc0w) = Jr^-1(er).xy * eR
       //Je->m_J.m_Jr.Set(*Jr);
     }
     Je->m_e.Resize(N);
     Je->m_J.Resize(N);
+    //遍历所有的观测关键帧
     for (int i = 0; i < N; ++i) {
       const int iKF = m_iKFs[i];
-      const Rigid3D &C2 = iKF == INT_MAX ? Cs.Back() : Cs[iKF];
-      const Rigid3D &T21 = m_Zps[i];
+      const Rigid3D &C2 = iKF == INT_MAX ? Cs.Back() : Cs[iKF];//Tc0w(观测到的关键帧)
+      const Rigid3D &T21 = m_Zps[i];//Tc0(参考关键帧)c0(观测到的关键帧)
       Element::EC &ec = Je->m_e.m_ec[i];
       Element::JC &Jc = Je->m_J.m_Jc[i];
-      C2.GetPosition(p2);
-      C1.ApplyRotation(p2, ec.m_ep);
-      ec.m_ep += t1;
-      SkewSymmetricMatrix::AB(ec.m_ep, C1, Jc.m_Jpr1);
-      T21.GetTranslation(p12);
-      ec.m_ep -= p12;
-      Jc.m_Jpp2 = C1;
-      Jc.m_Jpp2.GetMinus(Jc.m_Jpp1);
-      Rotation3D::AB(T21, C2, Rt);
-      Rotation3D::ABT(Rt, C1, eR);
-      eR.GetRodrigues(ec.m_er, eps);
-      Rotation3D::GetRodriguesJacobianInverse(ec.m_er, Jc.m_Jrr1, eps);
-      LA::AlignedMatrix3x3f::AB(Jc.m_Jrr1, Rt, Jc.m_Jrr2);
-      Jc.m_Jrr2.GetMinus(Jc.m_Jrr1);
+      C2.GetPosition(p2);//twc0(观测到的关键帧)
+      C1.ApplyRotation(p2, ec.m_ep);//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧)
+      ec.m_ep += t1;//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧) + tc0w(参考关键帧)
+      SkewSymmetricMatrix::AB(ec.m_ep, C1, Jc.m_Jpr1);//div(m_ep)/div(Rc0w(参考关键帧)) = [Rc0w(参考关键帧)twc0 * (观测到的关键帧) - twc0(参考关键帧)]x * Rc0w(参考关键帧)
+      T21.GetTranslation(p12);//tc0(参考关键帧)c0(观测到的关键帧)
+      ec.m_ep -= p12;//ec.m_ep = Rc0w(参考关键帧) * twc0(观测到的关键帧) + tc0w(参考关键帧) - tc0(参考关键帧)c0(观测到的关键帧)(测量)
+      Jc.m_Jpp2 = C1;//div(m_ep)/div(twc0(观测到的关键帧) = Rc0w(参考关键帧)
+      Jc.m_Jpp2.GetMinus(Jc.m_Jpp1);// div(m_ep)/div(twc0(参考关键帧) = -Rc0w(参考关键帧)
+      Rotation3D::AB(T21, C2, Rt);//Rt = Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
+      Rotation3D::ABT(Rt, C1, eR);//eR = Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧)
+      eR.GetRodrigues(ec.m_er, eps);//ec.m_er = -ln(eR)
+      Rotation3D::GetRodriguesJacobianInverse(ec.m_er, Jc.m_Jrr1, eps);//Jc.m_Jrr1 = jr^-1(er)
+      LA::AlignedMatrix3x3f::AB(Jc.m_Jrr1, Rt, Jc.m_Jrr2);//div(m_er)/div(Rc0w(观测到的关键帧) = Jr^-1(m_er)*Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
+      Jc.m_Jrr2.GetMinus(Jc.m_Jrr1);//div(m_er)/div(Rc0w(参考关键帧)  = - Jr^-1(m_er)*Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧)
     }
   }
+  //
   inline void GetFactor(const float w, const AlignedVector<Rigid3D> &Cs, Factor *A,
                         Factor::Auxiliary *U, const float eps) const {
     //LA::AlignedMatrix2x3f Jr;
@@ -1681,7 +1704,7 @@ class Pose {
     for (int i = 0; i < N; ++i) {
       if (g) {
         m_Arc[i].Get(Agp, Agr);
-        const Element::EC &ec = e.m_ec[i];
+        const Element::EC &ec = e.m_ec[i];//参考关键帧和观测到的关键帧之间的相对pose的约束
         LA::AlignedMatrix2x3f::AddAbTo(Agp, ec.m_ep, Sbr);
         LA::AlignedMatrix2x3f::AddAbTo(Agr, ec.m_er, Sbr);
         LA::AlignedMatrix2x3f::ATb(Agp, erx, ery, bp);
@@ -1856,17 +1879,17 @@ class Pose {
 
  public:
 
-  int m_iKFr;
+  int m_iKFr;//在滑窗中是最新的参考关键帧,当在先验约束时最老帧再前一帧所对应的参考关键帧,就是当最老帧是关键帧,那么就将前一次边缘化的参考关键帧存储下来
   //Rotation3D m_RrT;
-  std::vector<int> m_iKFs;
-  AlignedVector<Rigid3D> m_Zps;
+  std::vector<int> m_iKFs;//所有的观测关键帧
+  AlignedVector<Rigid3D> m_Zps;//最后一维是Rwc(参考关键帧),PropagateKF中将m_Zps[0]设置成Tc0(参考关键帧)_c0(次老帧),如果是观测到的关键帧的则是Tc0(参考关键帧)c0(观测到的关键帧)
 
-  Element::RR m_Arr;
-  Vector::RC m_Arc;
-  Matrix::CC m_Acc;
-  Element::R m_br;
-  Vector::C m_bc;
-  float m_xTb;
+  Element::RR m_Arr;//H中gg的
+  Vector::RC m_Arc;//H中边缘化以后g和之前观测到的关键帧merge以后的次老帧之间的先验
+  Matrix::CC m_Acc;//前后帧之间的约束
+  Element::R m_br;//b中g对应的部分
+  Vector::C m_bc;//参考关键帧对应的b
+  float m_xTb;//x.t*-b 这个是啥
 
 #ifdef CFG_DEBUG_EIGEN
  public:
@@ -1989,15 +2012,15 @@ class Pose {
     inline EigenPrior() {}
     inline EigenPrior(const EigenMatrixXf &e_A, const EigenVectorXf &e_b) : m_A(e_A), m_b(e_b) {}
     inline EigenPrior(const Element::RR &Arr, const Vector::RC &Arc, const Matrix::CC &Acc,
-                      const Element::R &br, const Vector::C &bc, const float w = 1.0f,
+                      const Element::R &br, const Vector::Cam_state &bc, const float gyr = 1.0f,
                       const bool pad = false) {
-      Set(Arr, Arc, Acc, br, bc, w, pad);
+      Set(Arr, Arc, Acc, br, bc, gyr, pad);
     }
     inline void Set(const Pose &Z, const bool pad = false) {
       Set(Z.m_Arr, Z.m_Arc, Z.m_Acc, Z.m_br, Z.m_bc, 1.0f, pad);
     }
     inline void Set(const Element::RR &Arr, const Vector::RC &Arc, const Matrix::CC &Acc,
-                    const Element::R &br, const Vector::C &bc, const float w = 1.0f,
+                    const Element::R &br, const Vector::Cam_state &bc, const float gyr = 1.0f,
                     const bool pad = false) {
       const int N = bc.Size();
 #ifdef CFG_DEBUG
@@ -2026,13 +2049,13 @@ class Pose {
       if (br.Valid()) {
         m_b.block<2, 1>(0, 0) = EigenVector2f(br);
       }
-      if (w != 1.0f) {
-        m_A *= w;
-        m_b *= w;
+      if (gyr != 1.0f) {
+        m_A *= gyr;
+        m_b *= gyr;
       }
     }
     inline void Get(Element::RR &Arr, Vector::RC &Arc, Matrix::CC &Acc,
-                    Element::R &br, Vector::C &bc) const {
+                    Element::R &br, Vector::Cam_state &bc) const {
       const int Nrc = m_b.Size(), Nx6 = Nrc - 2, N = Nx6 / 6;
 #ifdef CFG_DEBUG
       UT_ASSERT(Nx6 % 6 == 0);
@@ -2065,7 +2088,7 @@ class Pose {
       return AssertEqual(Z.m_Arr, Z.m_Arc, Z.m_Acc, Z.m_br, Z.m_bc, verbose, str);
     }
     inline bool AssertEqual(const Element::RR &Arr, const Vector::RC &Arc, const Matrix::CC &Acc,
-                            const Element::R &br, const Vector::C &bc, const int verbose = 1,
+                            const Element::R &br, const Vector::Cam_state &bc, const int verbose = 1,
                             const std::string str = "") const {
       const int Nx6 = m_A.GetRows() - 2, N = bc.Size();
 #ifdef CFG_DEBUG
@@ -2104,17 +2127,17 @@ class Pose {
  public:
   EigenErrorJacobian EigenGetErrorJacobian(const AlignedVector<Rigid3D> &Cs,
                                            const float eps) const;
-  EigenFactor EigenGetFactor(const float w, const AlignedVector<Rigid3D> &Cs,
+  EigenFactor EigenGetFactor(const float gyr, const AlignedVector<Rigid3D> &Cs,
                              const float eps) const;
-  float EigenGetCost(const float w, const AlignedVector<Rigid3D> &Cs,
+  float EigenGetCost(const float gyr, const AlignedVector<Rigid3D> &Cs,
                      const std::vector<EigenVector6f> &e_xs, const float eps) const;
   void EigenGetResidual(const AlignedVector<Rigid3D> &Cs, EigenVectorXf *e_r,
                         const float eps) const;
-  void EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S,
+  void EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S,
                                 EigenVectorXf *e_x = NULL) const;
 #endif
 };
-
+//和运动有关的
 class Motion {
 
  public:
@@ -2131,14 +2154,15 @@ class Motion {
       m_Jvr.GetTranspose(J->m_Jvr);
       m_Jvv.GetTranspose(J->m_Jvv);
     }
-   public:
-    LA::AlignedMatrix3x3f m_Jvr, m_Jvv;
+   public://残差 =Rc0w * Vw - m_v,对Rc0w和Vw的导数
+    LA::AlignedMatrix3x3f m_Jvr/*(div(Rc0w* Vw - m_v)/div(Rc0w))*/, m_Jvv/*div(Rc0w * Vw - m_v)/div(Vw)*/;
   };
   class ErrorJacobian {
    public:
-    Error m_e;
-    Jacobian m_J;
+    Error m_e;//motion的残差,v,bias
+    Jacobian m_J;//先验的雅克比部分
   };
+  //运动先验的因子
   class Factor {
    public:
     class RR {
@@ -2156,20 +2180,22 @@ class Motion {
       }
      public:
       union {
-        struct { LA::SymmetricMatrix3x3f m_A; LA::Vector3f m_b; };
+        struct { LA::SymmetricMatrix3x3f m_A/*H中rr这里部分*/; LA::Vector3f m_b/*b中rb这里部分*/; };
         xp128f m_data[3];
       };
     };
     class RM : public LA::AlignedMatrix3x9f {};
     class MM : public Camera::Factor::Unitary::MM {};
+
+    //里面是保存一些J.t*W 和 W*b的东西
     class Auxiliary {
      public:
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
-      inline void Set(const ErrorJacobian &Je, const xp128f &w, const Element::MM &A) {
+      inline void Set(const ErrorJacobian &Je, const xp128f &gyr, const Element::MM &A) {
         Je.m_J.GetTranspose(&m_JT);
         Je.m_e.Get(&m_e);
         
-        A.GetScaled(w, m_wA);
+        A.GetScaled(gyr, m_wA);
         LA::AlignedMatrix3x3f _A;
         m_wA.GetBlock(0, 0, _A);
         LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArv);
@@ -2205,68 +2231,78 @@ class Motion {
         LA::AlignedMatrix9x9f::Ab(m_wA, m_e, _bm, 3);
       }
 #else
-      inline void Set(const ErrorJacobian &Je, const xp128f &w, const Element::MM &A) {
-        Je.m_J.GetTranspose(&m_JT);
+      inline void Set(const ErrorJacobian &Je/*速度残差的雅克比和v,bias的残差*/, const xp128f &w/*权重*/, const Element::MM &A) {
+        Je.m_J.GetTranspose(&m_JT);//m_JT = Je.m_J.t
         
-        A.GetScaled(w, m_wA);
+        A.GetScaled(w, m_wA);//m_wA = w* A->m_Amm(在初始化的时候设置好了权重矩阵)
         LA::AlignedMatrix3x3f _A;
-        m_wA.GetBlock(0, 0, _A);
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArv);
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvv);
-        float *Aev = &m_Ae.v0(), *Aeba = &m_Ae.v3(), *Aebw = &m_Ae.v6();
-        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aev);
-        m_wA.GetBlock(0, 3, _A);
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aev);
-        _A.Transpose();
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArba);
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvba);
-        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aeba);
-        m_wA.GetBlock(0, 6, _A);
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aev);
-        _A.Transpose();
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArbw);
-        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvbw);
-        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aebw);
-        m_wA.GetBlock(3, 3, _A);
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aeba);
-        m_wA.GetBlock(3, 6, _A);
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aeba);
-        _A.Transpose();
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aebw);
-        m_wA.GetBlock(6, 6, _A);
-        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aebw);
+
+          // J.t * m_wA.t * J * deltax  = -J.t*m_wA * [m_ev.t,m_eba.t,m_ebw.t].t
+          //  m_wA * [m_ev.t,m_eba.t,m_ebw.t].t = [Aev.t,Aeba.t,Aebw.t].t (size 9*1)
+          // 下面就是在构造[Aev.t,Aeba.t,Aebw.t].t对应的部分,v速度,a加速度,w陀螺仪
+          // 雅克比.t 12*9 (q,v,ba,bg) 残差(rv,ra,rw)
+          // 然后下面的 m_JTArv,m_JTArba,m_JTArbw就是J.t * m_wA乘完以后 r对应的这一行
+          // m_JTAvv,m_JTAvba,m_JTAvbw就是v对应的这一行
+          //注:为了方便,a就是加速度计的bias,w就是陀螺仪的bias
+        m_wA.GetBlock(0, 0, _A);//权重矩阵,左上角0,0,取3×3,也就是速度和速度方面的权重
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArv);//m_JTArv = (div(Rc0w * Vw - m_v)/div(Rc0w)).t * Wvv
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvv);//m_JTAvv = (div(Rc0w * Vw - m_v)/div(Vw)).t * Wvv
+        float *Aev = &m_Ae.v0(), *Aeba = &m_Ae.v3(), *Aebw = &m_Ae.v6();//分别是v,acc bias,gry bias对应的残差
+
+        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aev);//Aev = Wvv * m_ev
+        m_wA.GetBlock(0, 3, _A);//Wva （速度和bias）0矩阵
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aev);//Aev = Wvv * m_ev + Wva * m_eba
+        _A.Transpose();//Wav
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArba);//m_JTArba = (div(Rc0w * Vw - m_v)/div(Rc0w)).t * Wav
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvba);//m_JTAvba = (div(Rc0w * Vw - m_v)/div(m_v)).t * Wav
+        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aeba);//Aeba = Wva.t * m_ev =  Wav * m_ev
+        m_wA.GetBlock(0, 6, _A);//Wvw
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aev);//Aev = Wvv * m_ev + Wva * m_eba + Wvw * m_ebw Aev构造完了
+        _A.Transpose();//Wwv
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvr, _A, m_JTArbw);//m_JTArbw = (div(Rwc0 * Vc0 - m_v)/div(Rwc0)).t * Wwv
+        LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv, _A, m_JTAvbw);//m_JTAvbw = (div(Rwc0 * Vc0 - m_v)/div(m_v)).t * Wwv
+        LA::AlignedMatrix3x3f::Ab(_A, Je.m_e.m_ev, Aebw);//Aebw = Wwv * m_ev
+        m_wA.GetBlock(3, 3, _A);//Waa
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aeba);//Aeba = Wav * m_ev + Waa * m_eba
+        m_wA.GetBlock(3, 6, _A);//Waw
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aeba);//Aeba = Wav * m_ev + Waa * m_eba + Waw * m_ebw Aeba构造完了
+        _A.Transpose();//Wwa
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_eba, Aebw);//Aebw = Wwv * m_ev + Wwa * m_eba
+        m_wA.GetBlock(6, 6, _A);//Www
+        LA::AlignedMatrix3x3f::AddAbTo(_A, Je.m_e.m_ebw, Aebw);//Aebw = Wwv * m_ev + Wwa * m_eba + Www * m_ebw Aebw构造完了
       }
       inline void Get(const xp128f &w, const Element::M &b, LA::SymmetricMatrix3x3f *Arr,
                       LA::AlignedMatrix3x9f *Arm, LA::SymmetricMatrix9x9f *Amm, LA::Vector3f *br,
                       LA::Vector9f *bm) const {
-        LA::SymmetricMatrix3x3f::ABT(m_JTArv, m_JT.m_Jvr, *Arr);
+        LA::SymmetricMatrix3x3f::ABT(m_JTArv, m_JT.m_Jvr, *Arr); //Arr 就是 H中rr这里部分
         LA::AlignedMatrix3x9f &_Arm = *Arm;
-        LA::AlignedMatrix3x3f::ABT(m_JTArv, m_JT.m_Jvv, _Arm[0], _Arm[1], _Arm[2]);
-        Arm->SetBlock(0, 3, m_JTArba);
-        Arm->SetBlock(0, 6, m_JTArbw);
-        LA::SymmetricMatrix9x9f::ABTTo00(m_JTAvv, m_JT.m_Jvv, *Amm);
-        Amm->Set03(m_JTAvba);
-        Amm->Set06(m_JTAvbw);
-        Amm->Set33(m_wA[3] + 3, m_wA[4] + 3, m_wA[5] + 3, m_wA[6] + 3, m_wA[7] + 3, m_wA[8] + 3);
+        LA::AlignedMatrix3x3f::ABT(m_JTArv, m_JT.m_Jvv, _Arm[0], _Arm[1], _Arm[2]);//_Arm的前三行 = Jrv.t * Jvv H中rv这部分
+        Arm->SetBlock(0, 3, m_JTArba);// J.t*W.t acc H中ra这部分
+        Arm->SetBlock(0, 6, m_JTArbw);//J.t*W.t gry  H中rw这部分
+        LA::SymmetricMatrix9x9f::ABTTo00(m_JTAvv, m_JT.m_Jvv, *Amm);//Amm.block(0,0)<3,3>是H中vv部分
+        Amm->Set03(m_JTAvba);//Amm.block(0,3)<3,3> J.t*W.t acc H中va部分
+        Amm->Set06(m_JTAvbw);//Amm.block(0,6)<3,3> J.t*W.t gry H中vw部分
+        Amm->Set33(m_wA[3] + 3, m_wA[4] + 3, m_wA[5] + 3/*前面这三个是H中aa,aw部分*/, m_wA[6] + 3, m_wA[7] + 3, m_wA[8] + 3/*前面这三个是H中ww部分*/);
 
         Element::M Aepb;
-        b.GetScaled(w, Aepb);
-        Aepb += m_Ae;
-        const LA::AlignedVector3f Aepbv(&Aepb.v0());
-        LA::AlignedMatrix3x3f::Ab(m_JT.m_Jvr, Aepbv, &br->v0());
-        LA::AlignedMatrix3x3f::Ab(m_JT.m_Jvv, Aepbv, &bm->v0());
-        memcpy(&bm->v3(), &Aepb.v3(), 24);
+        b.GetScaled(w, Aepb);//Aepb = b *w
+        Aepb += m_Ae;//加上当前的Wr
+        const LA::AlignedVector3f Aepbv(&Aepb.v0());//拷贝一下
+        LA::AlignedMatrix3x3f::Ab(m_JT.m_Jvr, Aepbv, &br->v0());//旋转部分的b
+        LA::AlignedMatrix3x3f::Ab(m_JT.m_Jvv, Aepbv, &bm->v0());//motion v部分的b
+        memcpy(&bm->v3(), &Aepb.v3(), 24);//acc 和 gyr bias的
       }
 #endif
      public:
-      Jacobian m_JT;
-      Element::MM m_wA;
-      LA::AlignedMatrix3x3f m_JTArv, m_JTArba, m_JTArbw;
-      LA::AlignedMatrix3x3f m_JTAvv, m_JTAvba, m_JTAvbw;
+      Jacobian m_JT;//(速度残差的雅克比).t,里面存的是转置过的
+      Element::MM m_wA; //权重矩阵
+      //J.t * m_wA * J * deltax  = -J.t*m_wA * [m_ev.t,m_eba.t,m_ebw.t].t
+      LA::AlignedMatrix3x3f m_JTArv, m_JTArba, m_JTArbw;//J.t*W.t (v,acc bias, grybias)J.t * m_wA.t乘完以后 r对应的这一行
+      LA::AlignedMatrix3x3f m_JTAvv, m_JTAvba, m_JTAvbw;//J.t * m_wA.t乘完以后 v对应的这一行
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
       Element::M m_e;
 #else
-      Element::M m_Ae;
+      Element::M m_Ae;//J.t * m_wA * J * deltax  = -J.t*m_wA * [m_ev.t,m_eba.t,m_ebw.t].t中的Wr部分
 #endif
     };
    public:
@@ -2286,13 +2322,13 @@ class Motion {
     inline void SaveB(FILE *fp) const { UT::SaveB(*this, fp); }
     inline void LoadB(FILE *fp) { UT::LoadB(*this, fp); }
    public:
-    ErrorJacobian m_Je;
+    ErrorJacobian m_Je;//保存了速度残差的雅克比和v,bias的残差
     union {
-      RR m_Arr;
-      struct { float m_data[11], m_F; };
+      RR m_Arr;//H中rr这部分,b中-rb这部分 r旋转
+      struct { float m_data[11], m_F/*应该是costfun的值*/; };
     };
-    RM m_Arm;
-    MM m_Amm;
+    RM m_Arm;//H的rm这部分 r:旋转 m：motion运动 v ,bias acc,bias gyr
+    MM m_Amm;//H的mm这部分,b中mb这部分
   };
   class Reduction {
    public:
@@ -2336,17 +2372,17 @@ class Motion {
 
   inline void Initialize(const float w, const float s2v, const float s2ba, const float s2bw,
                          const Camera *C = NULL) {
-    if (C) {
-      SetMotion(C->m_T, C->m_v, C->m_ba, C->m_bw);
+    if (C) {//如果有Tc0w的话,v会用Rc0w*vw转到这个系下
+      SetMotion(C->m_Cam_pose, C->m_v, C->m_ba, C->m_bw);
     } else {
       m_v.MakeZero();
       m_ba.MakeZero();
       m_bw.MakeZero();
     }
     m_Amm.MakeZero();
-    m_Amm[0][0] = m_Amm[1][1] = m_Amm[2][2] = UT::Inverse(s2v, w);
-    m_Amm[3][3] = m_Amm[4][4] = m_Amm[5][5] = UT::Inverse(s2ba, w);
-    m_Amm[6][6] = m_Amm[7][7] = m_Amm[8][8] = UT::Inverse(s2bw, w);
+    m_Amm[0][0] = m_Amm[1][1] = m_Amm[2][2] = UT::Inverse(s2v, w);//事先给对角线权重了,速度的
+    m_Amm[3][3] = m_Amm[4][4] = m_Amm[5][5] = UT::Inverse(s2ba, w);//加速度bias
+    m_Amm[6][6] = m_Amm[7][7] = m_Amm[8][8] = UT::Inverse(s2bw, w);//陀螺仪bias
     m_bm.MakeZero();
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
     m_em.MakeZero();
@@ -2357,8 +2393,8 @@ class Motion {
   inline void Initialize(const Motion &Zp) { *((Motion *) this) = Zp; }
 
 #ifdef CFG_DEBUG
-  inline void DebugSetMeasurement(const Camera &C) {
-    SetMotion(C.m_T, C.m_v, C.m_ba, C.m_bw);
+  inline void DebugSetMeasurement(const Camera &Cam_state) {
+    SetMotion(Cam_state.m_Cam_pose, Cam_state.m_v, Cam_state.m_ba, Cam_state.m_bw);
     m_bm.MakeZero();
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
     m_em.MakeZero();
@@ -2380,14 +2416,14 @@ class Motion {
     m_ba = ba;
     m_bw = bw;
   }
-  inline void GetMotion(const Rotation3D &R, LA::AlignedVector3f *v, LA::AlignedVector3f *ba,
+  inline void GetMotion(const Rotation3D &R/*Tc0w*/, LA::AlignedVector3f *v, LA::AlignedVector3f *ba,
                         LA::AlignedVector3f *bw) const {
-    R.ApplyInversely(m_v, *v);
+    R.ApplyInversely(m_v, *v);//v = R.t * v 转到世界系下
     *ba = m_ba;
     *bw = m_bw;
   }
   inline LA::AlignedVector3f GetVelocityState(const Camera &C) const {
-    return C.m_T.GetAppliedRotation(C.m_v);
+    return C.m_Cam_pose.GetAppliedRotation(C.m_v);
   }
   inline LA::AlignedVector3f GetVelocityMeasurement(const float *x = NULL) const {
     if (x) {
@@ -2426,8 +2462,12 @@ class Motion {
   inline LA::AlignedVector3f GetBiasGyroscopeError(const Camera &C, const float *x = NULL) const {
     return GetBiasGyroscopeState(C) - GetBiasGyroscopeMeasurement(x);
   }
+
+//ev =  Rc0w*vw - Rc0w*vw(测量)
+//eba = ba - ba(测量) 1
+//ebw = bw - bw(测量) 1
   inline void GetError(const Camera &C, Element::EM *e) const {
-    const LA::AlignedVector3f v = C.m_T.GetAppliedRotation(C.m_v);
+    const LA::AlignedVector3f v = C.m_Cam_pose.GetAppliedRotation(C.m_v);
     LA::AlignedVector3f::amb(v, m_v, e->m_ev);
     LA::AlignedVector3f::amb(C.m_ba, m_ba, e->m_eba);
     LA::AlignedVector3f::amb(C.m_bw, m_bw, e->m_ebw);
@@ -2455,36 +2495,49 @@ class Motion {
       e->m_ebw += *xbw;
     }
   }
-  inline void GetErrorJacobian(const Camera &C, ErrorJacobian *Je) const {
-    GetError(C, &Je->m_e);
-    SkewSymmetricMatrix::AB(C.m_T, C.m_v, Je->m_J.m_Jvr);
-    Je->m_J.m_Jvv = C.m_T;
+
+
+  inline void GetErrorJacobian(const Camera &C/*当前关键帧的状态*/, ErrorJacobian *Je) const {
+    GetError(C/*当前关键帧的状态*/, &Je->m_e/*motion部分的残差*/);
+    SkewSymmetricMatrix::AB(C.m_Cam_pose, C.m_v, Je->m_J.m_Jvr);//div(ev)/div(Rc0w) = Rc0w * [vw]x
+    Je->m_J.m_Jvv = C.m_Cam_pose;//div(ev)/div(vw) = Rc0w;
   }
-  inline void GetFactor(const float w, const Camera &C, Factor *A, Factor::Auxiliary *U) const {
-    GetErrorJacobian(C, &A->m_Je);
+//和滑窗中运动之间的残差,也就是GBA和LBA要保持一致,LBA边缘化最老帧是关键帧时会给GBA这帧的先验约束,同时m_ZpLM存储的是LBA中的
+// 这个最老帧的(Rc0w*vw，ba,bj)作为测量量
+////ev =  Rc0w*vw - Rc0w*vw(测量)
+//Rc0w右扰动 Rc0w * exp[-th]x*vw
+//div(ev)/div(Rc0w) = Rc0w * [vw]x
+//div(ev)/div(vw) = Rc0w;
+////eba = ba - ba(测量) 1
+////ebw = bw - bw(测量) 1
+inline void GetFactor(const float w, const Camera &C/*当前关键帧的状态*/, Factor *A/*速度残差的雅克比和v,bias的残差(雅克比是I)*/,
+          Factor::Auxiliary *U/*J.t*W 和 W*b 的东西*/) const {
+    GetErrorJacobian(C/*当前关键帧的状态*/, &A->m_Je/*速度残差的雅克比和v,bias的残差*/);//构造残差和雅克比
     const xp128f _w = xp128f::get(w);
-    U->Set(A->m_Je, _w, m_Amm);
+    //在U里设置一下J.t*W.t*J*delta_x = -J.t*W*r的J.t*W.t的J.t*W.t,W*r部分
+    U->Set(A->m_Je/*速度残差的雅克比和v,bias的残差*/, _w/*权重*/, m_Amm/*滑窗时当前motion的先验*/);
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
     U->Get(A->m_Je.m_e, &A->m_Arr.m_A, &A->m_Arm, &A->m_Amm.m_A, &A->m_Arr.m_b, &A->m_Amm.m_b);
-    A->m_F = GetCost(w, A->m_Je.m_e);
+    A->m_F = GetCost(gyr, A->m_Je.m_e);
 #else
-    A->m_F = GetCost(w, A->m_Je.m_e, U->m_Ae);
-    U->Get(_w, m_bm, &A->m_Arr.m_A, &A->m_Arm, &A->m_Amm.m_A, &A->m_Arr.m_b, &A->m_Amm.m_b);
+    A->m_F = GetCost(w, A->m_Je.m_e/*motion的残差,v,bias*/, U->m_Ae/*Wr*/);//计算当前的cost
+    U->Get(_w, m_bm, &A->m_Arr.m_A, &A->m_Arm, &A->m_Amm.m_A, &A->m_Arr.m_b, &A->m_Amm.m_b);//r就是旋转,m就是运动,A就是H部分,
+    // b就是增广的b部分构造旋转和运动部分要增加的H矩阵和b的对应部分
 #endif
   }
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
-  inline float GetCost(const float w, const Error &e) const {
+  inline float GetCost(const float gyr, const Error &e) const {
     Element::M _e, v;
     _e.Set(e.m_ev, e.m_eba, e.m_ebw);
     LA::AlignedMatrix9x9f::Ab(m_Amm, _e, (float *) &v);
-    return w * _e.Dot(v);
+    return gyr * _e.Dot(v);
   }
 #else
-  inline float GetCost(const float w, const Error &e, const Element::M &Ae) const {
+  inline float GetCost(const float w, const Error &e/*motion的残差,v,bias*/, const Element::M &Ae/*Wr*/) const {
     Element::M _e, b;
-    e.Get(&_e);
-    m_bm.GetScaled(w + w, b);
-    b += Ae;
+    e.Get(&_e);//获取左相机系下的motion残差m_ev, m_eba, m_ebw
+    m_bm.GetScaled(w + w, b); //b = 2w * m_bm 这个在干啥为啥要乘2啊
+    b += Ae;//得确认一下m_bm是啥
     //return 0.5f * _e.Dot(b);
     return _e.Dot(b);
   }
@@ -2562,9 +2615,9 @@ class Motion {
 
  public:
 
-  LA::AlignedVector3f m_v, m_ba, m_bw;
-  Element::MM m_Amm;
-  Element::M m_bm;
+  LA::AlignedVector3f m_v/*m_ZpLF和m_Zp用的时候,这里保存的是次老帧系下的v,取的时候已经是最老帧的v了*/, m_ba, m_bw;//世界坐标系下的v,bias
+  Element::MM m_Amm;//边缘化以后次老帧motion自己的先验
+  Element::M m_bm;//motion对应的b
 #ifdef CFG_CAMERA_PRIOR_SQUARE_FORM
   Error m_em;
 #else
@@ -2654,14 +2707,14 @@ class Motion {
   };
   class EigenPrior : public Pose::EigenPrior {
    public:
-    inline void Initialize(const float w, const float s2v, const float s2ba, const float s2bw) {
+    inline void Initialize(const float gyr, const float s2v, const float s2ba, const float s2bw) {
       m_A.Resize(9, 9);
       m_A.MakeZero();
       m_b.Resize(9);
       m_b.MakeZero();
-      m_A(0, 0) = m_A(1, 1) = m_A(2, 2) = UT::Inverse(s2v, w);
-      m_A(3, 3) = m_A(4, 4) = m_A(5, 5) = UT::Inverse(s2ba, w);
-      m_A(6, 6) = m_A(7, 7) = m_A(8, 8) = UT::Inverse(s2bw, w);
+      m_A(0, 0) = m_A(1, 1) = m_A(2, 2) = UT::Inverse(s2v, gyr);
+      m_A(3, 3) = m_A(4, 4) = m_A(5, 5) = UT::Inverse(s2ba, gyr);
+      m_A(6, 6) = m_A(7, 7) = m_A(8, 8) = UT::Inverse(s2bw, gyr);
     }
     inline void Set(const Motion &Z) {
       m_A = EigenMatrix9x9f(Z.m_Amm);
@@ -2683,12 +2736,12 @@ class Motion {
     }
   };
  public:
-  EigenErrorJacobian EigenGetErrorJacobian(const Camera &C) const;
-  EigenFactor EigenGetFactor(const float w, const Camera &C) const;
-  float EigenGetCost(const float w, const Camera &C, const EigenVector3f &e_xr,
+  EigenErrorJacobian EigenGetErrorJacobian(const Camera &Cam_state) const;
+  EigenFactor EigenGetFactor(const float gyr, const Camera &Cam_state) const;
+  float EigenGetCost(const float gyr, const Camera &Cam_state, const EigenVector3f &e_xr,
                      const EigenVector9f &e_xm) const;
-  void EigenGetResidual(const Camera &C, EigenVector9f *e_r) const;
-  void EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S,
+  void EigenGetResidual(const Camera &Cam_state, EigenVector9f *e_r) const;
+  void EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S,
                                 EigenVectorXf *e_x = NULL) const;
 #endif
 };
@@ -2724,10 +2777,12 @@ class Joint : public Pose, public Motion {
     m_Arm.MakeZero();
     m_Acm.Resize(0);
   }
-  inline void Initialize(const float w, const int iKFr, const Rigid3D &Tr, const float s2r,
-                         const Motion &Zp, const bool newKF, const Rigid3D *T0 = NULL,
+  //m_Zp.m_iKFr存储参考关键帧的id,m_Zps里push进新的Rwc0
+  inline void Initialize(const float w, const int iKFr/*参考关键帧*/, const Rigid3D &Tr/*参考关键帧对应Tc0w(kf)*/,
+                         const float s2r,const Motion &Zp, const bool newKF/*是否是新的关键帧*/, const Rigid3D *T0 = NULL,
                          const float s2cp = 0.0f, const float s2cr = 0.0f) {
-    Pose::Initialize(w, iKFr, Tr, s2r, newKF, T0, s2cp, s2cr);
+      //初始化一些东西,以及参考关键帧id,这个关键帧pose的存储,Rwc0,
+    Pose::Initialize(w, iKFr/*参考关键帧*/, Tr/*参考关键帧对应Tc0w(kf)*/, s2r, newKF/*是否是新的关键帧*/, T0, s2cp, s2cr);
     Motion::Initialize(Zp);
     m_Arm.MakeZero();
     if (newKF) {
@@ -2737,9 +2792,11 @@ class Joint : public Pose, public Motion {
       m_Acm[0].MakeZero();
     }
   }
-  inline void Insert(const float w, const int i, const int iKF, const Rigid3D &T, const float s2p,
+  inline void Insert(const float w, const int i/*这个是这个关键帧在m_iKFs里的索引*/,
+          const int iKF/*观测到的这个关键帧id*/, const Rigid3D &T/*Tc0(观测到的关键帧)c0(参考关键帧)*/, const float s2p,
                      const float s2r, AlignedVector<float> *work) {
-    Pose::Insert(w, i, iKF, T, s2p, s2r, work);
+    Pose::Insert(w, i/*这个是这个关键帧在m_iKFs里的索引*/, iKF/*观测到的这个关键帧id*/, T/*Tc0(观测到的关键帧)c0(参考关键帧)*/
+            , s2p, s2r, work);
     m_Acm.InsertZero(i);
   }
   inline void Erase(const int i) {
@@ -2754,12 +2811,12 @@ class Joint : public Pose, public Motion {
       m_Acm.Erase(j);
     }
     Pose::DeleteKeyFrame(iKF, &_i);
-  }
+  }//merge掉地图点以后,将舒尔补以后的约束加到cc中
   inline void Update(const int i, const Camera::Factor::Unitary::CC &A) {
-    m_Acc[i][i] += A.m_A;
+    m_Acc[i][i] += A.m_A;//
     m_Acc[i][i].SetLowerFromUpper();
     m_bc[i] += A.m_b;
-  }
+  }//当新来了一个观测关键帧时,会将它放在H矩阵的最老帧前面,之前的观测关键帧之后,顺序即为g,N个观测关键帧,最老帧,更新他们之前地图点边缘化以后产生的约束
   inline void Update(const int i1, const int i2, const Camera::Factor::Unitary::CC &A11,
                      const Camera::Factor::Binary::CC &A12, const Camera::Factor::Unitary::CC &A22) {
     m_Acc[i1][i1] += A11.m_A;
@@ -2791,7 +2848,7 @@ class Joint : public Pose, public Motion {
 #ifdef CFG_DEBUG
       UT_ASSERT(m_iKFs[ik] == INT_MAX);
 #endif
-      Pose::GetError(Tr, C.m_T, ik, ec, eps);
+      Pose::GetError(Tr, C.m_Cam_pose, ik, ec, eps);
     }
     if (em) {
       Motion::GetError(C, em);
@@ -2897,22 +2954,22 @@ class Joint : public Pose, public Motion {
 
  public:
 
-  Element::RM m_Arm;
+  Element::RM m_Arm;//g和次老帧motion部分的约束
   Vector::CM m_Acm;
 
 #ifdef CFG_DEBUG_EIGEN
  public:
   class EigenPrior : public Pose::EigenPrior {
    public:
-    inline void Initialize(const float w, const float s2r, const Motion::EigenPrior &e_Ap,
+    inline void Initialize(const float gyr, const float s2r, const Motion::EigenPrior &e_Ap,
                            const float s2cp = 0.0f, const float s2cr = 0.0f) {
       m_A.Resize(17, 17);
       m_A.MakeZero();
       m_b.Resize(17);
       m_b.MakeZero();
-      m_A(0, 0) = m_A(1, 1) = UT::Inverse(s2r, w);
-      m_A(2, 2) = m_A(3, 3) = m_A(4, 4) = UT::Inverse(s2cp, w);
-      m_A(5, 5) = m_A(6, 6) = m_A(7, 7) = UT::Inverse(s2cr, w);
+      m_A(0, 0) = m_A(1, 1) = UT::Inverse(s2r, gyr);
+      m_A(2, 2) = m_A(3, 3) = m_A(4, 4) = UT::Inverse(s2cp, gyr);
+      m_A(5, 5) = m_A(6, 6) = m_A(7, 7) = UT::Inverse(s2cr, gyr);
 #ifdef CFG_DEBUG
       UT_ASSERT(e_Ap.m_A.GetRows() == 9 && e_Ap.m_A.GetColumns() == 9 && e_Ap.m_b.Size() == 9);
 #endif
@@ -2924,7 +2981,7 @@ class Joint : public Pose, public Motion {
     }
     inline void Set(const Element::RR &Arr, const Vector::RC &Arc, const Element::RM &Arm,
                     const Matrix::CC &Acc, const Vector::CM &Acm, const Element::MM &Amm,
-                    const Element::R &br, const Vector::C &bc, const Element::M &bm,
+                    const Element::R &br, const Vector::Cam_state &bc, const Element::M &bm,
                     const bool pad = false) {
       const Pose::EigenPrior e_Arc = Pose::EigenPrior(Arr, Arc, Acc, br, bc, 1.0f, pad);
       const int Nx6 = bc.Size() * 6, Nrc = e_Arc.m_b.Size(), Nrcm = Nrc + 9;
@@ -2951,7 +3008,7 @@ class Joint : public Pose, public Motion {
     }
     inline void Get(Element::RR &Arr, Vector::RC &Arc, Element::RM &Arm,
                     Matrix::CC &Acc, Vector::CM &Acm, Element::MM &Amm,
-                    Element::R &br, Vector::C &bc, Element::M &bm) const {
+                    Element::R &br, Vector::Cam_state &bc, Element::M &bm) const {
       const int Nrcm = m_b.Size(), Nrc = Nrcm - 9, Nx6 = Nrc - 2, N = Nx6 / 6;
 #ifdef CFG_DEBUG
       UT_ASSERT(Nx6 % 6 == 0);
@@ -2965,11 +3022,11 @@ class Joint : public Pose, public Motion {
       Amm = EigenMatrix9x9f(m_A.block<9, 9>(Nrc, Nrc)).GetAlignedMatrixMxNf();
       bm = EigenVector9f(m_b.block<9, 1>(Nrc, 0)).GetAlignedVector9f();
     }
-    inline void Insert(const float w, const int i, const float s2p, const float s2r) {
+    inline void Insert(const float gyr, const int i, const float s2p, const float s2r) {
       const int j = 2 + i * 6;
       m_A.InsertZero(j, 6);
-      m_A(j, j) = m_A(j + 1, j + 1) = m_A(j + 2, j + 2) = UT::Inverse(s2p, w);
-      m_A(j + 3, j + 3) = m_A(j + 4, j + 4) = m_A(j + 5, j + 5) = UT::Inverse(s2r, w);
+      m_A(j, j) = m_A(j + 1, j + 1) = m_A(j + 2, j + 2) = UT::Inverse(s2p, gyr);
+      m_A(j + 3, j + 3) = m_A(j + 4, j + 4) = m_A(j + 5, j + 5) = UT::Inverse(s2r, gyr);
       m_b.InsertZero(j, 6);
     }
     inline void Update(const int i, const EigenMatrix6x6f &e_A, const EigenVector6f &e_b) {
@@ -2995,7 +3052,7 @@ class Joint : public Pose, public Motion {
     }
     inline bool AssertEqual(const Element::RR &Arr, const Vector::RC &Arc, const Element::RM &Arm,
                             const Matrix::CC &Acc, const Vector::CM &Acm, const Element::MM &Amm,
-                            const Element::R &br, const Vector::C &bc, const Element::M &bm,
+                            const Element::R &br, const Vector::Cam_state &bc, const Element::M &bm,
                             const int verbose = 1, const std::string str = "") const {
       const int Nrcm = m_b.Size(), Nrc = Nrcm - 9, Nx6 = Nrc - 2;
       bool scc = true;
@@ -3022,9 +3079,9 @@ class Joint : public Pose, public Motion {
     void GetPriorPose(const int iKF, Pose::EigenPrior *e_Ap) const;
     void GetPriorMotion(Motion::EigenPrior *e_Ap) const;
   };
-  void EigenGetResidual(const AlignedVector<Rigid3D> &Cs, const Camera &C,
+  void EigenGetResidual(const AlignedVector<Rigid3D> &Cs, const Camera &Cam_state,
                         EigenVectorXf *e_r, const float eps) const;
-  void EigenGetPriorMeasurement(const float w, EigenMatrixXf *e_S,
+  void EigenGetPriorMeasurement(const float gyr, EigenMatrixXf *e_S,
                                 EigenVectorXf *e_x = NULL) const;
 #endif
 

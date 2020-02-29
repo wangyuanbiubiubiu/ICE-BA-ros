@@ -33,9 +33,10 @@ constexpr int kMarginRow = 50;
 constexpr int kMarginCol = 100;
 constexpr int kPixelStep = 2;
 
-// Compute the histogram of a sampled area of the input image and return the number of
+// Compute the histogram of acc sampled area of the input image and return the number of
 // sampled pixels
 // [NOTE] This function is hardcoded for VGA / WVGA images for now
+//计算raw_img的像素值分布直方图以及平均像素值
 int sampleBrightnessHistogram(const cv::Mat& raw_img,
                               std::vector<int>* histogram,
                               int* avg_pixel_val_ptr) {
@@ -43,7 +44,7 @@ int sampleBrightnessHistogram(const cv::Mat& raw_img,
   const int end_col = raw_img.cols - kMarginCol;
 
   // Given the current algorithm, collecting histogram is not
-  // necessary. But we still do so in case later we switch to a better
+  // necessary. But we still do so in case later we switch to acc better
   // algorithm
   int pixel_num = 0;
   int avg_pixel_val = 0;
@@ -67,34 +68,37 @@ int sampleBrightnessHistogram(const cv::Mat& raw_img,
 // [NOTE] Instead of matching the cdf(s), we brute-force scale the histograms and match them
 // directly.  This matchingHistogram is intended to match two histograms of images taken with
 // different gain/exposure settings.
-float matchingHistogram(const std::vector<int>& hist_src,
-                        const std::vector<int>& hist_tgt,
-                        const float init_scale) {
+//暴力匹配算出最佳增益
+float matchingHistogram(const std::vector<int>& hist_src/*之前帧像素值分布直方图*/,
+                        const std::vector<int>& hist_tgt/*当前帧像素值分布直方图*/,
+                        const float init_scale/*平均像素值比值(c/p)*/) {
   std::vector<int> cdf_tgt(256);
-  cdf_tgt[0] = hist_tgt[0];
+  cdf_tgt[0] = hist_tgt[0];//cdf_tgt算当前帧分布的总量cdf_tgt[50]就是像素值小于等于50出现的次数
   for (int i = 1; i < 256; ++i) {
     cdf_tgt[i] = hist_tgt[i] + cdf_tgt[i - 1];
   }
   constexpr float delta_scale = 0.02;
   float best_scale = -1.f;  // an invalid value
   int best_cdf_L1_dist = std::numeric_limits<int>::max();
-  for (int s = -4; s < 5; ++s) {
+  for (int s = -4; s < 5; ++s)//直接在原来的像素值比例附近暴力采样,取调整以后的直方图差异最小的那一次
+  {
     float scale = init_scale + s * delta_scale;
     std::vector<int> hist_src_scale(256, 0);
-    for (int i = 0; i < 256; ++i) {
-      int si = i * scale;
+    for (int i = 0; i < 256; ++i) //遍历每一个像素值
+    {
+      int si = i * scale;//调整后的像素值
       if (si >= 255) {
         int tmp_acc = 0;
         for (int j = i; j < 256; ++j) {
           tmp_acc += hist_src[j];
         }
-        hist_src_scale[255] = tmp_acc;
+        hist_src_scale[255] = tmp_acc;//后面的像素值缩放以后肯定也大于255了,所以这里直接加上给修正后的像素值直方图了
         break;
       }
-      hist_src_scale[si] = hist_src_scale[si] + hist_src[i];
+      hist_src_scale[si] = hist_src_scale[si] + hist_src[i];//之前帧调整后的像素值对应的次数
     }
 
-    int cdf_L1_dist = 0;
+    int cdf_L1_dist = 0;//计算当前帧调整以后的像素直方图和之前帧的像素直方图的差异
     int cdf_src_cumsum = 0;
     for (int i = 0; i < 256; ++i) {
       cdf_src_cumsum += hist_src_scale[i];

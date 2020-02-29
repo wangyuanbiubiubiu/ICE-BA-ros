@@ -44,17 +44,19 @@ void GlobalBundleAdjustor::UpdateFactors() {
   }
 #endif
   const float add = UT::Inverse(BA_VARIANCE_REGULARIZATION_DEPTH, BA_WEIGHT_FEATURE);
-  const int nKFs = static_cast<int>(m_KFs.size());
+  const int nKFs = static_cast<int>(m_KFs.size());//GBA中的关键帧数量
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    KeyFrame &KF = m_KFs[iKF];
-    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) {
+    KeyFrame &KF = m_KFs[iKF];//当前关键帧
+
+
+    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) {//是否需要更新位姿?
       KF.m_SAcxzs.MakeZero();
       KF.m_SAps.MakeZero();
       m_SAcus[iKF].MakeZero();
-    } else {
+    } else {//如果不需要更新相机的话
       const int NZ = int(KF.m_Zs.size());
       for (int iZ = 0; iZ < NZ; ++iZ) {
-        if (m_ucs[KF.m_Zs[iZ].m_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA)
+        if (m_ucs[KF.m_Zs[iZ].m_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA)//如果观测到的关键帧需要更新
           KF.m_SAcxzs[iZ].MakeZero();
       }
       const int Np = KF.m_SAps.Size();
@@ -64,25 +66,26 @@ void GlobalBundleAdjustor::UpdateFactors() {
         }
       }
     }
-    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH) {
-      const ubyte *uds = m_uds.data() + m_iKF2d[iKF];
-      const int Nx = static_cast<int>(KF.m_xs.size());
-      for (int ix = 0; ix < Nx; ++ix) {
-        if (uds[ix] & GBA_FLAG_TRACK_UPDATE_DEPTH) {
+    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH) {//是否需要更新深度,只对新的观测进行矩阵的操作
+      const ubyte *uds = m_uds.data() + m_iKF2d[iKF];//从新的地图点
+      const int Nx = static_cast<int>(KF.m_xs.size());//新地图点的size()
+      for (int ix = 0; ix < Nx; ++ix) {//
+        if (uds[ix] & GBA_FLAG_TRACK_UPDATE_DEPTH) {//如果需要更新深度
           KF.m_Axs[ix].MakeZero();
           KF.m_Axs[ix].m_Sadx.m_add.m_a = add;
         }
       }
     }
   }
-  const ubyte ucmFlag = GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
+
+  const ubyte ucmFlag = GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |//设定需要需要更新什么
                         GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE;
   const int Nm = m_CsLM.Size();
   for (int im = 0; im < Nm; ++im) {
-    if (m_ucmsLM[im] & ucmFlag) {
+    if (m_ucmsLM[im] & ucmFlag) {//如果需要更新状态
       m_SAcmsLM[im].MakeZero();
     }
   }
@@ -93,21 +96,35 @@ void GlobalBundleAdjustor::UpdateFactors() {
   //m_Cs[iKF].Print(true);
   const Camera::Factor::Unitary::CC &A = m_SAcus[iKF];
 #endif
-  UpdateFactorsFeature();
+  UpdateFactorsFeature();//更新视觉约束
 //#ifdef CFG_DEBUG
 #if 0
   //UT::Print("%.10e\n", A.m_A.m00());
   UT::Print("%.10e\n", A.m_b.v0());
 #endif
-  UpdateFactorsPriorDepth();
+  //用来对所有路标点的逆深度进行约束,对于只有左目观测令每个路标点的逆深度在该 source KF 所管辖的所有路标点的平均逆深度附近
+  //双目都观测到的话,就用外参来约束
+  UpdateFactorsPriorDepth();//地图点逆深度的先验
   //m_ts[TM_TEST_1].Start();
+//更新LBA给GBA中各个关键帧之间的运动先验约束
   UpdateFactorsPriorCameraPose();
   //m_ts[TM_TEST_1].Stop();
+//更新运动先验,和滑窗中运动之间的残差,也就是GBA和LBA要保持一致,LBA边缘化最老帧是关键帧时会给GBA这帧的先验约束,同时m_ZpLM存储的是LBA中的
+//这个最老帧的(Rc0w*vw，ba,bj)作为测量量
   UpdateFactorsPriorCameraMotion();
-  UpdateFactorsIMU();
-  UpdateFactorsFixOrigin();
-  UpdateFactorsFixPositionZ();
-  UpdateFactorsFixMotion();
+//更新imu约束所带来的因子
+//每个imu约束的因子,都连接前后两个关键帧的pose和motion
+//// 残差:
+// e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
+//  e_v = Rciw*(v_wj - v_wi + 0.5gt^2) - (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
+//  e_p = Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2) +
+//  Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+// e_ba = bai - baj
+// e_bw = bwi - bwj
+  UpdateFactorsIMU();//imu约束
+  UpdateFactorsFixOrigin();//固定第一帧pose
+  UpdateFactorsFixPositionZ();//这个没用上
+  UpdateFactorsFixMotion();//这个也没用上啊,不过如果这个因子没有别的观测,那么倒是能用上
 //#ifdef CFG_DEBUG
 #if 0
   //UT::Print("%.10e\n", A.m_A.m00());
@@ -115,6 +132,18 @@ void GlobalBundleAdjustor::UpdateFactors() {
 #endif
 }
 
+//更新新的观测带来的视觉约束,以及更新老的视觉约束(针对地图点的重投影误差),具体看FTR::GetFactor里的注释
+//每个视觉约束,即重投影残差的因子,都连接投影前的观测关键帧pose,投影后的关键帧pose还有地图点的逆深度(就是在首次观测到它的这帧中的逆深度),
+//对于H的上三角,有6处影响(投影前poseX投影前pose，投影前poseX投影后pose,逆深度X逆深度,
+// 投影前poseX投影后pose,投影前poseX逆深度,投影后poseX逆深度)
+// b有3处(投影前pose,投影后pose,逆深度)
+// GBA中全部计算相关的雅克比
+//如果是一个新的因子,那么在矩阵块里+=既可以了,如果是一个已有的因子需要更新,那么就+=(新因子 - 老因子)就可以了
+//逆深度x逆深度的H|-b,投影前poseX逆深度的H更新在_KF.m_Axs[ix].m_Sadx _KF是观测关键帧即投影前的,ix就是对应的地图点的局部id
+//投影后pose x 逆深度的H存储在KF.m_Azs1[iz]
+//投影前pose x 投影前pose的H|-b更新在m_SAcus[_iKF].m_Acxx (m_Acxx是专门维护这个关键帧作为观测关键帧时的约束,m_Aczz是专门维护这个关键帧作为投影后关键帧时的约束)
+//投影后pose x 投影后pose的H|-b更新在m_SAcus[iKF].m_Aczz
+//投影前pose x 投影后pose的H更新在KF.m_SAcxzs[iZ] 即存储于投影后关键帧自己的数据结构里
 void GlobalBundleAdjustor::UpdateFactorsFeature() {
 //#ifdef CFG_DEBUG
 #if 0
@@ -129,45 +158,47 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
   FTR::Factor::DDC dadx;
   Camera::Factor::Unitary::CC dAcxx, dAczz;
   Camera::Factor::Binary::CC dAcxz;
-  FTR::Factor::Full::U U;
+  FTR::Factor::Full::U U;/*这个地图点从观测关键帧投影到投影后关键帧上的重投影误差的因子,存了H|-b,信息矩阵*/
   //float dF;
-  const int nKFs = int(m_KFs.size());
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    KeyFrame &KF = m_KFs[iKF];
-    const Rigid3D &C = m_Cs[iKF];
-    const bool ucz = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
-    Camera::Factor::Unitary::CC &SAczz = m_SAcus[iKF];
-    const int NZ = int(KF.m_Zs.size());
-    for (int iZ = 0; iZ < NZ; ++iZ) {
+  const int nKFs = int(m_KFs.size());//关键帧的帧数
+  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有关键帧
+    KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    const Rigid3D &C = m_Cs[iKF];//当前关键帧对应的pose
+    const bool ucz = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;//是否要各更新相机
+    Camera::Factor::Unitary::CC &SAczz = m_SAcus[iKF];//这个关键帧自己的pose x pose对应的H|-b
+    const int NZ = int(KF.m_Zs.size());//这个关键帧所有的观测
+    for (int iZ = 0; iZ < NZ; ++iZ) {//遍历这个关键帧所有的观测关键帧
       const FRM::Measurement &Z = KF.m_Zs[iZ];
-      const int _iKF = Z.m_iKF;
+      const int _iKF = Z.m_iKF;//关键关键帧id
 #ifdef CFG_DEBUG
       UT_ASSERT(_iKF < iKF);
 #endif
-      const bool ucx = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0, ucr = ucx || ucz;
-      if (!ucr && !(m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH)) {
+      const bool ucx = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0, ucr = ucx || ucz;//投影帧和投影后的帧有需要更新的就为true
+      if (!ucr && !(m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH)) {//这个关键帧里地图点是否有要更新的
         continue;
       }
-      *Tr = C / m_Cs[_iKF];
+      *Tr = C / m_Cs[_iKF];//Tc0(投影关键帧)_c0(观测关键帧)
 #ifdef CFG_STEREO
       Tr[1] = Tr[0];
-      Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());
+      Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());//Tc1(投影关键帧)_c0(观测关键帧)
 #endif
       const int id = m_iKF2d[_iKF];
       const Depth::InverseGaussian *_ds = m_ds.data() + id;
       ubyte *_uds = m_uds.data() + id;
-      Camera::Factor::Unitary::CC &SAcxx = m_SAcus[_iKF];
-      Camera::Factor::Binary::CC &SAcxz = KF.m_SAcxzs[iZ];
+      Camera::Factor::Unitary::CC &SAcxx = m_SAcus[_iKF];/*投影关键帧自己的pose x pose对应的H|-b*/
+      Camera::Factor::Binary::CC &SAcxz = KF.m_SAcxzs[iZ];//这个投影前(观测关键帧)pose x 投影后pose的H
       KeyFrame &_KF = m_KFs[_iKF];
-      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
+      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {//遍历每一个观测到的地图点,算一下视觉因子的H|b
         const FTR::Measurement &z = KF.m_zs[iz];
         const int ix = z.m_ix;
         const bool ud = (_uds[ix] & GBA_FLAG_TRACK_UPDATE_DEPTH) != 0;
         if (!ucr && !ud) {
           continue;
         }
-        FTR::Factor::Full::A2 &A = KF.m_Azs2[iz];
-        if (!ud) {
+        FTR::Factor::Full::A2 &A = KF.m_Azs2[iz];//m_adx.m_add是逆深度x逆深度的H|-b,m_adx.m_adc是投影前posex逆深度的H,m_Acxx是投影前pose x 投影前pose的H|-b,
+          //m_Aczz是投影后pose x 投影后pose的H|-b,m_Acxz是投影前pose x 投影后pose的H
+        //因子已经存在的话,就只需要更新,所以需要保存一下老的因子
+          if (!ud) {
           dadx = A.m_adx;
         }
         if (!ucx) {
@@ -179,9 +210,14 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
         if (!ucz) {
           dAczz = A.m_Aczz;
         }
-        //dF = A.m_F;
-        FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, Tr, _KF.m_xs[ix], _ds[ix], C, z,
-                                        &KF.m_Lzs[iz], &KF.m_Azs1[iz], &A, &U
+          // Pczk = Tc0w(投影后关键帧) * Tcw.inv(投影前观测关键帧) *Pcxk (z是投影后关键帧,x是投影前关键帧)
+        FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, Tr/*Tc(投影后关键帧)_c0(观测关键帧)*/, _KF.m_xs[ix]/*投影关键帧对这个地图点的观测*/,
+                _ds[ix]/*逆深度*/, C/*投影后关键帧Tc0w*/, z,
+                                        &KF.m_Lzs[iz],/*投影后关键帧中对这个地图点观测的重投影误差e,J(对投影前后的pose,对关键帧点的逆深度),cost*/
+                                        &KF.m_Azs1[iz], //m_adcz存储H的投影后posex逆深度部分
+                                        &A,//m_adx.m_add是逆深度x逆深度的H|-b,m_adx.m_adc是投影前pose x 逆深度的H,m_Acxx是投影前pose x 投影前pose的H|-b,
+                                       //m_Aczz是投影后pose x 投影后pose的H|-b,m_Acxz是投影前pose x 投影后pose的H
+                                        &U/*这个地图点从观测关键帧投影到投影后关键帧上的重投影误差的因子,存了H|-b,信息矩阵*/
 #ifdef CFG_STEREO
                                       , m_K.m_br
 #endif
@@ -192,33 +228,33 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
           UT::Print("%f\n", A.m_Aczz.m_A.m00());
         }
 #endif
-        if (ud) {
-          _KF.m_Axs[ix].m_Sadx += A.m_adx;
+        if (ud) {//如果是新的因子.直接+= ,否则更新增量
+          _KF.m_Axs[ix].m_Sadx += A.m_adx;//逆深度x逆深度的H|-b,投影前pose x 逆深度的H
         } else {
           FTR::Factor::DDC::amb(A.m_adx, dadx, dadx);
           _KF.m_Axs[ix].m_Sadx += dadx;
         }
-        if (ucx) {
+        if (ucx) {//投影前pose x 投影前pose的H|-b
           SAcxx += A.m_Acxx;
         } else {
           Camera::Factor::Unitary::CC::AmB(A.m_Acxx, dAcxx, dAcxx);
           SAcxx += dAcxx;
         }
         if (ucr) {
-          SAcxz += A.m_Acxz;
+          SAcxz += A.m_Acxz;//投影前pose x 投影后pose的H
         } else {
           Camera::Factor::Binary::CC::AmB(A.m_Acxz, dAcxz, dAcxz);
           SAcxz += dAcxz;
         }
         if (ucz) {
-          SAczz += A.m_Aczz;
+          SAczz += A.m_Aczz;//投影后pose x 投影后pose的H|-b
         } else {
           Camera::Factor::Unitary::CC::AmB(A.m_Aczz, dAczz, dAczz);
           SAczz += dAczz;
         }
         //dF = A.m_F - dF;
         //m_F = dF + m_F;
-        m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;
+        m_ucs[_iKF] |= GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;//将对应的因子设为已更新(已存在的flags)
         _uds[ix] |= GBA_FLAG_TRACK_UPDATE_INFORMATION;
 #ifdef CFG_VERBOSE
         if (m_verbose >= 3) {
@@ -241,7 +277,7 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
   }
 #endif
 }
-
+//更新LBA给GBA中各个关键帧之间的运动先验约束
 void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
 #ifdef CFG_VERBOSE
   int SN = 0;
@@ -250,7 +286,7 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
   Camera::Factor::Binary::CC Ab, dAb;
   CameraPrior::Pose::Factor::Auxiliary U;
   //float dF;
-  const int NZ = static_cast<int>(m_Zps.size());
+  const int NZ = static_cast<int>(m_Zps.size());//所有的位姿先验
 //#ifdef CFG_DEBUG
 #if 0
 //#if 1
@@ -267,13 +303,19 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
   fclose(fp);
   exit(0);
 #endif
-  for (int iZ = 0; iZ < NZ; ++iZ) {
+
+    //遍历所有的先验
+    //计算先验约束对应的H|-b
+    //step1:处理位姿先验带给参考关键帧,观测关键帧以及最老帧对应的关键帧自己posex自己pose的影响H|-b,存在每一帧自己的m_SAcus[iKF]中
+    //step2:处理位姿先验带给H参考关键帧pose x 观测关键帧、最老帧之间的影响,存在两帧之中较新帧的m_SAps[ip],ip是较老帧在较新帧中的m_ikp2KF里的索引
+    //step3:处理位姿先验带给H观测关键帧、最老帧之间 pose x 观测关键帧、最老帧之间的影响,存在两帧之中较新帧的m_SAps[ip],ip是较老帧在较新帧中的m_ikp2KF里的索引
+  for (int iZ = 0; iZ < NZ; ++iZ) {//遍历所有的位姿先验
     const CameraPrior::Pose &Z = m_Zps[iZ];
     const bool ucr = (m_ucs[Z.m_iKFr] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
     bool uc = ucr;
-    const int N = static_cast<int>(Z.m_iKFs.size());
+    const int N = static_cast<int>(Z.m_iKFs.size());//这个位姿先验里的观测关键帧
     for (int i = 0; i < N && !uc; ++i) {
-      uc = (m_ucs[Z.m_iKFs[i]] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
+      uc = (m_ucs[Z.m_iKFs[i]] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;//是否需要更新pose
     }
     if (!uc) {
       continue;
@@ -283,16 +325,21 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
       ++SN;
     }
 #endif
-    CameraPrior::Pose::Factor &A = m_Aps[iZ];
-    A.Swap(m_ApTmp, m_bpTmp);
+    CameraPrior::Pose::Factor &A = m_Aps[iZ];//对应的这个先验约束
+    A.Swap(m_ApTmp, m_bpTmp);//暂时保存一下A中的约束
     m_work.Resize(U.BindSize(N) / sizeof(float));
     U.Bind(m_work.Data(), N);
-    if (GBA_PRIOR_CAMERA_POSE_ROBUST) {
-      Z.GetError(m_Cs, &A.m_Je.m_e, BA_ANGLE_EPSILON);
-      const float F = (Z.GetCost(1.0f, A.m_Je.m_e) - Z.m_xTb) / BA_WEIGHT_FEATURE;
+    if (GBA_PRIOR_CAMERA_POSE_ROBUST)
+    {
+        //er为参考关键帧自身约束,m_ep，m_er为参考关键帧和观测到的关键帧之间的相对约束
+        //er = -ln(eR) = -ln(Rwc0(观测) * Rc0w).xy  eR是wc0(观测) * Rc0w
+        //m_ep = Rc0w(参考关键帧) * (twc0(观测到的关键帧) - twc0(参考关键帧)) - tc0(参考关键帧)c0(观测到的关键帧)(测量)
+        //m_er = -ln(Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧))v
+        Z.GetError(m_Cs/*GBA中所有关键帧的位姿*/, &A.m_Je.m_e, BA_ANGLE_EPSILON);
+      const float F = (Z.GetCost(1.0f, A.m_Je.m_e) - Z.m_xTb) / BA_WEIGHT_FEATURE;//没看懂这个操作,这咋求的这个cost
       //const float F = (A.m_F / BA_WEIGHT_PRIOR_CAMERA_POSE - Z.m_xTb) / BA_WEIGHT_FEATURE;
       const float w = BA_WEIGHT_PRIOR_CAMERA_POSE * ME::Weight<GBA_ME_FUNCTION>(F);
-      Z.GetFactor(w, m_Cs, &A, &U, BA_ANGLE_EPSILON);
+      Z.GetFactor(w, m_Cs/*GBA中所有关键帧的位姿*/, &A, &U, BA_ANGLE_EPSILON);//不过这里H|-b的位置我不太清楚,没对上,就是这个g没懂怎么转换的
     } else {
       Z.GetFactor(BA_WEIGHT_PRIOR_CAMERA_POSE, m_Cs, &A, &U, BA_ANGLE_EPSILON);
     }
@@ -311,36 +358,49 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
     U.Get(A.m_Je.m_J.m_Jr, _w, Z.m_br, Z.m_bc, &A.m_A, &A.m_b);
     m_ts[TM_TEST_5].Stop();
 #endif
-    for (int i = -1, _i = 0; i < N; ++i, ++_i) {
-      const int iKF = i == -1 ? Z.m_iKFr : Z.m_iKFs[i];
+
+
+    for (int i = -1, _i = 0; i < N; ++i, ++_i)
+    {
+        //step1:处理位姿先验带给参考关键帧,观测关键帧以及最老帧对应的关键帧自己posex自己pose的影响H|-b,存在每一帧自己的m_SAcus[iKF]中
+        const int iKF = i == -1 ? Z.m_iKFr : Z.m_iKFs[i];//第一次是参考关键帧,后面都是观测关键帧
       Au.Set(A.m_A[_i][_i], A.m_b[_i]);
       uc = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
-      if (uc) {
+      if (uc)//参考关键帧X参考关键帧或者观测关键帧x观测关键帧
+      {
         m_SAcus[iKF] += Au;
-      } else {
+      } else
+      {
         dAu.Set(m_ApTmp[_i][_i], m_bpTmp[_i]);
         Camera::Factor::Unitary::CC::AmB(Au, dAu, dAu);
         m_SAcus[iKF] += dAu;
       }
-      if (i == -1) {
+      if (i == -1)
+      {
         continue;
       }
+        //step2:处理位姿先验带给H参考关键帧pose x 观测关键帧、最老帧之间的影响,存在两帧之中较新帧的m_SAps[ip],ip是较老帧在较新帧中的m_ikp2KF里的索引
       A.m_A[0][_i].Get(Ab, Z.m_iKFr > iKF);
-      const int iKF1 = std::min(Z.m_iKFr, iKF), iKF2 = std::max(Z.m_iKFr, iKF);
+      const int iKF1 = std::min(Z.m_iKFr, iKF), iKF2 = std::max(Z.m_iKFr, iKF);//iKF1为老关键帧,iKF2为新关键帧
       KeyFrame &KF2 = m_KFs[iKF2];
-      const int ip = KF2.SearchPriorKeyFrame(iKF1);
-      if (ucr || uc) {
-        KF2.m_SAps[ip] += Ab;
-      } else {
+      const int ip = KF2.SearchPriorKeyFrame(iKF1);//在新的关键帧中找到对应的旧的关键帧先验的索引
+      if (ucr || uc)
+      {
+        KF2.m_SAps[ip] += Ab;//H老帧posex新帧pose
+      } else
+      {
         m_ApTmp[0][_i].Get(dAb, Z.m_iKFr > iKF);
         Camera::Factor::Binary::CC::AmB(Ab, dAb, dAb);
         KF2.m_SAps[ip] += dAb;
       }
     }
-    for (int i1 = 0, _i1 = 1; i1 < N; ++i1, ++_i1) {
-      const int iKF1 = Z.m_iKFs[i1];
+      //step3:处理位姿先验带给H观测关键帧、最老帧之间 pose x 观测关键帧、最老帧之间的影响,存在两帧之中较新帧的m_SAps[ip],ip是较老帧在较新帧中的m_ikp2KF里的索引
+    for (int i1 = 0, _i1 = 1; i1 < N; ++i1, ++_i1)//这里跳过了参考关键帧对应的位置
+    {
+      const int iKF1 = Z.m_iKFs[i1];//关键关键帧+最老帧对应的关键帧
       const bool uc1 = (m_ucs[iKF1] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
-      for (int i2 = i1 + 1, _i2 = i2 + 1; i2 < N; ++i2, ++_i2) {
+      for (int i2 = i1 + 1, _i2 = i2 + 1; i2 < N; ++i2, ++_i2)
+      {
         const int iKF2 = Z.m_iKFs[i2];
 #ifdef CFG_DEBUG
         UT_ASSERT(iKF2 > iKF1);
@@ -349,9 +409,11 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
         const CameraPrior::Element::CC &_Ab = A.m_A[_i1][_i2];
         KeyFrame &KF2 = m_KFs[iKF2];
         const int ip = KF2.SearchPriorKeyFrame(iKF1);
-        if (uc1 || uc2) {
+        if (uc1 || uc2)
+        {
           KF2.m_SAps[ip] += _Ab;
-        } else {
+        } else
+        {
           Camera::Factor::Binary::CC::AmB(_Ab, m_ApTmp[_i1][_i2], dAb);
           KF2.m_SAps[ip] += dAb;
         }
@@ -365,16 +427,19 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
   }
 #endif
 }
-
+//更新运动先验,和滑窗中运动之间的残差,也就是GBA和LBA要保持一致,LBA边缘化最老帧是关键帧时会给GBA这帧的先验约束,同时m_ZpLM存储的是LBA中的
+//这个最老帧的(Rc0w*vw，ba,bj)作为测量量
+//R x R 对应的H|-b 更新在m_SAcus[m_ZpLM.m_iKF]即在滑窗中被边缘化了的滑窗帧对应的关键帧
+//R x motion H 以及 motion x motion的H|-b更新在m_SAcmsLM[im].m_Au,im == m_ZpLM.m_iKF
 void GlobalBundleAdjustor::UpdateFactorsPriorCameraMotion() {
-  if (m_ZpLM.Invalid()) {
+  if (m_ZpLM.Invalid()) {//在solver.Start()里已经初始化过了
     return;
   }
-  const int im = m_ZpLM.m_iKF - m_Cs.Size() + m_CsLM.Size();
-  const ubyte ucm = m_ucmsLM[im];
+  const int im = m_ZpLM.m_iKF - m_Cs.Size() + m_CsLM.Size();//这个应该就是m_ZpLM.m_iKF，即滑窗现在最新的给的运动先验约束是哪个关键帧
+  const ubyte ucm = m_ucmsLM[im];//是否更新,一定会更新,因为滑窗给GBA时设置了
   const bool uc = (ucm & (GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
                           GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION)) != 0;
-  const bool _ucm = uc || (ucm & (GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |
+  const bool _ucm = uc || (ucm & (GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |//motion部分也是全部要更新的
                                   GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION |
                                   GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE)) != 0;
   if (!_ucm) {
@@ -390,19 +455,28 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraMotion() {
     dArm = m_ApLM.m_Arm;
     dAmm = m_ApLM.m_Amm;
   }
-  CameraPrior::Motion::Factor::Auxiliary U;
-  m_ZpLM.GetFactor(BA_WEIGHT_PRIOR_CAMERA_MOTION, m_CsLM[im], &m_ApLM, &U);
-  Camera::Factor::Unitary::CC &SAcc = m_SAcus[m_ZpLM.m_iKF];
-  Camera::Factor::Unitary &SAcm = m_SAcmsLM[im].m_Au;
-  if (uc) {
-    SAcc.Increase3(m_ApLM.m_Arr.m_A, m_ApLM.m_Arr.m_b);
-  } else {
+  CameraPrior::Motion::Factor::Auxiliary U;//设置一下motion先验部分因子的一个H和b部分
+//和滑窗中运动之间的残差,也就是GBA和LBA要保持一致,LBA边缘化最老帧是关键帧时会给GBA这帧的先验约束,同时m_ZpLM存储的是LBA中的
+// 这个最老帧的(Rc0w*vw，ba,bj)作为测量量
+////ev =  Rc0w*vw - Rc0w*vw(测量)
+//Rc0w右扰动 Rc0w * exp[-th]x*vw
+//div(ev)/div(Rc0w) = Rc0w * [vw]x
+//div(ev)/div(vw) = Rc0w;
+////eba = ba - ba(测量) 1
+////ebw = bw - bw(测量) 1
+  m_ZpLM.GetFactor(BA_WEIGHT_PRIOR_CAMERA_MOTION/*运动先验的权重*/, m_CsLM[im]/*当前GBA中这个关键帧的状态*/,
+          &m_ApLM/*雅克比，H，b对应的部分都保存在这里*/, &U/*里面是保存一些J.t*W 和 W*b的东西,一些中间变量的东西*/);
+  Camera::Factor::Unitary::CC &SAcc = m_SAcus[m_ZpLM.m_iKF];//先验关键帧自己的pose x pose对应的H|-b
+  Camera::Factor::Unitary &SAcm = m_SAcmsLM[im].m_Au;//m_Au存储了每一个关键帧的Hcm以及Hmm(对角线上跟运动相关)和-mb部分
+  if (uc) {//R x R 对应的H|-b
+    SAcc.Increase3(m_ApLM.m_Arr.m_A/*H中rr*/, m_ApLM.m_Arr.m_b/*b中rb*/);// 在原来的总的H中对应帧的部分进行增量,这个是rr的3×3的上三角和rb部分
+  } else {//如果已经存在了,就
     CameraPrior::Motion::Factor::RR::AmB(m_ApLM.m_Arr, dArr, dArr);
     SAcc.Increase3(dArr.m_A, dArr.m_b);
   }
-  if (ucm) {
-    SAcm.m_Acm.Increase3(m_ApLM.m_Arm);
-    SAcm.m_Amm += m_ApLM.m_Amm;
+  if (ucm) {//R x motion H 以及 motion x motion的H|-b
+    SAcm.m_Acm.Increase3(m_ApLM.m_Arm/*H的rm这部分*/);
+    SAcm.m_Amm += m_ApLM.m_Amm;/*H的mm这部分,b中mb这部分*/
   } else {
     CameraPrior::Motion::Factor::RM::AmB(m_ApLM.m_Arm, dArm, dArm);
     CameraPrior::Motion::Factor::MM::AmB(m_ApLM.m_Amm, dAmm, dAmm);
@@ -410,9 +484,10 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraMotion() {
     SAcm.m_Amm += dAmm;
   }
 }
-
+//用来对所有路标点的逆深度进行约束,对于只有左目观测令每个路标点的逆深度在该 source KF 所管辖的所有路标点的平均逆深度附近
+//双目都观测到的话,就用外参来约束
 void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
-  FTR::Factor::DD dadd;
+  FTR::Factor::DD dadd;//逆深度的先验因子
   //float dF;
 #ifdef CFG_STEREO
   FTR::Factor::Stereo::U U;
@@ -420,40 +495,40 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
 #ifdef CFG_VERBOSE
   int SN = 0;
 #endif
-  const int nKFs = int(m_KFs.size());
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH)) {
+  const int nKFs = int(m_KFs.size());//关键帧数量
+  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有的关键帧
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH)) {//是否需要更新深度?
       continue;
     }
-    const int id = m_iKF2d[iKF];
-    const Depth::InverseGaussian *ds = m_ds.data() + id;
-    ubyte *uds = m_uds.data() + id;
-    KeyFrame &KF = m_KFs[iKF];
-    const Depth::Prior zp(KF.m_d.u(), 1.0f / (BA_VARIANCE_PRIOR_FRAME_DEPTH + KF.m_d.s2()));
+    const int id = m_iKF2d[iKF];//新地图点的开始id
+    const Depth::InverseGaussian *ds = m_ds.data() + id;//对应的第一个新地图点的逆深度
+    ubyte *uds = m_uds.data() + id;//地图点操作的flags
+    KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    const Depth::Prior zp(KF.m_d.u()/*平均深度*/, 1.0f / (BA_VARIANCE_PRIOR_FRAME_DEPTH + KF.m_d.s2())/*信息矩阵*/);
     const int Nx = int(KF.m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
+    for (int ix = 0; ix < Nx; ++ix) {//遍历所有地图点
       if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_DEPTH)) {
         continue;
       }
 #ifdef CFG_STEREO
-      if (KF.m_xs[ix].m_xr.Valid()) {
+      if (KF.m_xs[ix].m_xr.Valid()) {//如果是双目都观测到这个地图点的话
         FTR::Factor::Stereo &A = KF.m_Ards[ix];
-        //dF = a.m_F;
-        FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, m_K.m_br, ds[ix], KF.m_xs[ix], &A, &U);
+        //dF = acc.m_F;
+        FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE/*权重*/, m_K.m_br/*-tc0_c1*/, ds[ix]/*地图点的观测*/, KF.m_xs[ix]/*地图点的观测*/, &A, &U);
         dadd = A.m_add;
       } else
 #endif
       {
         Depth::Prior::Factor &A = KF.m_Apds[ix];
-        //dF = a.m_F;
-        zp.GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_PRIOR_DEPTH, ds[ix].u(), A);
+        //dF = acc.m_F;
+        zp.GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_PRIOR_DEPTH/*先验深度的权重*/, ds[ix].u()/*这个点的深度,无双目观测的情况下是用场景平均深度给的先验*/, A/*关于地图点深度先验的因子*/);
         dadd = A;
       }
-      KF.m_Axs[ix].m_Sadx.m_add += dadd;
-      //dF = a.m_F - dF;
+      KF.m_Axs[ix].m_Sadx.m_add += dadd;//这个因子是存在关键帧的因子中
+      //dF = acc.m_F - dF;
       //m_F = dF + m_F;
-      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;
-      uds[ix] |= GBA_FLAG_TRACK_UPDATE_INFORMATION;
+      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;//m_ucs[iKF]增加flag
+      uds[ix] |= GBA_FLAG_TRACK_UPDATE_INFORMATION;//uds[ix]增加flag
 #ifdef CFG_VERBOSE
       if (m_verbose >= 3) {
         ++SN;
@@ -469,6 +544,26 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
 #endif
 }
 
+//更新imu约束所带来的因子
+//每个imu约束的因子,都连接前后两帧的pose和motion
+//// 残差:
+// e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
+//  e_v = Rciw*(v_wj - v_wi + 0.5gt^2) - (m_v + m_Jvba * (bai - m_ba) + m_Jvbw * (bwi - m_bw))
+//  e_p = Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2) +
+//  Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
+// e_ba = bai - baj
+// e_bw = bwi - bwj
+
+//也就是对于H的上三角,有10处影响(前帧poseX前帧pose，前帧motionX前帧motion，后帧poseX后帧pose,后帧motionX后帧motion,前帧poseX前帧motion
+// ,前帧poseX后帧pose,前帧poseX后帧motion,前帧motionX后帧pose，前帧motionX后帧motion，后帧poseX后帧motion)
+// b有4处(前帧pose,前帧motion,后帧pose，后帧motion),这里说的都是-b,我的习惯的是Hx=b,它定义的是Hx=-b,所以它最后求的增量是加了负号的
+//遍历所有的imu约束(即m_DsLM预积分),其中前一帧关键帧id:ic1==im1,后一帧关键帧id:ic2==im2
+// H部分的前帧poseX前帧pose,b部分的前帧pose存储在m_SAcus[ic1] 2处
+// H部分的后帧poseX后帧pose,b部分的后帧pose存储在m_SAcus[ic2] 2处
+// H部分的前帧poseX前帧motion,前帧motionX前帧motion,b部分的前帧motion存储在m_SAcmsLM[im1] 3处
+// H部分的后帧poseX后帧motion,后帧motionX后帧motion,b部分的后帧motion, 7处
+// 前帧poseX后帧pose,前帧poseX后帧motion,前帧motionX后帧pose，前帧motionX后帧motion都存储在m_SAcmsLM[im2]
+// m_AdsLM[im2]也会作为中间变量存储H中前一帧的c,m x 前一帧的c,m,以及对应的-b,H中后一帧的c,m x 后一帧的c,m,以及对应的-b
 void GlobalBundleAdjustor::UpdateFactorsIMU() {
 #ifdef CFG_VERBOSE
   int SN = 0, SNu = 0;
@@ -478,71 +573,94 @@ void GlobalBundleAdjustor::UpdateFactorsIMU() {
   IMU::Delta::Factor::Auxiliary::Global U;
   //float dF;
   const ubyte ucFlag = GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
-                       GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
-  const ubyte ucmFlag = ucFlag |
+                       GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;//pose部分更新的flag
+  const ubyte ucmFlag = ucFlag |//motion部分更新的flags
                         GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE;
   const int Nc = int(m_KFs.size());
   for (int ic1 = Nc - m_CsLM.Size(), ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;
-       ic1 = ic2++, im1 = im2++) {
-    if (m_KFs[ic2].m_us.Empty()) {
+       ic1 = ic2++, im1 = im2++)
+  {
+    if (m_KFs[ic2].m_us.Empty()) //检查下imu数据
+    {
       continue;
     }
 #ifdef CFG_VERBOSE
-    if (m_verbose >= 3) {
+    if (m_verbose >= 3)
+    {
       ++SN;
     }
 #endif
-    const ubyte ucm1 = m_ucmsLM[im1], ucm2 = m_ucmsLM[im2];
+    const ubyte ucm1 = m_ucmsLM[im1], ucm2 = m_ucmsLM[im2];//前后运动更新的flags
     const bool _ucm1 = (ucm1 & ucmFlag) != 0, _ucm2 = (ucm2 & ucmFlag) != 0;
-    if (!_ucm1 && !_ucm2) {
+    if (!_ucm1 && !_ucm2) //如果前后运动状态都不需要更新就跳过
+    {
       continue;
     }
-    IMU::Delta::Factor &A = m_AdsLM[im2];
+    IMU::Delta::Factor &A = m_AdsLM[im2];/*当前imu因子,m_A11存储着H中前一帧的c,m x 前一帧的c,m,以及对应的-b,m_A22存储着H中后一帧的c,m x 后一帧的c,m,以及对应的-b*/
     Camera::Factor &SAcm1 = m_SAcmsLM[im1], &SAcm2 = m_SAcmsLM[im2];
     const bool uc1 = (ucm1 & ucFlag) != 0, uc2 = (ucm2 & ucFlag) != 0;
-    if (!uc1) {
+    //需要这个约束已经存在,只是需要更新,那么就将老的约束存储下来
+    if (!uc1)
+    {
       dAcc1 = A.m_A11.m_Acc;
     }
-    if (!_ucm1) {
+    if (!_ucm1)
+    {
       dAcm1.m_Acm = A.m_A11.m_Acm;
       dAcm1.m_Amm = A.m_A11.m_Amm;
     }
-    if (!uc2) {
+    if (!uc2)
+    {
       dAcc2 = A.m_A22.m_Acc;
     }
-    if (!_ucm2) {
+    if (!_ucm2)
+    {
       dAcm2.m_Acm = A.m_A22.m_Acm;
       dAcm2.m_Amm = A.m_A22.m_Amm;
     }
     //dF = A.m_F;
-    m_DsLM[im2].GetFactor(BA_WEIGHT_IMU, m_CsLM[im1], m_CsLM[im2], m_K.m_pu,
-                          &A, &SAcm2.m_Ab, &U, BA_ANGLE_EPSILON);
-    if (uc1) {
+
+    m_DsLM[im2]/*前后两帧之间的imu约束*/.GetFactor(BA_WEIGHT_IMU, m_CsLM[im1]/*前一帧状态*/, m_CsLM[im2]/*后一帧状态*/, m_K.m_pu,/*tc0_i*/
+                          &A/*当前imu因子,m_A11存储着H中前一帧的c,m x 前一帧的c,m,以及对应的-b,m_A22存储着H中后一帧的c,m x 后一帧的c,m,以及对应的-b*/
+                          , &SAcm2.m_Ab //存储了前一帧Pose x 后一帧Pose,前一帧Pose x 后一帧M,前一帧M x 后一帧Pose,前一帧M x 后一帧M
+                          , &U/*这个imu约束总的H|-b*/, BA_ANGLE_EPSILON);
+    if (uc1) //前一帧自己和自己的pose的H,-b部分关于这个因子的更新
+    {
       m_SAcus[ic1] += A.m_A11.m_Acc;
-    } else {
+    } else
+    {
       Camera::Factor::Unitary::CC::AmB(A.m_A11.m_Acc, dAcc1, dAcc1);
       m_SAcus[ic1] += dAcc1;
     }
-    if (_ucm1) {
-      SAcm1.m_Au.m_Acm += A.m_A11.m_Acm;
-      SAcm1.m_Au.m_Amm += A.m_A11.m_Amm;
-    } else {
+      //前一帧自己的pose和自己的M的H,自己的M和自己的M的H,-b部分关于这个因子的更新
+    if (_ucm1)
+    {
+        SAcm1.m_Au.m_Acm += A.m_A11.m_Acm;//这一帧的pose和这一帧的motion的H
+        SAcm1.m_Au.m_Amm += A.m_A11.m_Amm;//这一帧的motion自己和自己的H以及自己对应的-b
+    } else
+    {
       Camera::Factor::Unitary::CM::AmB(A.m_A11.m_Acm, dAcm1.m_Acm, dAcm1.m_Acm);
       Camera::Factor::Unitary::MM::AmB(A.m_A11.m_Amm, dAcm1.m_Amm, dAcm1.m_Amm);
       SAcm1.m_Au += dAcm1;
     }
-    if (uc2) {
+    //后一帧自己和自己的pose的H,-b部分关于这个因子的更新
+    if (uc2)
+    {
       m_SAcus[ic2] += A.m_A22.m_Acc;
-    } else {
+    } else
+    {
       Camera::Factor::Unitary::CC::AmB(A.m_A22.m_Acc, dAcc2, dAcc2);
       m_SAcus[ic2] += dAcc2;
     }
-    if (_ucm2) {
+      //后一帧自己的pose和自己的M的H,自己的M和自己的M的H,-b部分关于这个因子的更新
+    if (_ucm2)
+    {
       SAcm2.m_Au.m_Acm += A.m_A22.m_Acm;
       SAcm2.m_Au.m_Amm += A.m_A22.m_Amm;
-    } else {
+    } else
+    {
       Camera::Factor::Unitary::CM::AmB(A.m_A22.m_Acm, dAcm2.m_Acm, dAcm2.m_Acm);
       Camera::Factor::Unitary::MM::AmB(A.m_A22.m_Amm, dAcm2.m_Amm, dAcm2.m_Amm);
       SAcm2.m_Au += dAcm2;
@@ -575,7 +693,7 @@ void GlobalBundleAdjustor::UpdateFactorsIMU() {
   const LA::Vector9f *xms = (LA::Vector9f *) (xcs + Nc);
   for (int ic1 = Nc - m_CsLM.Size(), ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;
        ic1 = ic2++, im1 = im2++) {
-    if (m_KFs[ic2].m_us.Empty()) {
+    if (m_KFs[ic2].m_imu_measures.Empty()) {
       continue;
     }
     const LA::Vector6f &xc1 = xcs[ic1], &xc2 = xcs[ic2];
@@ -600,15 +718,17 @@ void GlobalBundleAdjustor::UpdateFactorsIMU() {
   UT::DebugStop();
 #endif
 }
-
+//固定原点
+//m_ep = twc0 - 0
+//er = -ln{Rwc0(初始的第一帧pose) * Rc0w(要优化的)}v
 void GlobalBundleAdjustor::UpdateFactorsFixOrigin() {
   const int iKF = 0;
-  if (m_KFs[iKF].m_T.m_iFrm != 0 || !(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA)) {
+  if (m_KFs[iKF].m_T.m_iFrm != 0 || !(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA)) {//如果不是第一帧或者不需要更新相机
     return;
   }
   //float dF = m_Af->m_F;
-  m_Zo.GetFactor(m_Cs[iKF], m_Ao, BA_ANGLE_EPSILON);
-  m_SAcus[iKF] += m_Ao.m_A;
+  m_Zo.GetFactor(m_Cs[iKF]/*首帧的Tc0w*/, m_Ao/*原点固定因子*/, BA_ANGLE_EPSILON);//构造固定原点因子的H,b,存在m_Ao.m_A中,costfun存在m_Ao.m_F,m_Je里是J和残差
+  m_SAcus[iKF] += m_Ao.m_A;//在第一帧的H|-b中加上这个因子
   //dF = m_Af->m_F - dF;
   //m_F = dF + m_F;
 }
@@ -618,18 +738,19 @@ void GlobalBundleAdjustor::UpdateFactorsFixPositionZ() {
   int SN = 0;
 #endif
   //float dF;
-  const Camera::Fix::PositionZ z(BA_WEIGHT_FIX_POSITION_Z, BA_VARIANCE_FIX_POSITION_Z);
+  const Camera::Fix::PositionZ z(BA_WEIGHT_FIX_POSITION_Z, BA_VARIANCE_FIX_POSITION_Z/*0*/);//这里BA_VARIANCE_FIX_POSITION_Z
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const ubyte uc = m_ucs[iKF];
-    if (!(uc & GBA_FLAG_FRAME_UPDATE_CAMERA)) {
+    if (!(uc & GBA_FLAG_FRAME_UPDATE_CAMERA))
+    {
       continue;
     }
     Camera::Fix::PositionZ::Factor &A = m_Afps[iKF];
-    Camera::Factor::Unitary::CC &SA = m_SAcus[iKF];
+    Camera::Factor::Unitary::CC &SA = m_SAcus[iKF];//这个关键帧中自己的pose x pose对应的H|-b
     //dF = A.m_F;
-    z.GetFactor(m_Cs[iKF].GetPositionZ(), A);
-    SA.m_A.m22() += z.m_w;
+    z.GetFactor(m_Cs[iKF].GetPositionZ()/*twc0[2]*/, A);//这里固定z的意义是？
+    SA.m_A.m22() += z.m_w;//在对应的pose对角线矩阵上加上约束
     SA.m_b.v2() += A.m_b;
     //dF = A.m_F - dF;
     //m_F = dF + m_F;
@@ -669,17 +790,17 @@ void GlobalBundleAdjustor::UpdateFactorsFixMotion() {
                         GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE;
   const int Nm = m_CsLM.Size();
   for (int im = 0; im < Nm; ++im) {
-    const ubyte ucm = m_ucmsLM[im];
-    if (!(ucm & ucmFlag)) {
+    const ubyte ucm = m_ucmsLM[im];//当前这帧的flag
+    if (!(ucm & ucmFlag)) {//如果没有要更新的就跳过
       continue;
     }
-    Camera::Fix::Motion::Factor &A = m_AfmsLM[im];
+    Camera::Fix::Motion::Factor &A = m_AfmsLM[im];//fix motion部分的因子
     Camera::Factor::Unitary::MM &SA = m_SAcmsLM[im].m_Au.m_Amm;
     const Camera &C = m_CsLM[im];
-    const int i = ucm >> 5;
-    if (ucm & GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY) {
+    const int i = ucm >> 5;//这里都用的0,应该都没固定吧
+    if (ucm & GBA_FLAG_CAMERA_MOTION_UPDATE_VELOCITY) {//如果要更新速度
       //dF = A.m_Av.m_F;
-      zv[i].GetFactor(C.m_v, A.m_Av);
+      zv[i].GetFactor(C.m_v, A.m_Av);//固定速度
       //dF = A.m_Av.m_F - dF;
       //m_F = dF + m_F;
 #ifdef CFG_VERBOSE
@@ -689,7 +810,7 @@ void GlobalBundleAdjustor::UpdateFactorsFixMotion() {
     }
     if (ucm & GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_ACCELERATION) {
       //dF = A.m_Aba.m_F;
-      zba[i].GetFactor(C.m_ba, A.m_Aba);
+      zba[i].GetFactor(C.m_ba, A.m_Aba);//固定加速度bias
       //dF = A.m_Aba.m_F - dF;
       //m_F = dF + m_F;
 #ifdef CFG_VERBOSE
@@ -699,7 +820,7 @@ void GlobalBundleAdjustor::UpdateFactorsFixMotion() {
     }
     if (ucm & GBA_FLAG_CAMERA_MOTION_UPDATE_BIAS_GYROSCOPE) {
       //dF = A.m_Abw.m_F;
-      zbw[i].GetFactor(C.m_bw, A.m_Abw);
+      zbw[i].GetFactor(C.m_bw, A.m_Abw);//固定陀螺仪bias
       //dF = A.m_Abw.m_F - dF;
       //m_F = dF + m_F;
 #ifdef CFG_VERBOSE
@@ -707,7 +828,7 @@ void GlobalBundleAdjustor::UpdateFactorsFixMotion() {
         ++SNbw;
 #endif
     }
-    SA.m_A.IncreaseDiagonal012(zv[i].w());   SA.m_b.Increase(0, A.m_Av.m_b);
+    SA.m_A.IncreaseDiagonal012(zv[i].w());   SA.m_b.Increase(0, A.m_Av.m_b);//motion部分添加fix的这部分的约束
     SA.m_A.IncreaseDiagonal345(zba[i].w());  SA.m_b.Increase(3, A.m_Aba.m_b);
     SA.m_A.IncreaseDiagonal678(zbw[i].w());  SA.m_b.Increase(6, A.m_Abw.m_b);
   }
@@ -720,17 +841,46 @@ void GlobalBundleAdjustor::UpdateFactorsFixMotion() {
 #endif
 }
 
-void GlobalBundleAdjustor::UpdateSchurComplement() {
+
+//merge地图点以后对H|-b pose矩阵处造成的影响
+//因子图假设三个帧 K1,K2共同观测到了点A,点A属于K0,那么就有两个视觉约束,一个连接A,K0,K1 一个连接A,K0,K2,将这两个视觉因子,即现在的影响是A对K0,1,2均有影响
+//现在要把A边缘化掉,那么K0,K1,K2自身x自身,K0 x K1,K0 x K2,K1 x K2 这6处都会有影响
+
+//step1:遍历所有关键帧的所有的地图点,计算舒尔补矩阵对角线部分要减去的东西 这里就在处理k0的自身x自身
+//在KF.m_Mxs1[ix].m_mdx.m_add.m_a中保存Huu^-1,m_mdx.m_adc保存Hpose_u * Huu^-1|Huu^-1*-bu
+// KF.m_Mxs2[ix].m_Mcxx = Hpose_u * Huu^-1 * Hpose_u.t|Hpose_u * Huu^-1 * -bu 这里的pose都是投影前的帧,即关键帧自己
+//m_SMcus[iKF]里维护了每个关键帧舒尔补矩阵要减去的∑Hpose_u * Huu^-1 * Hpose_u.t|∑Hpose_u * Huu^-1 * -bu(∑为所有地图点)
+
+//step2:遍历所有关键帧的观测,计算边缘化地图点以后会对舒而补中投影前pose x 投影后pose以及H的投影后posex投影后pose|投影后-b造成的影响,均存在投影后的关键帧中
+//这个在处理K1,K2自身x自身,K0 x K1,K0 x K2的影响
+//如果是有效观测iz2adcz记录是第几个有效观测,m_marksTmp1这个地图点索引处也改成1
+//KF.m_Mzs2[iz]->m_Mcxz = H投影前pose_u * Huu^-1 * H投影后pose_u.t
+//KF.m_Mzs2[iz]->m_Mczz = H投影后pose_u *Huu^-1 * H投影后pose_u.t |H投影后pose_u *Huu^-1 *-bu
+//KF.m_Mzs1[iz]->m_adczA = H投影后pose_u *Huu^-1
+//m_adczsTmp = H投影后pose_u
+//KF.m_Zm.m_SMczms[Z.m_ik]中维护两个共视帧之间的所有地图点造成的投影前posex投影后pose的影响 ∑H投影前pose_u * Huu^-1 * H投影后pose_u.t
+//m_SMcus[iKF]存储所有观测地图地图点边缘化以后造成的投影后posex投影后pose|投影后-b ∑H投影后pose_u *Huu^-1 * H投影后pose_u.t |∑H投影后pose_u *Huu^-1 *-bu
+//两帧共视地图点,地图点merge以后对于两帧的影响
+//KF.m_Zm.m_Mczms[i]存储地图点边缘化以后对这帧和它之前帧的共视的影响H_KFpose_u *Huu^-1*HKFpose_u.t
+
+//step3:两帧共视地图点,地图点merge以后对于两帧的影响 这个在处理K1 x K2的影响
+//KF.m_Zm.m_Mczms[i]存储地图点边缘化以后对这帧和它之前帧的共视的影响H_KFpose_u *Huu^-1*HKFpose_u.t
+void GlobalBundleAdjustor::UpdateSchurComplement()
+{
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    KeyFrame &KF = m_KFs[iKF];
-    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) {
+    KeyFrame &KF = m_KFs[iKF];//当前这个关键帧
+    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA)//
+    {
       m_SMcus[iKF].MakeZero();
       KF.m_Zm.m_SMczms.MakeZero();
-    } else {
+    } else
+    {
       const int Nk = KF.m_Zm.m_SMczms.Size();
-      for (int ik = 0; ik < Nk; ++ik) {
-        if (m_ucs[KF.m_iKFsMatch[ik]] & GBA_FLAG_FRAME_UPDATE_CAMERA) {
+      for (int ik = 0; ik < Nk; ++ik)
+      {
+        if (m_ucs[KF.m_iKFsMatch[ik]] & GBA_FLAG_FRAME_UPDATE_CAMERA)//如果共视这帧需要更新,那么非对角线的元素需要设为0
+        {
           KF.m_Zm.m_SMczms[ik].MakeZero();
         }
       }
@@ -742,29 +892,34 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
   UT::DebugStop();
   return;
 #endif
-  int Nd = 0;
+  //遍历所有关键帧中的新地图点,记录下有效的地图点(iX2d(m_idxsTmp2)中的value为有效点新编号后对应的id,-1代表无效观测,-2代表)
+  int Nd = 0;//有效观测的地图点数量
   m_idxsTmp1.assign(nKFs, -1);
-  int *iKF2X = m_idxsTmp1.data();
+  int *iKF2X = m_idxsTmp1.data();//关键帧之前有多少个地图点
   std::vector<int> &iX2d = m_idxsTmp2;
   iX2d.resize(0);
   const float eps = FLT_EPSILON;
   const float epsd = UT::Inverse(BA_VARIANCE_MAX_DEPTH, BA_WEIGHT_FEATURE, eps);
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION)) {
+  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有关键帧的所有当时关键帧所新观测到的地图点,如果H矩阵大于了阈值,就认为有效,加进有效索引里
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION))
+    {
       continue;
     }
-    ubyte *uds = m_uds.data() + m_iKF2d[iKF];
-    const KeyFrame &KF = m_KFs[iKF];
-    const int iX = static_cast<int>(iX2d.size()), Nx = static_cast<int>(KF.m_xs.size());
-    iKF2X[iKF] = iX;
+    ubyte *uds = m_uds.data() + m_iKF2d[iKF];//当前首个地图点对应的flags
+    const KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    const int iX = static_cast<int>(iX2d.size()), Nx = static_cast<int>(KF.m_xs.size());//NX:新地图点的数量
+    iKF2X[iKF] = iX;//保存一下这个关键帧之前有多少个地图点
     iX2d.resize(iX + Nx, -1);
     int *ix2d = iX2d.data() + iX;
     for (int ix = 0; ix < Nx; ++ix) {
-      if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION)) {
+      if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION))
+      {//如果这个地图点不用更新
         continue;
-      } else if (KF.m_Axs[ix].m_Sadx.m_add.m_a > epsd) {
-        ix2d[ix] = Nd++;
-      } else if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO)) {
+      } else if (KF.m_Axs[ix].m_Sadx.m_add.m_a > epsd)//Huu大于0才加入(u代表这个点的逆深度对应的)
+      {
+        ix2d[ix] = Nd++;//有效的地图点么,双目观测时才有
+      } else if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO))//如果不是第一次观测到这个地图点,而且还不满足H>0时才会设成-2
+      {
         ix2d[ix] = -2;
       }
     }
@@ -774,32 +929,38 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
 #endif
   const int NmddC = SIMD_FLOAT_CEIL(Nd);
   m_work.Resize(NmddC + Nd * sizeof(xp128f) / sizeof(float));
-  float *mdds = m_work.Data();
+  float *mdds = m_work.Data();//存的是H地图点部分(V)的逆,V^-1
   xp128f *_mdds = (xp128f *) (mdds + NmddC);
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF)//
+  {//遍历所有关键帧上的新观测地图点,有效的逆深度先验因子就加到m_work里,然后再取逆
     const int iX = iKF2X[iKF];
-    if (iX == -1) {
+    if (iX == -1)
+    {
       continue;
     }
 #ifdef CFG_VERBOSE
-    if (m_verbose >= 3) {
+    if (m_verbose >= 3)
+    {
       ++SNX;
     }
 #endif
     const int *ix2d = iX2d.data() + iX;
     const KeyFrame &KF = m_KFs[iKF];
     const int Nx = static_cast<int>(KF.m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
+    for (int ix = 0; ix < Nx; ++ix)
+    {
       const int id = ix2d[ix];
-      if (id >= 0) {
+      if (id >= 0)
+      {//有效的逆深度先验因子就加到m_work里
         mdds[id] = KF.m_Axs[ix].m_Sadx.m_add.m_a;
       }
     }
   }
   //SIMD::Add(Nd, UT::Inverse(BA_VARIANCE_REGULARIZATION_DEPTH, BA_WEIGHT_FEATURE), mdds);
-  SIMD::Inverse(Nd, mdds);
-  for (int id = 0; id < Nd; ++id) {
-    _mdds[id].vdup_all_lane(mdds[id]);
+  SIMD::Inverse(Nd, mdds);//地图点的H求逆得到H^-1,mdds已经变成Huu^-1了 u代表逆深度
+  for (int id = 0; id < Nd; ++id)
+  {
+    _mdds[id].vdup_all_lane(mdds[id]);//数据类型转换
   }
 #if defined CFG_VERBOSE && defined CFG_DEBUG
   if (m_verbose >= 3) {
@@ -809,47 +970,63 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
   }
 #endif
 
+    //遍历所有关键帧的所有的地图点,计算舒尔补矩阵对角线部分要减去的东西
+    //在KF.m_Mxs1[ix].m_mdx.m_add.m_a中保存Huu^-1,m_mdx.m_adc保存Hpose_u * Huu^-1|Huu^-1*-bu
+    // KF.m_Mxs2[ix].m_Mcxx = Hpose_u * Huu^-1 * Hpose_u.t|Hpose_u * Huu^-1 * -bu 这里的pose都是投影前的帧,即关键帧自己
+    //m_SMcus[iKF]里维护了每个关键帧舒尔补矩阵要减去的∑Hpose_u * Huu^-1 * Hpose_u.t|∑Hpose_u * Huu^-1 * -bu(∑为所有地图点)
   Camera::Factor::Unitary::CC dMcu;
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {
     const int iX = iKF2X[iKF];
-    if (iX == -1) {
+    if (iX == -1)
+    {
       continue;
     }
-    const int *ix2d = iX2d.data() + iX;
-    ubyte *uds = m_uds.data() + m_iKF2d[iKF];
-    Camera::Factor::Unitary::CC &SMcxx = m_SMcus[iKF];
+    const int *ix2d = iX2d.data() + iX;//用来判断地图点是否是有效的观测
+    ubyte *uds = m_uds.data() + m_iKF2d[iKF];//对应的逆深度
+    Camera::Factor::Unitary::CC &SMcxx = m_SMcus[iKF];//
 #ifdef CFG_VERBOSE
     ubyte Scxx = 0;
 #endif
-    const bool uc = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
+    const bool uc = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;//是否要更新pose
     KeyFrame &KF = m_KFs[iKF];
     const int Nx = static_cast<int>(KF.m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
+
+
+    for (int ix = 0; ix < Nx; ++ix)
+    {//遍历所有新观测到的地图点
       const int id = ix2d[ix];
-      if (id == -1) {
+      if (id == -1)
+      {//只取有效观测
         continue;
       }
       FTR::Factor::Full::Source::M2 &M = KF.m_Mxs2[ix];
-      if (id >= 0) {
-        if (uc || (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO)) {
-          FTR::Factor::Full::Source::Marginalize(_mdds[id], KF.m_Axs[ix].m_Sadx, &KF.m_Mxs1[ix], &M);
+      if (id >= 0)
+      {
+        if (uc || (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO))//如果这个地图点是一个新地图点
+        {//KF.m_Mxs1[ix].m_mdx.m_add.m_a = Huu^-1* ,M.m_Mcxx = Hpose_u * Huu^-1 * Hpose_u.t|Hpose_u * Huu^-1 * -bu
+          FTR::Factor::Full::Source::Marginalize(_mdds[id]/*这个点对应的Huu^-1*/, KF.m_Axs[ix].m_Sadx/*用到Hpose_u*/, &KF.m_Mxs1[ix], &M);
           SMcxx += M.m_Mcxx;
-        } else {
-          dMcu = M.m_Mcxx;
+        } else
+        {
+          dMcu = M.m_Mcxx;//如果已经有了这个因子,需要更新,则+新-旧
           FTR::Factor::Full::Source::Marginalize(_mdds[id], KF.m_Axs[ix].m_Sadx, &KF.m_Mxs1[ix], &M);
           Camera::Factor::Unitary::CC::AmB(M.m_Mcxx, dMcu, dMcu);
           SMcxx += dMcu;
         }
 #ifdef CFG_VERBOSE
-        if (m_verbose >= 3) {
+        if (m_verbose >= 3)
+        {
           ++SNs1;
         }
 #endif
-      } else {
+      } else
+      {
 #ifdef CFG_DEBUG
         UT_ASSERT((uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) == 0);
 #endif
-        if (!uc) {
+        if (!uc)
+        {
           M.m_Mcxx.GetMinus(dMcu);
           SMcxx += dMcu;
         }
@@ -859,45 +1036,60 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
 #endif
       }
 #ifdef CFG_VERBOSE
-      if (m_verbose >= 3) {
+      if (m_verbose >= 3)
+      {
         Scxx = 1;
       }
 #endif
     }
 #ifdef CFG_VERBOSE
-    if (m_verbose >= 3 && Scxx) {
+    if (m_verbose >= 3 && Scxx)
+    {
       m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_SCHUR_COMPLEMENT;
     }
 #endif
   }
 #ifdef CFG_VERBOSE
-  if (m_verbose >= 3) {
+  if (m_verbose >= 3)
+  {
     SNs2 += static_cast<int>(m_ds.size());
   }
 #endif
-
+  //遍历所有关键帧的观测,计算边缘化地图点以后会对舒而补中投影前pose x 投影后pose以及H的投影后posex投影后pose|投影后-b造成的影响,均存在投影后的关键帧中
+  //如果是有效观测iz2adcz记录是第几个有效观测,m_marksTmp1这个地图点索引处也改成1
+    //KF.m_Mzs2[iz]->m_Mcxz = H投影前pose_u * Huu^-1 * H投影后pose_u.t
+    //KF.m_Mzs2[iz]->m_Mczz = H投影后pose_u *Huu^-1 * H投影后pose_u.t |H投影后pose_u *Huu^-1 *-bu
+    //KF.m_Mzs1[iz]->m_adczA = H投影后pose_u *Huu^-1
+    //m_adczsTmp = H投影后pose_u
+    //KF.m_Zm.m_SMczms[Z.m_ik]中维护两个共视帧之间的所有地图点造成的投影前posex投影后pose的影响 ∑H投影前pose_u * Huu^-1 * H投影后pose_u.t
+    //m_SMcus[iKF]存储所有观测地图地图点边缘化以后造成的投影后posex投影后pose|投影后-b ∑H投影后pose_u *Huu^-1 * H投影后pose_u.t |∑H投影后pose_u *Huu^-1 *-bu
+    //两帧共视地图点,地图点merge以后对于两帧的影响
+//KF.m_Zm.m_Mczms[i]存储地图点边缘化以后对这帧和它之前帧的共视的影响H_KFpose_u *Huu^-1*HKFpose_u.t
   Camera::Factor::Binary::CC dMcb;
   std::vector<int> &iz2adcz = m_idxsTmp3;
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    KeyFrame &KF = m_KFs[iKF];
-    Camera::Factor::Unitary::CC &SMczz = m_SMcus[iKF];
+    KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    Camera::Factor::Unitary::CC &SMczz = m_SMcus[iKF];//当前关键帧舒尔补矩阵要减去的∑Hpose_u * Huu^-1 * Hpose_u.t|∑Hpose_u * Huu^-1 * -bu(∑为所有地图点)
 #ifdef CFG_VERBOSE
     ubyte Sczz = 0;
 #endif
     const int Nz = static_cast<int>(KF.m_zs.size());
     m_marksTmp1.assign(Nz, 0);
-    iz2adcz.assign(Nz, -1);
+    iz2adcz.assign(Nz, -1);//扩容成观测的
     m_adczsTmp.Resize(0);
 #ifdef CFG_VERBOSE
-    m_marksTmp1.resize(Nz + KF.m_Zm.m_SMczms.Size(), 0);
+    m_marksTmp1.resize(Nz + KF.m_Zm.m_SMczms.Size(), 0);//观测+与哪个关键帧之间有共视的size
     ubyte *Scbs = m_marksTmp1.data() + Nz;
 #endif
     const bool ucz = (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0;
     const int NZ = static_cast<int>(KF.m_Zs.size());
-    for (int iZ = 0; iZ < NZ; ++iZ) {
+      //遍历所有关键帧的观测,计算边缘化地图点以后会对舒而补中投影前pose x 投影后pose以及H的投影后posex投影后pose|投影后-b造成的影响,均存在投影后的关键帧中
+    for (int iZ = 0; iZ < NZ; ++iZ)//遍历所有观测关键帧
+    {
       const FRM::Measurement &Z = KF.m_Zs[iZ];
-      const int _iKF = Z.m_iKF, _iX = iKF2X[_iKF];
-      if (_iX == -1) {
+      const int _iKF = Z.m_iKF/*观测到的关键帧*/, _iX = iKF2X[_iKF];/*首个地图点id*/
+      if (_iX == -1)
+      {
         continue;
       }
       const ubyte *_uds = m_uds.data() + m_iKF2d[_iKF];
@@ -906,37 +1098,48 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
 #ifdef CFG_VERBOSE
       ubyte &Scxz = Scbs[Z.m_ik];
 #endif
-      const bool ucx = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0, ucr = ucx || ucz;
+      const bool ucx = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0/*投影前这帧是否更新*/, ucr = ucx || ucz;//
       const KeyFrame &_KF = m_KFs[_iKF];
-      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
+      for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz)
+      {
         const int ix = KF.m_zs[iz].m_ix, id = _ix2mdd[ix];
-        if (id == -1) {
+        if (id == -1)//==-1代表是无效的视觉观测
+        {
           continue;
         }
         FTR::Factor::Full::M2 &M = KF.m_Mzs2[iz];
-        if (id >= 0) {
-          iz2adcz[iz] = m_adczsTmp.Size();
+        if (id >= 0)
+        {
+          iz2adcz[iz] = m_adczsTmp.Size();//有效的共视,记录下来
           LA::ProductVector6f &adcz = m_adczsTmp.Push();
-          if (_uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {
+          if (_uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO)//这个点如果是一个新的因子
+          {//注释看下面的
             FTR::Factor::Full::Marginalize(_mdds[id], _KF.m_Mxs1[ix], KF.m_Azs1[iz], &KF.m_Mzs1[iz], &M, &adcz);
             SMcxz += M.m_Mcxz;
             SMczz += M.m_Mczz;
-            m_marksTmp1[iz] = 1;
-          } else {
-            if (!ucr) {
+            m_marksTmp1[iz] = 1;//观测有效
+          } else
+          {
+            if
+            (!ucr) {
               dMcb = M.m_Mcxz;
             }
             if (!ucz) {
               dMcu = M.m_Mczz;
             }
-            FTR::Factor::Full::Marginalize(_mdds[id], _KF.m_Mxs1[ix], KF.m_Azs1[iz], &KF.m_Mzs1[iz], &M, &adcz);
-            if (ucr) {
+            //KF.m_Mzs2[iz]->m_Mcxz = H投影前pose_u * Huu^-1 * H投影后pose_u
+            //KF.m_Mzs2[iz]->m_Mczz = H投影后pose_u *Huu^-1 * H投影后pose_u |H投影后pose_u *Huu^-1 *-bu
+            //KF.m_Mzs1[iz]->m_adczA = H投影后pose_u *Huu^-1
+            //adcz = H投影后pose_u
+            FTR::Factor::Full::Marginalize(_mdds[id]/*Huu^-1*/, _KF.m_Mxs1[ix],/*m_mdx.m_adc保存H投影前pose_u * Huu^-1*/
+                    KF.m_Azs1[iz]/*m_adcz存储H的投影后pose x 逆深度部分*/, &KF.m_Mzs1[iz], &M, &adcz);
+            if (ucr) {//更新投影前posex投影后pose这部分要减去的这部分
               SMcxz += M.m_Mcxz;
             } else {
               Camera::Factor::Binary::CC::AmB(M.m_Mcxz, dMcb, dMcb);
               SMcxz += dMcb;
             }
-            if (ucz) {
+            if (ucz) {//更新投影后posex投影后pose以及-b投影后要减去的部分
               SMczz += M.m_Mczz;
             } else {
               Camera::Factor::Unitary::CC::AmB(M.m_Mczz, dMcu, dMcu);
@@ -948,11 +1151,12 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
             SNs1 += 2;
           }
 #endif
-        } else {
+        } else
+        {
 #ifdef CFG_DEBUG
           UT_ASSERT((_uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) == 0);
 #endif
-          if (!ucr) {
+          if (!ucr) {//否则就减去无效的因子
             M.m_Mcxz.GetMinus(dMcb);
             SMcxz += dMcb;
           }
@@ -977,6 +1181,8 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
 #endif
       }
     }
+
+
 #ifdef CFG_VERBOSE
     if (m_verbose >= 3) {
       SNs2 += Nz * 2;
@@ -986,31 +1192,40 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
       m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_SCHUR_COMPLEMENT;
     }
 #endif
-    const int Nk = KF.m_Zm.m_SMczms.Size();
-    for (int ik = 0; ik < Nk; ++ik) {
+
+//两帧共视地图点,地图点merge以后对于两帧的影响
+//KF.m_Zm.m_Mczms[i]存储地图点边缘化以后对这帧和它之前帧的共视的影响H_KFpose_u *Huu^-1*HKFpose_u.t
+    const int Nk = KF.m_Zm.m_SMczms.Size();//这个关键帧的所有观测到的关键帧的个数
+    for (int ik = 0; ik < Nk; ++ik)
+    {
       const int _iKF = KF.m_iKFsMatch[ik];
 #ifdef CFG_DEBUG
       UT_ASSERT(_iKF < iKF);
 #endif
-      const KeyFrame &_KF = m_KFs[_iKF];
-      Camera::Factor::Binary::CC &SMczm = KF.m_Zm.m_SMczms[ik];
+      const KeyFrame &_KF = m_KFs[_iKF];//共视的这个关键帧
+      Camera::Factor::Binary::CC &SMczm = KF.m_Zm.m_SMczms[ik];//两个共视帧之间的所有地图点造成的投影前posex投影后pose的影响 ∑H投影前pose_u * Huu^-1 * H投影后pose_u.t
 #ifdef CFG_VERBOSE
       ubyte &Sczm = Scbs[ik];
 #endif
-      const bool _ucz = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0, uczm = _ucz || ucz;
+      const bool _ucz = (m_ucs[_iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) != 0, uczm = _ucz || ucz;//这两帧中是否有需要更新pose的帧
       const int i1 = KF.m_Zm.m_ik2zm[ik], i2 = KF.m_Zm.m_ik2zm[ik + 1];
-      for (int i = i1; i < i2; ++i) {
+      for (int i = i1; i < i2; ++i)//遍历共视地图点
+      {
         const FTR::Measurement::Match &izm = KF.m_Zm.m_izms[i];
         const int iadcz = iz2adcz[izm.m_iz2];
-        if (iadcz == -1) {
+        if (iadcz == -1)//说明是有效的观测
+        {
           continue;
         }
         Camera::Factor::Binary::CC &Mczm = KF.m_Zm.m_Mczms[i];
-        if (iadcz >= 0) {
-          if (uczm || m_marksTmp1[izm.m_iz2]) {
-            FTR::Factor::Full::Marginalize(_KF.m_Mzs1[izm.m_iz1], m_adczsTmp[iadcz], Mczm);
+        if (iadcz >= 0)
+        {
+          if (uczm || m_marksTmp1[izm.m_iz2])//需要更新或者这个是有效的观测
+          {//Mczm = H_KFpose_u *Huu^-1*HKFpose_u.t (因为_KF肯定是在KF前面的,只构建上三角处的)
+            FTR::Factor::Full::Marginalize(_KF.m_Mzs1[izm.m_iz1]/*m_adczA = H_KFpose_u *Huu^-1*/, m_adczsTmp[iadcz]/*HKFpose_u*/, Mczm);
             SMczm += Mczm;
-          } else {
+          } else
+          {
             dMcb = Mczm;
             FTR::Factor::Full::Marginalize(_KF.m_Mzs1[izm.m_iz1], m_adczsTmp[iadcz], Mczm);
             Camera::Factor::Binary::CC::AmB(Mczm, dMcb, dMcb);
@@ -1020,8 +1235,10 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
           if (m_verbose >= 3)
             ++SNs1;
 #endif
-        } else {
-          if (!uczm) {
+        } else
+        {
+          if (!uczm)
+          {
             Mczm.GetMinus(dMcb);
             SMczm += dMcb;
           }
@@ -1030,35 +1247,44 @@ void GlobalBundleAdjustor::UpdateSchurComplement() {
 #endif
         }
 #ifdef CFG_VERBOSE
-        if (m_verbose >= 3) {
+        if (m_verbose >= 3)
+        {
           Sczm = 1;
         }
 #endif
       }
     }
 #ifdef CFG_VERBOSE
-    if (m_verbose >= 3) {
+    if (m_verbose >= 3)
+    {
       SNs2 += static_cast<int>(KF.m_Zm.m_izms.size());
-      for (int ik = 0; ik < Nk; ++ik) {
-        if (Scbs[ik]) {
+      for (int ik = 0; ik < Nk; ++ik)
+      {
+        if (Scbs[ik])
+        {
           ++SNS;
         }
       }
     }
 #endif
   }
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {//
     const int iX = iKF2X[iKF];
-    if (iX == -1) {
+    if (iX == -1)
+    {
       continue;
     }
-    ubyte *uds = m_uds.data() + m_iKF2d[iKF];
+    ubyte *uds = m_uds.data() + m_iKF2d[iKF];//对应的新地图点的逆深度
     const int *ix2d = iX2d.data() + iX;
     const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
-      if (ix2d[ix] >= 0) {
+    for (int ix = 0; ix < Nx; ++ix)
+    {
+      if (ix2d[ix] >= 0)//如果这个点这次有效,那么就将GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO设为0,否则为1,即上次没有有效信息
+      {
         uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO;
-      } else if (ix2d[ix] == -2) {
+      } else if (ix2d[ix] == -2)
+      {
         uds[ix] |= GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO;
       }
     }
@@ -1127,7 +1353,7 @@ bool GlobalBundleAdjustor::SolveSchurComplement() {
     CameraPrior::Motion::ES ESm2 = ComputeErrorStatisticPriorCameraMotion(m_xcsP.Data(), xms);
     const float F2 = ESd2.Total() + ESm2.Total();
     //UT_ASSERT(F2 <= F1);
-    UT::AssertReduction(F1, F2, 1, UT::String("[%d] %d", m_KFs.back().m_T.m_iFrm));
+    UT::AssertReduction(F1, F2, 1, UT::String("[%d] %d", m_KFs.back().m_Cam_pose.m_iFrm));
     //UT::Print("%e --> %e\n", F1, F2);
 #endif
   }
@@ -1135,7 +1361,7 @@ bool GlobalBundleAdjustor::SolveSchurComplement() {
 #if 0
   FILE *fp;
   std::string fileName;
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
 #ifdef CFG_INCREMENTAL_PCG_1
   fileName = "D:/tmp/pcg/count_gba.txt";
 #else
@@ -1175,49 +1401,53 @@ bool GlobalBundleAdjustor::SolveSchurComplement() {
   }
   return true;
 }
-
+//Hx = b ==》 舒尔补以后就变成了S*δxc = g ==》 A*x = b 用PCG迭代法求解
 bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
   Camera::Factor::Unitary::CC Acc;
-  const int pc = 6, pm = 9;
-  const int Nc = m_Cs.Size(), Nm = m_CsLM.Size(), Ncp = Nc * pc, Nmp = Nm * pm, N = Ncp + Nmp;
+  const int pc = 6/*pose部分的size*/, pm/*motion部分的size*/ = 9;
+  const int Nc = m_Cs.Size(), Nm = m_CsLM.Size()/*c和m应该数量相等的吧,有一帧的c就会有两帧之间的motion部分*/, Ncp = Nc * pc/*相机部分的长度*/, Nmp = Nm * pm/*motion部分的长度*/, N = Ncp + Nmp/*S的长度*/;
   m_Acus.Resize(Nc);
   m_bs.Resize(N);
-  const float ar = UT::Inverse(BA_VARIANCE_REGULARIZATION_ROTATION, BA_WEIGHT_FEATURE);
-  const float ap = UT::Inverse(BA_VARIANCE_REGULARIZATION_POSITION, BA_WEIGHT_FEATURE);
-  const float av = UT::Inverse(BA_VARIANCE_REGULARIZATION_VELOCITY, BA_WEIGHT_FEATURE);
-  const float aba = UT::Inverse(BA_VARIANCE_REGULARIZATION_BIAS_ACCELERATION, BA_WEIGHT_FEATURE);
-  const float abw = UT::Inverse(BA_VARIANCE_REGULARIZATION_BIAS_GYROSCOPE, BA_WEIGHT_FEATURE);
+  const float ar = UT::Inverse(BA_VARIANCE_REGULARIZATION_ROTATION, BA_WEIGHT_FEATURE);//0
+  const float ap = UT::Inverse(BA_VARIANCE_REGULARIZATION_POSITION, BA_WEIGHT_FEATURE);//0
+  const float av = UT::Inverse(BA_VARIANCE_REGULARIZATION_VELOCITY, BA_WEIGHT_FEATURE);//0
+  const float aba = UT::Inverse(BA_VARIANCE_REGULARIZATION_BIAS_ACCELERATION, BA_WEIGHT_FEATURE);//0
+  const float abw = UT::Inverse(BA_VARIANCE_REGULARIZATION_BIAS_GYROSCOPE, BA_WEIGHT_FEATURE);//0
   float *b = m_bs.Data();
+  ////按帧的先后顺序进行遍历,构建S和-g
+    //    //S的对角线的pose x pose部分 存储在m_Acus[ic]里,S的对角线的motionxmotion存在m_Amus[ic]里
+    //    //S的非对角线的pose x 别的共视帧的pose 存在Acbs里,利用m_ic2b进行索引
+    //    // -g存在m_ic2b里
   for (int ic = 0; ic < Nc; ++ic, b += pc) {
-    Camera::Factor::Unitary::CC::AmB(m_SAcus[ic], m_SMcus[ic], Acc);
+    Camera::Factor::Unitary::CC::AmB(m_SAcus[ic], m_SMcus[ic], Acc);//对角线Sij = U − W*V*W.T
     Acc.m_A.IncreaseDiagonal(ap, ar);
-    Acc.m_A.GetAlignedMatrix6x6f(m_Acus[ic]);
-    Acc.m_b.Get(b);
+    Acc.m_A.GetAlignedMatrix6x6f(m_Acus[ic]);//p,q部分将Acc.m_A上三角 存到m_Acus[ic]里,然后扩展成对称矩阵
+    Acc.m_b.Get(b);//-g中pq部分
   }
-  m_AmusLM.Resize(Nm);
-  for (int im = 0; im < Nm; ++im, b += pm) {
-    const Camera::Factor::Unitary::MM &Amm = m_SAcmsLM[im].m_Au.m_Amm;
-    m_AmusLM[im].Set(Amm.m_A);
+  m_AmusLM.Resize(Nm);//H的mm部分,-b的m部分。舒尔补对M的地方没有影响
+  for (int im = 0; im < Nm; ++im, b += pm) {//遍历所有的运动,设置舒尔补以后的S中属于运动对角部分的元素，以及g中属于运动的部分
+    const Camera::Factor::Unitary::MM &Amm = m_SAcmsLM[im].m_Au.m_Amm;//对角线部分mm的部分
+    m_AmusLM[im].Set(Amm.m_A);//S中的v,ba,bg部分设置
     m_AmusLM[im].IncreaseDiagonal(av, aba, abw);
-    Amm.m_b.Get(b);
+    Amm.m_b.Get(b);//设置-g中v,ba,bg部分
   }
-  const int NKp = CountSchurComplementsOffDiagonal();
-  m_Acbs.Resize(NKp);
+  const int NKp = CountSchurComplementsOffDiagonal();//返回的是所有的共视帧个数,就是第一个关键帧的共视+ ..... +当前关键帧的共视
+  m_Acbs.Resize(NKp);//扩容成所有共视的size
   m_Acbs.MakeZero();
   for (int ic = 0, im = Nm - Nc, iKp = 0; ic < Nc; ++ic, ++im) {
-    LA::AlignedMatrix6x6f *Acbs = m_Acbs.Data() + m_iKF2cb[ic];
+    LA::AlignedMatrix6x6f *Acbs = m_Acbs.Data() + m_iKF2cb[ic];//当前这个关键帧的共视起点
     const KeyFrame &KF = m_KFs[ic];
-    const int NZ = static_cast<int>(KF.m_Zs.size());
+    const int NZ = static_cast<int>(KF.m_Zs.size());//添加所有的视觉约束给的H投影前(观测关键帧)pose x 投影后pose的影响
     for (int iZ = 0; iZ < NZ; ++iZ) {
-      Acbs[KF.m_Zs[iZ].m_ik] = KF.m_SAcxzs[iZ];
+      Acbs[KF.m_Zs[iZ].m_ik] = KF.m_SAcxzs[iZ];//维护所有观测投影帧的投影前(观测关键帧)pose x 投影后pose的H
     }
-    const int Np = static_cast<int>(KF.m_iKFsPrior.size());
+    const int Np = static_cast<int>(KF.m_iKFsPrior.size());//再添加这个关键帧和之前关键之间的位姿约束
     for (int ip = 0; ip < Np; ++ip) {
       Acbs[KF.m_iAp2kp[ip]] += KF.m_SAps[ip];
     }
-    const int Nk = KF.m_Zm.m_SMczms.Size();
+    const int Nk = KF.m_Zm.m_SMczms.Size();//这个关键帧共视的数量
     for (int ik = 0; ik < Nk; ++ik) {
-      Acbs[ik] -= KF.m_Zm.m_SMczms[ik];
+      Acbs[ik] -= KF.m_Zm.m_SMczms[ik];//地图点造成的投影前posex投影后pose的影响 ∑H投影前pose_u * Huu^-1 * H投影后pose_u.t
     }
     //if (im >= 1 && !(m_ucmsLM[im] & GBA_FLAG_CAMERA_MOTION_INVALID) &&
     //               !(m_ucmsLM[im - 1] & GBA_FLAG_CAMERA_MOTION_INVALID)) {
@@ -1228,14 +1458,14 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
       UT_ASSERT(!(m_ucmsLM[im] & GBA_FLAG_CAMERA_MOTION_INVALID) &&
                 !(m_ucmsLM[im - 1] & GBA_FLAG_CAMERA_MOTION_INVALID));
 #endif
-      Acbs[Nk - 1] += m_SAcmsLM[im].m_Ab.m_Acc;
+      Acbs[Nk - 1] += m_SAcmsLM[im].m_Ab.m_Acc;//imu约束带来的前一帧的pose x 后一帧的pose
     }
   }
   m_AcbTs.Resize(NKp);
   for (int ikp = 0; ikp < NKp; ++ikp) {
-    m_Acbs[ikp].GetTranspose(m_AcbTs[ikp]);
+    m_Acbs[ikp].GetTranspose(m_AcbTs[ikp]);//m_AcbTs[] = m_Acbs[].t
   }
-  PrepareConditioner();
+  PrepareConditioner();//利用S的对角线构造预优矩阵M,并且直接求逆(取倒数),算出M^-1
 
   m_xs.Resize(N);
   m_rs.Resize(N);
@@ -1301,25 +1531,25 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
 
   bool scc = true;
   PCG_TYPE Se2, Se2Pre, e2Max, alpha, beta, F, FMin;
-  PCG_TYPE Se2Min, e2MaxMin;
-  m_rs = m_bs;
+  PCG_TYPE Se2Min/*最小残差*/, e2MaxMin;
+  m_rs = m_bs;//rs这里先存一下b的值
   //m_rs.Swap(m_bs);
 #ifdef CFG_INCREMENTAL_PCG
   m_xsGN.Resize(0);
-  m_xsGN.Push((float *) m_xcs.Data(), Ncp);
-  m_xsGN.Push((float *) m_xmsLM.Data(), Nmp);
-  m_xsGN.MakeMinus();
+  m_xsGN.Push((float *) m_xcs.Data(), Ncp);//pose部分数据
+  m_xsGN.Push((float *) m_xmsLM.Data(), Nmp);//motion部分数据
+  m_xsGN.MakeMinus();//这里求的是A*-xcm = b m_xcs,m_xmsLM,所以这里要负,下面PCG的部分我就把-xcm称为x
   //UT::DebugStart();
   //m_xsGN.MakeZero();
   //UT::DebugStop();
-  m_xs = m_xsGN;
-  ApplyA(m_xs, &m_drs);
-  m_rs -= m_drs;
+  m_xs = m_xsGN;//之前的优化变量作为初值x0
+  ApplyA(m_xs, &m_drs);//计算 m_drs  = A*x0 S
+  m_rs -= m_drs;// r0 = b - A*X0
 #else
   m_xsGN.MakeZero();
   m_xs.MakeZero();
 #endif
-  ApplyM(m_rs, &m_ps);
+  ApplyM(m_rs/*残差*/, &m_ps/*p0*/);//z0 = M.inv * r0,初始的梯度方向z0同时第1步时梯度方向就是下降方向
 #if 0
 //#if 1
   UT::DebugStart();
@@ -1337,19 +1567,19 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
   const PCG_TYPE a1 = 0.9;
   const PCG_TYPE a2 = 1.1;
   const PCG_TYPE da = 1.0e-3;
-  for (PCG_TYPE a = a0; a < a2; a = a == a0 ? a1 : a + da) {
-    ps.GetScaled(a, xs);
+  for (PCG_TYPE acc = a0; acc < a2; acc = acc == a0 ? a1 : acc + da) {
+    ps.GetScaled(acc, xs);
     xs += m_xs;
     ApplyA(xs, &m_drs);
     rs = m_bs;
     rs -= m_drs;
     const PCG_TYPE r = rs.SquaredLength();
     const PCG_TYPE F = xs.Dot(m_drs) * 0.5 - xs.Dot(m_bs);
-    UT::Print("a = %f, r = %e, F = %e\n", a, r - r0, F - F0);
+    UT::Print("acc = %f, r = %e, F = %e\n", acc, r - r0, F - F0);
   }
   UT::DebugStop();
 #endif
-  ConvertCameraMotionResiduals(m_rs, m_ps, &Se2, &e2Max);
+  ConvertCameraMotionResiduals(m_rs/*残差*/, m_ps/*p0(z0)*/, &Se2, &e2Max);//计算Se2 = r0.t * z0
 #if 0
   const PCG_TYPE s = 1;
   //const PCG_TYPE s = 1 / Se2;
@@ -1373,8 +1603,8 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
     UT::DebugStart();
   }
 #endif
-  ApplyA(m_ps, &m_drs);
-  alpha = Se2 / m_ps.Dot(m_drs);
+  ApplyA(m_ps, &m_drs);//m_drs = A*p0
+  alpha = Se2 / m_ps.Dot(m_drs);//r0z0 / p0.dot(A*p0) 这个是第1步的步长
 //#ifdef CFG_DEBUG
 #if 0
   //const std::string dir = m_dir + "pcg/";
@@ -1416,7 +1646,7 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
       F = FMin = m_dxs.Dot(m_xs) * -0.5f;
       UT::PrintSeparator();
       UT::Print("*%2d: [GlobalBundleAdjustor::SolveSchurComplement]\n", m_iIter);
-      UT::Print("  *%2d: F = %e, rTz = %e, a = %f\n", 0, F, Se2/* / s*/, alpha/* * s*/);
+      UT::Print("  *%2d: F = %e, rTz = %e, acc = %f\n", 0, F, Se2/* / s*/, alpha/* * s*/);
 #ifdef GBA_DEBUG_PCG_SAVE_RESIDUAL
       const Residual R = ComputeResidual(m_xs, true);
       LA::AlignedVectorXf::ApB(m_xsGT, m_xs, m_dxs);
@@ -1431,11 +1661,11 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
 #endif
     }
 #endif
-    m_drs *= alpha;
-    m_rs -= m_drs;
+    m_drs *= alpha;//alpha0 * A*pk-1
+    m_rs -= m_drs;//r1 = r0 - alpha0 * A*p0 //更新第二步的残差
 #ifdef CFG_INCREMENTAL_PCG
-    m_ps.GetScaled(alpha, m_dxs);
-    m_xs += m_dxs;
+    m_ps.GetScaled(alpha, m_dxs);//m_dxs = p0 * alpha0
+    m_xs += m_dxs;//x1 = x0 + p0 * alpha0  //更新第二步的x
 #if defined GBA_DEBUG_PCG_SAVE_RESULT || defined GBA_DEBUG_PCG_LOAD_RESULT
     const std::string xFileName = "D:/tmp/pcg/x0000.txt";
 #endif
@@ -1456,24 +1686,24 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
     const PCG_TYPE Se2ConvMin = Se2 * BA_PCG_MIN_CONVERGE_RESIDUAL_RATIO;
     const PCG_TYPE Se2ConvMax = Se2 * BA_PCG_MAX_CONVERGE_RESIDUAL_RATIO;
 #endif
-    const int nIters = std::min(N, BA_PCG_MAX_ITERATIONS);
+    const int nIters = std::min(N, BA_PCG_MAX_ITERATIONS);//最大迭代次数
     for (m_iIterPCG = 0; m_iIterPCG < nIters; ++m_iIterPCG) {
-      ApplyM(m_rs, &m_zs);
+      ApplyM(m_rs, &m_zs);//zk = M^-1*rk 更新梯度方向
       Se2Pre = Se2;
-      ConvertCameraMotionResiduals(m_rs, m_zs, &Se2, &e2Max);
+      ConvertCameraMotionResiduals(m_rs, m_zs, &Se2, &e2Max);//计算Se2=e2Max = rk.t * zk
 #ifdef CFG_DEBUG
       UT_ASSERT(Se2 >= 0 && e2Max >= 0);
 #endif
       //////////////////////////////////////////////////////////////////////////
-      if (Se2 < Se2Min) {
+      if (Se2 < Se2Min) {//如果小于最小残差^2,就更新一下
         Se2Min = Se2;
-        e2MaxMin = e2Max;
-        m_xsGN = m_xs;
+        e2MaxMin = e2Max;//e2Max 好像是等于Se2的
+        m_xsGN = m_xs;//更新x
       }
       //////////////////////////////////////////////////////////////////////////
 //#if 0
 #if 1
-      beta = Se2 / Se2Pre;
+      beta = Se2 / Se2Pre;//用来算下一次下降方向的比例系数
 #else
       beta = -m_zs.Dot(m_drs) / Se2Pre;
 #endif
@@ -1482,7 +1712,7 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
         m_dxs = m_bs;
         m_dxs += m_rs;
         F = m_dxs.Dot(m_xs) * -0.5f;
-        UT::Print("  *%2d: F = %e, rTz = %e, a = %f, b = %f", m_iIterPCG + 1, F, Se2/* / s*/, alpha/* * s*/, beta);
+        UT::Print("  *%2d: F = %e, rTz = %e, acc = %f, b = %f", m_iIterPCG + 1, F, Se2/* / s*/, alpha/* * s*/, beta);
         if (F < FMin) {
           UT::Print("*");
           FMin = F;
@@ -1519,11 +1749,11 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
       m_drs.MakeMinus();
       m_drs -= m_rs;
 #endif
-      const int i = (Se2Min <= Se2ConvMin && m_iIterPCG >= BA_PCG_MIN_ITERATIONS) ? 0 : 1;
-      if (Se2 == 0.0f || e2MaxMin < e2MaxConv[i]) {
+      const int i = (Se2Min <= Se2ConvMin && m_iIterPCG >= BA_PCG_MIN_ITERATIONS) ? 0 : 1;//如果残差小于阈值或者迭代次数超过最小迭代次数,那么i就设成1
+      if (Se2 == 0.0f || e2MaxMin < e2MaxConv[i]) {//残差^2==0或者小于残差^2可接受的最大残差^2就认为迭代收敛
         scc = true;
         break;
-      } else if (Se2 > Se2ConvMax) {
+      } else if (Se2 > Se2ConvMax) {//如果超过最大最大残差,迭代失败
         scc = false;
         break;
       }
@@ -1536,22 +1766,22 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
       //  break;
       //}
       //////////////////////////////////////////////////////////////////////////
-      m_ps *= beta;
-      m_ps += m_zs;
-      ApplyA(m_ps, &m_drs);
-      alpha = Se2 / m_ps.Dot(m_drs);
+      m_ps *= beta;// pk-1*beta
+      m_ps += m_zs;// pk = zk + pk-1*beta //更新当前步骤下降方向
+      ApplyA(m_ps, &m_drs);//m_drs = A*pk
+      alpha = Se2 / m_ps.Dot(m_drs);//alphak = (rk.t * zk)/(pk.t * A*pk) 更新当前步骤
 #ifdef _MSC_VER
       if (!_finite(alpha)) {
 #else
-      if (!std::isfinite(alpha)) {
+      if (!std::isfinite(alpha)) {//步长出了问题也退出
 #endif  // _MSC_VER
         scc = false;
         break;
       }
-      m_drs *= alpha;
-      m_rs -= m_drs;
-      m_ps.GetScaled(alpha, m_dxs);
-      m_xs += m_dxs;
+      m_drs *= alpha;//m_drs = alphak * A*pk
+      m_rs -= m_drs;//rk+1 = rk - alphak * A*pk //更新下一步的残差
+      m_ps.GetScaled(alpha, m_dxs);//m_dxs = pk * alphak
+      m_xs += m_dxs;//xk+1 = xk + pk * alphak  //更新下一步的x
 //#ifdef CFG_DEBUG
 #if 0
       if (m_iIter == 3) {
@@ -1595,9 +1825,9 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
   //////////////////////////////////////////////////////////////////////////
   //m_xsGN = m_xs;
   //////////////////////////////////////////////////////////////////////////
-  m_xsGN.MakeMinus();
-  ConvertCameraUpdates(m_xsGN.Data(), &m_xp2s, &m_xr2s);
-  ConvertMotionUpdates(m_xsGN.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);
+  m_xsGN.MakeMinus();//因为前面求得都是A*x=b的x但是实际上对应的是-x,所以这里变回实际增量
+  ConvertCameraUpdates(m_xsGN.Data(), &m_xp2s/*位置部分优化变量增量的^2*/, &m_xr2s/*朝向部分优化变量增量的^2*/);//位置和朝向部分优化变量增量的^2
+  ConvertMotionUpdates(m_xsGN.Data() + Ncp, &m_xv2s, &m_xba2s, &m_xbw2s);//同上
 //#ifdef CFG_DEBUG
 #if 0
 #ifdef WIN32
@@ -1703,7 +1933,7 @@ void GlobalBundleAdjustor::PrepareConditioner() {
       if (m_iIter == 3 && ic == 136) {
         UT::DebugStart();
         LA::AlignedMatrix3x3f A, B, M1, M2, I1, I2;
-        LA::SymmetricMatrix3x3d C, M3;
+        LA::SymmetricMatrix3x3d Cam_state, M3;
         m_SAcus[ic].m_A.Get00(&A);
         //const float s = 1.0e-7f;
         const float s = 1.0e-5f;
@@ -1714,8 +1944,8 @@ void GlobalBundleAdjustor::PrepareConditioner() {
         B.GetInverseLDL(M2);
         M1 *= s;
         M2 *= s;
-        C.Set(B);
-        C.GetInverse(M3);
+        Cam_state.Set(B);
+        Cam_state.GetInverse(M3);
         M3 *= s;
         LA::AlignedMatrix3x3f::AB(A, M1, I1);
         LA::AlignedMatrix3x3f::AB(A, M2, I2);
@@ -1729,7 +1959,7 @@ void GlobalBundleAdjustor::PrepareConditioner() {
         UT::DebugStop();
       }
 #endif
-      m_Mcs[ic].Set(m_SAcus[ic], BA_PCG_CONDITIONER_MAX, BA_PCG_CONDITIONER_EPSILON, epsc);
+      m_Mcs[ic].Set(m_SAcus[ic]/*关键帧pose自己和自己的H以及自己对应的-b*/, BA_PCG_CONDITIONER_MAX, BA_PCG_CONDITIONER_EPSILON, epsc);
       //m_Mcs[ic].Set(m_Acus[ic], BA_PCG_CONDITIONER_MAX, BA_PCG_CONDITIONER_EPSILON, epsc);
     }
     m_MmsLM.Resize(Nm);
@@ -1762,8 +1992,8 @@ void GlobalBundleAdjustor::PrepareConditioner() {
   m_MmcLM.Resize(Nm, Nb - 1); m_MmcTLM.Resize(Nm, Nb - 1);
   m_MmmLM.Resize(Nm, 2);      m_MmmTLM.Resize(Nm, 2);
   m_Mcc.MakeZero();
-  for (int ic = 0; ic < Nc; ++ic) {
-    m_Mcc[ic][0] = m_Acus[ic];
+  for (int ic = 0; ic < Nc; ++ic) {//相机部分
+    m_Mcc[ic][0] = m_Acus[ic];//舒尔补以后S矩阵pq对应的对角线部分
     //sc.Set(scs[ic]);
     //m_Acus[ic].GetScaledColumn(sc, m_Mcc[ic][0]);
     //m_Mcc[ic][0].ScaleRow(scs[ic]);
@@ -1780,9 +2010,9 @@ void GlobalBundleAdjustor::PrepareConditioner() {
       //m_Mcc[_ic][ib].ScaleRow(scs[_ic]);
     }
   }
-  for (int ic = Nc - Nm, im = 0; ic < Nc; ++ic, ++im) {
-    m_McmLM[im][0] = m_SAcmsLM[im].m_Au.m_Acm;
-    m_MmmLM[im][0] = m_AmusLM[im];
+  for (int ic = Nc - Nm, im = 0; ic < Nc; ++ic, ++im) {//遍历非对角线部分
+    m_McmLM[im][0] = m_SAcmsLM[im].m_Au.m_Acm;//舒尔补以后S矩阵pose和motion对应的非对角部分
+    m_MmmLM[im][0] = m_AmusLM[im];//舒尔补以后S矩阵motion对应的对角线部分
     //if (im == 0) {
     //  sm.Set(sms[im]);
     //}
@@ -1876,12 +2106,12 @@ void GlobalBundleAdjustor::PrepareConditioner() {
   AmcsTLM.Bind(AcmsTLM.BindNext(), Nb);
   AmmsTLM.Bind(AmcsTLM.BindNext(), Nb);
   for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {
-    LA::AlignedMatrix6x6f *Mccs = m_Mcc[ic], *MccsT = m_MccT[ic];
-    LA::AlignedMatrix6x9f *McmsLM = im >= 0 ? m_McmLM[im] : NULL;
+    LA::AlignedMatrix6x6f *Mccs/*对角线pose部分*/ = m_Mcc[ic], *MccsT = m_MccT[ic];
+    LA::AlignedMatrix6x9f *McmsLM/*非对角线pose，motion部分*/ = im >= 0 ? m_McmLM[im] : NULL;
     LA::AlignedMatrix9x6f *McmsTLM = im >= 0 ? m_McmTLM[im] : NULL;
     LA::AlignedMatrix9x6f *MmcsLM = im >= 0 ? m_MmcLM[im] : NULL;
     LA::AlignedMatrix6x9f *MmcsTLM = im >= 0 ? m_MmcTLM[im] : NULL;
-    LA::AlignedMatrix9x9f *MmmsLM = im >= 0 ? m_MmmLM[im] : NULL;
+    LA::AlignedMatrix9x9f *MmmsLM/*对角线motion部分*/ = im >= 0 ? m_MmmLM[im] : NULL;
     LA::AlignedMatrix9x9f *MmmsTLM = im >= 0 ? m_MmmTLM[im] : NULL;
     const int Nbcc = ic + Nb > Nc ? Nc - ic : Nb;
     const int Nbcm = im >= 0 ? (ic + 1 == Nc ? 1 : 2) : 0;
@@ -1912,7 +2142,9 @@ void GlobalBundleAdjustor::PrepareConditioner() {
 #endif
 #endif
     LA::AlignedMatrix6x6f &Mcc = Mccs[0];
-    if (Mcc.InverseLDL(epsc)) {
+
+
+    if (Mcc.InverseLDL(epsc)) {//Mcc,ldl求逆
       MccsT[0] = Mcc;
       Mcc.MakeMinus();
       for (int ib = 1; ib < Nbcc; ++ib) {
@@ -1972,7 +2204,7 @@ void GlobalBundleAdjustor::PrepareConditioner() {
           LA::AlignedMatrix9x9f::AddABTTo(McmT, AcmsTLM[1], _MmmsLM[1]);
         }
       }
-    } else {
+    } else {//如果不能分解,就设置为0
       for (int ib = 0; ib < Nbcc; ++ib) {
         Mccs[ib].MakeZero();
         MccsT[ib].MakeZero();
@@ -2194,10 +2426,10 @@ void GlobalBundleAdjustor::PrepareConditioner() {
   UT::Print("%e vs %e\n", e_e1.norm(), e_e2.norm());
 #endif
 }
-
-void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,
+//z0 = M.inv * r0 m_Mcs,m_Mms是M^-1，即S的对角线的逆
+void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,/*残差*/
                                   LA::AlignedVectorX<PCG_TYPE> *Mxs) {
-  const int Nb = GBA_PCG_CONDITIONER_BAND, Nc = m_Cs.Size(), Nm = m_CsLM.Size();
+  const int Nb = GBA_PCG_CONDITIONER_BAND, Nc = m_Cs.Size(), Nm = m_CsLM.Size();//pose和motion的块数量,这里应该是相等的吧
   if (Nb <= 1) {
 #ifdef CFG_PCG_FULL_BLOCK
     LA::ProductVector6f xc;
@@ -2213,7 +2445,7 @@ void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,
       xc.Set(xcs[ic]);
       m_Mcs[ic].Apply(xc, (PCG_TYPE *) &Mxcs[ic]);
 #else
-      xcs[ic].Get(xp, xr);
+      xcs[ic].Get(xp, xr);//取出位置和朝向的
       m_Mcs[ic].Apply(xp, xr, (PCG_TYPE *) &Mxcs[ic]);
 #endif
     }
@@ -2232,12 +2464,12 @@ void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,
     return;
   }
   
-  LA::ProductVector6f bc;
-  LA::AlignedVector9f bm;
-  Mxs->Set(xs);
+  LA::ProductVector6f bc;//pose部分的r
+  LA::AlignedVector9f bm;//motion部分的r
+  Mxs->Set(xs);//Mxs先保存一下残差
   //xs.GetScaled(m_ss, *Mxs);
-  LA::Vector6f *bcs = (LA::Vector6f *) Mxs->Data();
-  LA::Vector9f *bmsLM = (LA::Vector9f *) (bcs + Nc);
+  LA::Vector6f *bcs = (LA::Vector6f *) Mxs->Data();//相机pose部分的r
+  LA::Vector9f *bmsLM = (LA::Vector9f *) (bcs + Nc);//相机motion部分的r
 #ifdef GBA_DEBUG_EIGEN_PCG
   const int pc = 6, pm = 9;
   const int pcm = pc + pm;
@@ -2254,32 +2486,32 @@ void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,
   //const EigenVectorXd e_z = EigenVectorXd(g_SI * g_z1);
   const EigenVectorXd &e_z = g_z1;
 #endif
-  for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {
+  for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {//遍历下相机
     const int Nbcc = ic + Nb > Nc ? Nc - ic : Nb;
     const int Nbcm = im >= 0 ? (ic + 1 == Nc ? 1 : 2) : 0;
     const int Nbmc = im >= 0 ? Nbcc - 1 : 0;
     const int Nbmm = Nbcm;
     
     bc.Set(bcs[ic]);
-    const LA::AlignedMatrix6x6f *MccsT = m_MccT[ic];
+    const LA::AlignedMatrix6x6f *MccsT = m_MccT[ic];//*舒尔补以后S矩阵pq对应的对角线部分的转置
     for (int ib = 1; ib < Nbcc; ++ib) {
       LA::AlignedMatrix6x6f::AddAbTo<float>(MccsT[ib], bc, bcs[ic + ib]);
     }
     if (im >= 0) {
-      const LA::AlignedMatrix9x6f *McmsTLM = m_McmTLM[im];
+      const LA::AlignedMatrix9x6f *McmsTLM = m_McmTLM[im];/*舒尔补以后S矩阵pose和motion对应的非对角部分的转置*/
       for (int ib = 0; ib < Nbcm; ++ib) {
-        LA::AlignedMatrix9x6f::AddAbTo<float>(McmsTLM[ib], bc, bmsLM[im + ib]);
+        LA::AlignedMatrix9x6f::AddAbTo<float>(McmsTLM[ib], bc, bmsLM[im + ib]);//对应的motion部分的b
       }
     }
     LA::AlignedMatrix6x6f::Ab<float>(MccsT[0], bc, bcs[ic]);
 
     if (im >= 0) {
-      bm.Set(bmsLM[im]);
+      bm.Set(bmsLM[im]);//bm = bmsLM[im],im是哈
       const LA::AlignedMatrix6x9f *MmcsTLM = m_MmcTLM[im];
       for (int ib = 0; ib < Nbmc; ++ib) {
         LA::AlignedMatrix6x9f::AddAbTo<float>(MmcsTLM[ib], bm, bcs[im + ib + 1]);
       }
-      const LA::AlignedMatrix9x9f *MmmsTLM = m_MmmTLM[im];
+      const LA::AlignedMatrix9x9f *MmmsTLM = m_MmmTLM[im];//motion部分的对角的.t
       if (Nbmm == 2) {
         LA::AlignedMatrix9x9f::AddAbTo<float>(MmmsTLM[1], bm, bmsLM[im + 1]);
       }
@@ -2376,41 +2608,44 @@ void GlobalBundleAdjustor::ApplyM(const LA::AlignedVectorX<PCG_TYPE> &xs,
   }
   //Mxs->Scale(m_ss);
 }
-
-void GlobalBundleAdjustor::ApplyA(const LA::AlignedVectorX<PCG_TYPE> &xs,
+//计算 m_drs  = A*x0 A是舒尔补以后的S
+//计算顺序：对角线App部分的*x0,非对角线共视帧之间App部分*x0,ApplyAcm算的就是前后motion约束带来的A里的部分*x0
+// （不用计算App了是因为非对角线共视帧之间App部分已经算过了）
+void GlobalBundleAdjustor::ApplyA(const LA::AlignedVectorX<PCG_TYPE> &xs,/*优化变量 pose+motion*/
                                   LA::AlignedVectorX<PCG_TYPE> *Axs) {
-  const LA::Vector6<PCG_TYPE> *xcs = (LA::Vector6<PCG_TYPE> *) xs.Data();
-  ConvertCameraUpdates(xcs, &m_xcsP);
-  Axs->Resize(xs.Size());
-  LA::Vector6<PCG_TYPE> *Axcs = (LA::Vector6<PCG_TYPE> *) Axs->Data();
-  const int Nc = int(m_KFs.size());
+  const LA::Vector6<PCG_TYPE> *xcs = (LA::Vector6<PCG_TYPE> *) xs.Data();//pose部分的增量
+  ConvertCameraUpdates(xcs, &m_xcsP);//m_xcsP保存pose的增量
+  Axs->Resize(xs.Size());//campose_num * 6 + motion_num * 9
+  LA::Vector6<PCG_TYPE> *Axcs = (LA::Vector6<PCG_TYPE> *) Axs->Data();//就是Ax的结果
+  const int Nc = int(m_KFs.size());//关键帧数量
+  //对角线部分的A*x0
   for (int ic = 0; ic < Nc; ++ic) {
-    LA::AlignedMatrix6x6f::Ab(m_Acus[ic], m_xcsP[ic], (PCG_TYPE *) &Axcs[ic]);
+    LA::AlignedMatrix6x6f::Ab(m_Acus[ic]/*舒尔补以后每帧自己和自己pose的对角线部分*/, m_xcsP[ic], (PCG_TYPE *) &Axcs[ic]);//Axcs[ic] = S*x
   }
-  for (int ic = 0; ic < Nc; ++ic) {
-    const int icb = m_iKF2cb[ic];
-    const LA::AlignedMatrix6x6f *Acbs = m_Acbs.Data() + icb;
-    const LA::AlignedMatrix6x6f *AcbTs = m_AcbTs.Data() + icb;
-    const LA::ProductVector6f &xc = m_xcsP[ic];
+  for (int ic = 0; ic < Nc; ++ic) {//遍历所有的关键帧
+    const int icb = m_iKF2cb[ic];//这个
+    const LA::AlignedMatrix6x6f *Acbs = m_Acbs.Data() + icb;//右上非对角线的posexpose(即不同帧因为共视和motion导致有影响的地方)
+    const LA::AlignedMatrix6x6f *AcbTs = m_AcbTs.Data() + icb;//右下非对角线的posexpose(即不同帧因为共视和motion导致有影响的地方)
+    const LA::ProductVector6f &xc = m_xcsP[ic];//当前帧pose
     PCG_TYPE *Axc = Axcs[ic];
-    const KeyFrame &KF = m_KFs[ic];
-    const int Nkp = static_cast<int>(KF.m_ikp2KF.size());
-    for (int ikp = 0; ikp < Nkp; ++ikp) {
-      const int _ic = KF.m_ikp2KF[ikp];
-      LA::AlignedMatrix6x6f::AddAbTo<PCG_TYPE>(Acbs[ikp], xc, (PCG_TYPE *) &Axcs[_ic]);
-      LA::AlignedMatrix6x6f::AddAbTo<PCG_TYPE>(AcbTs[ikp], m_xcsP[_ic], Axc);
+    const KeyFrame &KF = m_KFs[ic];//当前遍历的关键帧
+    const int Nkp = static_cast<int>(KF.m_ikp2KF.size());//共视的关键帧数量
+    for (int ikp = 0; ikp < Nkp; ++ikp) {//遍历所有共视的关键帧
+      const int _ic = KF.m_ikp2KF[ikp];//这个关键帧的id
+      LA::AlignedMatrix6x6f::AddAbTo<PCG_TYPE>(Acbs[ikp], xc, (PCG_TYPE *) &Axcs[_ic]);//A_icic*pic = Axcs[_ic] 坐下的的这个矩阵块*xic
+      LA::AlignedMatrix6x6f::AddAbTo<PCG_TYPE>(AcbTs[ikp], m_xcsP[_ic], Axc);//Aic_ic*p_ic = Axcs[ic] 右上的这个矩阵块*x_ic
     }
   }
   //ConvertCameraUpdates(m_Axcs, Axcs);
-  const int Nm = m_CsLM.Size();
+  const int Nm = m_CsLM.Size();//Amm部分和cm部分 *X的计算
   const int ic0 = Nc - Nm;
-  ApplyAcm(m_xcsP.Data() + ic0, (LA::Vector9<PCG_TYPE> *) (xcs + Nc), Axcs + ic0,
-           (LA::Vector9<PCG_TYPE> *) (Axcs + Nc), false,
+  ApplyAcm(m_xcsP.Data() + ic0/*Xpose*/, (LA::Vector9<PCG_TYPE> *) (xcs + Nc)/*Xmotion*/, Axcs + ic0/*A*X pose*/,
+           (LA::Vector9<PCG_TYPE> *) (Axcs + Nc)/*A*X motion的部分*/, false,/*需不需要算pose部分的*/
            m_AmusLM.Size() == Nm ? m_AmusLM.Data() : NULL);
 }
 
-void GlobalBundleAdjustor::ApplyAcm(const LA::ProductVector6f *xcs, const LA::Vector9f *xms,
-                                    LA::Vector6f *Axcs, LA::Vector9f *Axms, const bool Acc,
+void GlobalBundleAdjustor::ApplyAcm(const LA::ProductVector6f *xcs/*Xpose*/, const LA::Vector9f *xms/*Xmotion*/,
+                                    LA::Vector6f *Axcs/*A*X pose的部分*/, LA::Vector9f *Axms/*A*X motion的部分*/, const bool Acc,
                                     const LA::AlignedMatrix9x9f *Amus) {
   LA::AlignedMatrix6x6f A66;
   LA::AlignedMatrix6x9f A69;
@@ -2423,43 +2658,43 @@ void GlobalBundleAdjustor::ApplyAcm(const LA::ProductVector6f *xcs, const LA::Ve
   LA::AlignedVector3f v3;
 #endif
   const int Nm = m_CsLM.Size();
-  for (int im = 0, r = 0; im < Nm; ++im, r = 1 - r) {
-    const LA::ProductVector6f &xc = xcs[im];
-    LA::AlignedVector9f &xm = v9[r];
-    xm.Set(xms[im]);
-    float *Axc = Axcs[im], *Axm = Axms[im];
-    const Camera::Factor &SAcm = m_SAcmsLM[im];
+  for (int im = 0, r = 0; im < Nm; ++im, r = 1 - r) {//遍历所有关键帧
+    const LA::ProductVector6f &xc = xcs[im];//这帧的pose
+    LA::AlignedVector9f &xm = v9[r];//这帧对应的motion
+    xm.Set(xms[im]);//xm = xms[im] //为sm设置这帧对应的motion
+    float *Axc = Axcs[im]/*A*X pose的部分*/, *Axm = Axms[im]/*A*X motion的部分*/;
+    const Camera::Factor &SAcm = m_SAcmsLM[im];//滑窗内每一帧的Hrm以及Hmm(对角线上跟运动相关)和mb部分
     if (Amus) {
-      LA::AlignedMatrix9x9f::Ab(Amus[im], xm, Axm);
+      LA::AlignedMatrix9x9f::Ab(Amus[im], xm, Axm);//Axm = S[im]*xm 也就是对角线上mm部分的A*x
     } else {
       A99.Set(SAcm.m_Au.m_Amm.m_A);
       LA::AlignedMatrix9x9f::Ab(A99, xm, Axm);
     }
-    LA::AlignedMatrix6x9f::AddAbTo(SAcm.m_Au.m_Acm, xm, Axc);
-    SAcm.m_Au.m_Acm.GetTranspose(A96);
-    LA::AlignedMatrix9x6f::AddAbTo(A96, xc, Axm);
+    LA::AlignedMatrix6x9f::AddAbTo(SAcm.m_Au.m_Acm, xm, Axc);//A[pose,motion] * Xmotion 存在A*Xpose对应的位置
+    SAcm.m_Au.m_Acm.GetTranspose(A96);//A96 = S[pose,motion].t
+    LA::AlignedMatrix9x6f::AddAbTo(A96, xc, Axm);//A[motion,pose] * Xpose 存在A*Xmotion对应的位置
     if (im == 0) {
       continue;
     }
-    const int _im = im - 1;
-    const LA::ProductVector6f &_xc = xcs[_im];
-    const LA::AlignedVector9f &_xm = v9[1 - r];
-    float *_Axc = Axcs[_im], *_Axm = Axms[_im];
-    if (Acc) {
-      LA::AlignedMatrix6x6f::AddAbTo(SAcm.m_Ab.m_Acc, xc, _Axc);
+    const int _im = im - 1;//前一帧的运动
+    const LA::ProductVector6f &_xc = xcs[_im];//前一帧的poe
+    const LA::AlignedVector9f &_xm = v9[1 - r];//前一帧的motion
+    float *_Axc = Axcs[_im]/*前一帧的A*X pose部分*/, *_Axm = Axms[_im];//前一帧A*Xmotion的部分
+    if (Acc) {//这个之前已经算过了,所以不用再算了
+      LA::AlignedMatrix6x6f::AddAbTo(SAcm.m_Ab.m_Acc, xc, _Axc);//A[T0,T1] *XT1 存在A*Xpose T0的位置
       SAcm.m_Ab.m_Acc.GetTranspose(A66);
-      LA::AlignedMatrix6x6f::AddAbTo(A66, _xc, Axc);
+      LA::AlignedMatrix6x6f::AddAbTo(A66, _xc, Axc);//A[T1,T0] *XT0 存在A*Xpose T1的位置
     }
-#ifdef CFG_IMU_FULL_COVARIANCE
-    LA::AlignedMatrix6x9f::AddAbTo(SAcm.m_Ab.m_Acm, xm, _Axc);
+#ifdef CFG_IMU_FULL_COVARIANCE//比如T0(pose),M0(motion),T1,M1
+    LA::AlignedMatrix6x9f::AddAbTo(SAcm.m_Ab.m_Acm, xm, _Axc);//A[T0,M1] * XM1 存在A*Xpose T0的位置
     SAcm.m_Ab.m_Acm.GetTranspose(A96);
-    LA::AlignedMatrix9x6f::AddAbTo(A96, _xc, Axm);
-    LA::AlignedMatrix9x6f::AddAbTo(SAcm.m_Ab.m_Amc, xc, _Axm);
+    LA::AlignedMatrix9x6f::AddAbTo(A96, _xc, Axm);//A[M1,T0] * XT0 存在A*Xmotion T0的位置
+    LA::AlignedMatrix9x6f::AddAbTo(SAcm.m_Ab.m_Amc, xc, _Axm);//A[M0,T1] * XT1 存在A*Xmotion M0的位置
     SAcm.m_Ab.m_Amc.GetTranspose(A69);
-    LA::AlignedMatrix6x9f::AddAbTo(A69, _xm, Axc);
-    LA::AlignedMatrix9x9f::AddAbTo(SAcm.m_Ab.m_Amm, xm, _Axm);
+    LA::AlignedMatrix6x9f::AddAbTo(A69, _xm, Axc);//A[T1,M0] * XM0 存在A*Xpose T1的位置
+    LA::AlignedMatrix9x9f::AddAbTo(SAcm.m_Ab.m_Amm, xm, _Axm);//A[M0,M1] *XM1 存在A*Xmotion M0的位置
     SAcm.m_Ab.m_Amm.GetTranspose(A99);
-    LA::AlignedMatrix9x9f::AddAbTo(A99, _xm, Axm);
+    LA::AlignedMatrix9x9f::AddAbTo(A99, _xm, Axm);//A[M1,M0] *XM0 存在A*Xmotion M1的位置
 #else
     xm.Get012(v3);
     LA::AlignedMatrix3x3f::AddAbTo(SAcm.m_Ab.m_Acm.m_Arv, v3, &_Axc.v3());
@@ -2473,9 +2708,9 @@ void GlobalBundleAdjustor::ApplyAcm(const LA::ProductVector6f *xcs, const LA::Ve
     SAcm.m_Ab.m_Amm.m_Amv.GetTranspose(A39);
     LA::AlignedMatrix3x9f::AddAbTo(A39, _xm, &Axm.v0());
     for (int i = 3; i < 9; ++i) {
-      const float a = i < 6 ? SAcm.m_Ab.m_Amm.m_Ababa : SAcm.m_Ab.m_Amm.m_Abwbw;
-      _Axm[i] = a * xm[i] + _Axm[i];
-      Axm[i] = a * _xm[i] + Axm[i];
+      const float acc = i < 6 ? SAcm.m_Ab.m_Amm.m_Ababa : SAcm.m_Ab.m_Amm.m_Abwbw;
+      _Axm[i] = acc * xm[i] + _Axm[i];
+      Axm[i] = acc * _xm[i] + Axm[i];
     }
 #endif
   }
@@ -2545,9 +2780,9 @@ void GlobalBundleAdjustor::ApplyAcm(const LA::ProductVector6f *xcs, const LA::Ve
     SAcm.m_Ab.m_Amm.m_Amv.GetTranspose(A39);
     LA::AlignedMatrix3x9f::AddAbTo(A39, _xm, &Axm.v0());
     for (int i = 3; i < 9; ++i) {
-      const float a = i < 6 ? SAcm.m_Ab.m_Amm.m_Ababa : SAcm.m_Ab.m_Amm.m_Abwbw;
-      _Axm[i] = a * xm[i] + _Axm[i];
-      Axm[i] = a * _xm[i] + Axm[i];
+      const float acc = i < 6 ? SAcm.m_Ab.m_Amm.m_Ababa : SAcm.m_Ab.m_Amm.m_Abwbw;
+      _Axm[i] = acc * xm[i] + _Axm[i];
+      Axm[i] = acc * _xm[i] + Axm[i];
     }
 #endif
   }
@@ -2571,41 +2806,49 @@ GlobalBundleAdjustor::Residual GlobalBundleAdjustor::ComputeResidual(const
   R.m_r2 = rs.SquaredLength();
   return R;
 }
-
+//反求逆深度的增量
+//step1:先遍历所有关键帧中的新地图点,以及每个关键帧对于地图点的观测,如果这个关键的pose增量有变动,将自己的地图点以及观测地图点设置成需要反求的flags
+//step2:遍历关键帧自己的地图点以及它观测到的地图点,需要更新的话需要求出d_u，d_u =Wcu.t * Huu^-1 * dxc +  Huu^-1*-bu
+//step3: 遍历所有的关键帧中的新地图点,对需要反求逆深度增量的du取逆,即du =-Wcu.t * Huu^-1 * dxc +  Huu^-1*bu (Huu就是V,bu就是v)
+// = Huu^-1*(bu -Wcu.t * dxc )也就求出了地图点逆深度的增量
+//step4:更新状态将所有所有需要反求增量的du push进m_xsGN
 void GlobalBundleAdjustor::SolveBackSubstitution() {
   const ubyte ucFlag = GBA_FLAG_FRAME_UPDATE_DELTA | GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;
-  const int nKFs = static_cast<int>(m_KFs.size());
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  const int nKFs = static_cast<int>(m_KFs.size());//
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {//遍历所有的关键帧
     const KeyFrame &KF = m_KFs[iKF];
     //const int Nx = static_cast<int>(KF.m_xs.size());
     //if (Nx == 0) {
     //  continue;
     //}
-    const bool dc = m_xr2s[iKF] > BA_BACK_SUBSTITUTE_ROTATION ||
+    const bool dc = m_xr2s[iKF] > BA_BACK_SUBSTITUTE_ROTATION ||//这里的条件基本就是pose增量只要有了变动就会更新吧
                     m_xp2s[iKF] > BA_BACK_SUBSTITUTE_POSITION;
     if (dc) {
-      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_DELTA;
+      m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_DELTA;//m_ucs更新这个关键帧:需要更新增量
     } else {
-      m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_DELTA;
+      m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_DELTA;//m_ucs更新这个关键帧:不需要更新增量
     }
-    if (!(m_ucs[iKF] & ucFlag)) {
+    if (!(m_ucs[iKF] & ucFlag))
+    {//不更新增量并且不更新轨迹信息,那么直接跳过
       continue;
     }
-    const int Nx = static_cast<int>(KF.m_xs.size());
-    if (Nx > 0) {
-      ubyte *uds = m_uds.data() + m_iKF2d[iKF];
-      for (int ix = 0; ix < Nx; ++ix) {
-        if (!dc && !(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION)) {
+    const int Nx = static_cast<int>(KF.m_xs.size());//这个关键帧的新的地图点
+    if (Nx > 0)
+    {
+      ubyte *uds = m_uds.data() + m_iKF2d[iKF];//当前第一个新地图点的逆深度指针位置
+      for (int ix = 0; ix < Nx; ++ix) {//遍历所有地图点
+        if (!dc && !(uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION)) {//如果增量和轨迹信息都不需要更新就跳过
           continue;
         }
-        uds[ix] |= GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;
-        m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;
+        uds[ix] |= GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;//设置成需要反求地图点逆深度增量
+        m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION;//这个地图点所属的关进帧也设置一下
       }
     }
-    if (!dc) {
+    if (!dc) {//如果增量不需要更新就跳过
       continue;
     }
-    const int NZ = static_cast<int>(KF.m_Zs.size());
+    const int NZ = static_cast<int>(KF.m_Zs.size());//关键帧的观测
     for (int iZ = 0; iZ < NZ; ++iZ) {
       const FRM::Measurement &Z = KF.m_Zs[iZ];
 #ifdef CFG_DEBUG
@@ -2623,48 +2866,53 @@ void GlobalBundleAdjustor::SolveBackSubstitution() {
   }
 
   int iX = 0;
-  m_iKF2X.assign(nKFs, -1);
+  m_iKF2X.assign(nKFs, -1);//就建立一下需要反求增量的点的索引
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {//如果当前关键帧不需要更新这个东西就跳过
       continue;
     }
     m_iKF2X[iKF] = iX;
     iX += int(m_KFs[iKF].m_xs.size());
   }
-  m_xds.Resize(iX);
+  m_xds.Resize(iX);//扩容成当前新地图点个数的size
 
-  LA::AlignedVector6f xc;
+
+    //遍历关键帧自己的地图点以及它观测到的地图点,需要更新的话需要求出d_u，d_u =Wcu.t * Huu^-1 * dxc +  Huu^-1*-bu
+  LA::AlignedVector6f xc;//当前这帧的pose增量
   const LA::Vector6f *xcs = (LA::Vector6f *) m_xsGN.Data();
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {
     //if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION)) {
     //  continue;
     //}
-    const ubyte dx = m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DELTA;
+    const ubyte dx = m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DELTA;//当前帧是否要更新pose增量
     if (dx) {
       xc.Set(xcs[iKF]);
     }
-    const KeyFrame &KF = m_KFs[iKF];
-    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION) {
+    const KeyFrame &KF = m_KFs[iKF];//当前关键帧
+    if (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_BACK_SUBSTITUTION) {//如果要更新
       const LA::AlignedVector6f *_xc = dx ? &xc : NULL;
-      const ubyte *uds = m_uds.data() + m_iKF2d[iKF];
-      float *xds = m_xds.Data() + m_iKF2X[iKF];
-      const int Nx = static_cast<int>(KF.m_xs.size());
-      for (int ix = 0; ix < Nx; ++ix) {
-        if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {
+      const ubyte *uds = m_uds.data() + m_iKF2d[iKF];//这个关键帧第一个新地图点的flags地址
+      float *xds = m_xds.Data() + m_iKF2X[iKF];//这个关键帧第一个新地图点的逆深度
+      const int Nx = static_cast<int>(KF.m_xs.size());//新地图点数量
+      for (int ix = 0; ix < Nx; ++ix)
+      {
+        if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {//不需要反求就跳过
           continue;
-        } else if (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {
+        } else if (uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {//之前的观测没有有效
           xds[ix] = 0.0f;
         } else {
-          xds[ix] = KF.m_Mxs1[ix].BackSubstitute(_xc);
+          xds[ix] = KF.m_Mxs1[ix].BackSubstitute(_xc);//Wcu.t * Huu^-1 * dxc +  Huu^-1*-bu
         }
       }
     }
-    if (!dx) {
+    if (!dx) {//不需要更新增量的话就跳过
       continue;
     }
     const int NZ = static_cast<int>(KF.m_Zs.size());
-    for (int iZ = 0; iZ < NZ; ++iZ) {
-      const FRM::Measurement &Z = KF.m_Zs[iZ];
+    for (int iZ = 0; iZ < NZ; ++iZ)
+    {
+      const FRM::Measurement &Z = KF.m_Zs[iZ];//这个关键帧对于关键帧的观测
 #ifdef CFG_DEBUG
       UT_ASSERT(Z.m_iKF < iKF);
 #endif
@@ -2672,44 +2920,47 @@ void GlobalBundleAdjustor::SolveBackSubstitution() {
       float *_xds = m_xds.Data() + m_iKF2X[Z.m_iKF];
       for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
         const int ix = KF.m_zs[iz].m_ix;
-        if (_uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {
+        if (_uds[ix] & GBA_FLAG_TRACK_UPDATE_INFORMATION_ZERO) {//之前没有过观测信息
           continue;
         }
-        _xds[ix] = KF.m_Mzs1[iz].BackSubstitute(xc) + _xds[ix];
+        _xds[ix] = KF.m_Mzs1[iz].BackSubstitute(xc) + _xds[ix];//原先基础上加上Wcu.t * Huu^-1 * dxc +  Huu^-1*-bu
       }
     }
   }
+
+    //遍历所有的关键帧中的新地图点,对需要反求逆深度增量的du取逆
+    // 即du =-Wcu.t * Huu^-1 * dxc +  Huu^-1*bu (Huu就是V,bu就是v) = Huu^-1*(bu -Wcu.t * dxc )也就求出了地图点逆深度的增量
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const int iX = m_iKF2X[iKF];
     if (iX == -1) {
       continue;
     }
     const int id = m_iKF2d[iKF];
-    const Depth::InverseGaussian *ds = m_ds.data() + id;
-    ubyte *uds = m_uds.data() + id;
-    float *xds = m_xds.Data() + iX;
+    const Depth::InverseGaussian *ds = m_ds.data() + id;//新地图点对应的逆深度
+    ubyte *uds = m_uds.data() + id;//地图点对应的flags
+    float *xds = m_xds.Data() + iX;//
     const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
     for (int ix = 0; ix < Nx; ++ix) {
       if (!(uds[ix] & GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION)) {
         continue;
       }
-      xds[ix] = -xds[ix];
+      xds[ix] = -xds[ix];//取逆
       //if (Depth::InverseGaussian::Valid(xds[ix] + ds[ix].u())) {
       //  continue;
       //}
       //xds[ix] = 0.0f;
       //uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_BACK_SUBSTITUTION;
     }
-  }
+  }//遍历所有的关键帧和它们观测到的新地图点,更更新flag信息:不再需要更新轨迹信息
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION)) {
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION)) {//这个关键帧是否要更新轨迹信息
       continue;
     }
-    m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;
+    m_ucs[iKF] &= ~GBA_FLAG_FRAME_UPDATE_TRACK_INFORMATION;//m_ucs更新这个关键帧:不再需要更新轨迹信息
     ubyte *uds = m_uds.data() + m_iKF2d[iKF];
     const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
     for (int ix = 0; ix < Nx; ++ix) {
-      uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_INFORMATION;
+      uds[ix] &= ~GBA_FLAG_TRACK_UPDATE_INFORMATION;//m_uds更新这个地图点:不再需要更新轨迹信息
     }
   }
 #ifdef GBA_DEBUG_GROUND_TRUTH_STATE
@@ -2729,7 +2980,7 @@ void GlobalBundleAdjustor::SolveBackSubstitution() {
     }
   }
 #endif
-  PushDepthUpdates(m_xds, &m_xsGN);
+  PushDepthUpdates(m_xds, &m_xsGN);//保存需要反求的增量
   m_x2GN = m_xsGN.SquaredLength();
 //#ifdef CFG_DEBUG
 #if 0

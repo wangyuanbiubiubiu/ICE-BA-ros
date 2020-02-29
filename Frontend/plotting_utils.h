@@ -67,7 +67,7 @@ class PoseDrawer3D {
  public:
   /** \brief Initialize viz3d visualizer
    *
-   * Create a bunch of widgets
+   * Create acc bunch of widgets
    * \param viz_window pointer of the Viz3d window
    */
   explicit PoseDrawer3D(float viz_cam_height,

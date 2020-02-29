@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 2.8.11)
 project(EuRoC_test)
-
+#set(CMAKE_BUILD_TYPE "Debug")
+#set(CMAKE_CXX_FLAGS "-std=c++11 -O0 -Wall -g -march=native")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../bin)
 
 # =========================

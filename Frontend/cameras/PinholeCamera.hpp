@@ -62,7 +62,7 @@ namespace cameras {
 /// \brief This implements a standard pinhole camera projection model.
 /// \tparam DISTORTION_T the distortion type, e.g. vio::cameras::RadialTangentialDistortion
 template<class DISTORTION_T>
-class PinholeCamera : public CameraBase {
+class PinholeCamera : public CameraBase {//目前只派生了一个针孔的
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   typedef DISTORTION_T distortion_t;  ///< Makes the distortion type accessible.
@@ -390,10 +390,14 @@ class PinholeCamera : public CameraBase {
   distortion_t distortion_;  ///< the distortion to be used
 
   Eigen::Matrix<double, NumIntrinsics, 1> intrinsics_;  ///< summary of all intrinsics parameters
+
+  //内参矩阵
   float fu_;  ///< focalLengthU
   float fv_;  ///< focalLengthV
   float cu_;  ///< imageCenterU
   float cv_;  ///< imageCenterV
+
+  //一些没卵用的东西
   float one_over_fu_;  ///< 1.0 / fu_
   float one_over_fv_;  ///< 1.0 / fv_
   float fu_over_fv_;  ///< fu_ / fv_

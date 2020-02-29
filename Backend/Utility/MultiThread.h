@@ -31,10 +31,10 @@
 
 #define MT_WRITE_LOCK_END(m, iFrm, iTask) } MT::End(iFrm, iTask);
 #else
-#define MT_READ_LOCK_BEGIN(m, iFrm, iTask) { boost::shared_lock<boost::shared_mutex> rl(m);
+#define MT_READ_LOCK_BEGIN(m, iFrm, iTask) { boost::shared_lock<boost::shared_mutex> rl(m)/*只读*/;
 #define MT_READ_LOCK_END(m, iFrm, iTask) }
 #define MT_WRITE_LOCK_BEGIN(m, iFrm, iTask) { boost::upgrade_lock<boost::shared_mutex> wl1(m);\
-                                              boost::upgrade_to_unique_lock<boost::shared_mutex> wl2(wl1);\
+                                              boost::upgrade_to_unique_lock<boost::shared_mutex> wl2(wl1)/*写者独占模式*/;\
 
 #define MT_WRITE_LOCK_END(m, iFrm, iTask) }
 #endif
@@ -285,7 +285,7 @@ class Thread {
 
   int m_busy, m_stop;
 
-  int m_serial, m_serialCnt;
+  int m_serial/*初始化为1*/, m_serialCnt;
   int m_iCore;
   std::string m_name;
 #ifndef WIN32

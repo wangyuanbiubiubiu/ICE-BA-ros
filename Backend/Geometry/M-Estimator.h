@@ -19,7 +19,7 @@
 #include "Utility.h"
 #include "VectorN.h"
 
-#define ME_VARIANCE_HUBER             1.809025f     // 1.345^2
+#define ME_VARIANCE_HUBER             1.809025f     // 1.345^2 95分位
 #define ME_VARIANCE_TUKEY             21.95016201f  // 4.6851^2
 #define ME_VARIANCE_TUKEY_INVERSE     0.0455577503f
 #define ME_VARIANCE_STUDENT_T         5.68774801f   // 2.3849^2
@@ -140,10 +140,10 @@ template<> inline float Cost<FUNCTION_NONE>(const AlignedVector<float> &r2s) {
   LA::AlignedVectorXf _r2s((float *) r2s.Data(), r2s.Size(), false);
   return _r2s.Sum();
 }
-
+//Huber核,其他核同理
 template<> inline float Weight<FUNCTION_HUBER>(const float r2) {
   if (r2 > ME_VARIANCE_HUBER) {
-    return sqrtf(ME_VARIANCE_HUBER / r2);
+    return sqrtf(ME_VARIANCE_HUBER / r2);//求得是rho‘(r2)
   } else {
     return 1.0f;
   }

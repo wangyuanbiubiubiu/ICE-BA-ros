@@ -18,7 +18,7 @@
 
 #include "Vector3.h"
 #include "Matrix2x3.h"
-
+//#define CFG_DEBUG_EIGEN
 class Point2D : public LA::Vector2f {
  public:
   inline Point2D() : LA::Vector2f() {}

@@ -123,6 +123,7 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
 #endif
   // IBA::Error eLBA, eGBA;
   const int print = cfgor.GetArgument("print_camera", 0);
+#define CFG_GROUND_TRUTH
 #ifdef CFG_GROUND_TRUTH
   Rotation3D eR;
   LA::AlignedVector3f ep, er;
@@ -184,8 +185,9 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
 #endif
     if (IS.LoadRelativeConstraint(iFrm, &Z)) {
 #ifdef CFG_GROUND_TRUTH
-      if ((zGT || eGT) && !CsGT.Empty()) {
-        const Rigid3D TGT = CsGT[Z.iFrm2].m_T / CsGT[Z.iFrm1].m_T;
+      if ((zGT || eGT) && !CsGT.Empty())
+      {
+        const Rigid3D TGT = CsGT[Z.iFrm2].m_Cam_pose / CsGT[Z.iFrm1].m_Cam_pose;//
         const Rotation3D RGT = TGT;
         const Point3D pGT = TGT.GetPosition();
         if (zGT) {
@@ -241,7 +243,7 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
              i != SW.iFrms.end(); ++i) {
           iFrmLast = *i;
           const int j = static_cast<int>(i - SW.iFrms.begin());
-          IBA::PrintCameraPose(iFrmLast, SW.CsLF[j].C, print > 1);
+          IBA::PrintCameraPose(iFrmLast, SW.CsLF[j].Cam_pose, print > 1);
         }
       }
 #if 0
@@ -295,7 +297,7 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
               const int iKF1 = UT::Random<int>(iKF2);
               Z.iFrm1 = solver.GetKeyFrameIndex(iKF1);
             }
-            const Rigid3D T = CsGT[Z.iFrm2].m_T / CsGT[Z.iFrm1].m_T;
+            const Rigid3D T = CsGT[Z.iFrm2].m_Cam_pose / CsGT[Z.iFrm1].m_Cam_pose;
             T.Rotation3D::Get(Z.T.R);
             T.GetPosition().Get(Z.T.p);
             S.MakeDiagonal(s2p, s2r);
@@ -320,7 +322,7 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
           const int jFrm = iFrms[i];
           const Camera &CGT = CsGT[jFrm];
           eR.Random(nrMax);
-          const Rotation3D R = Rotation3D(CGT.m_T) / eR;
+          const Rotation3D R = Rotation3D(CGT.m_Cam_pose) / eR;
           ep.Random(npMax);
           const LA::AlignedVector3f p = CGT.m_p - ep;
           R.Get(Cs[i].R);

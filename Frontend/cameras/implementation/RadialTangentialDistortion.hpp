@@ -131,7 +131,7 @@ bool RadialTangentialDistortion::distort(
   (*pointDistorted)[1] = u1 + u1 * rad_dist_u + 2.0 * p2_ * mxy_u
       + p1_ * (rho_u + 2.0 * my_u);
 
-  // next the Jacobian w.r.t. changes on the undistorted point
+  // next the Jacobian gyr.r.t. changes on the undistorted point
   Eigen::Matrix2d & J = *pointJacobian;
   J(0, 0) = 1 + rad_dist_u + k1_ * 2.0 * mx_u + k2_ * rho_u * 4 * mx_u
       + 2.0 * p1_ * u1 + 6 * p2_ * u0;
@@ -142,7 +142,7 @@ bool RadialTangentialDistortion::distort(
       + 6 * p1_ * u1 + 2.0 * p2_ * u0;
 
   if (parameterJacobian) {
-    // the Jacobian w.r.t. intrinsics parameters
+    // the Jacobian gyr.r.t. intrinsics parameters
     Eigen::Matrix2Xd & J2 = *parameterJacobian;
     J2.resize(2, NumDistortionIntrinsics);
     const float r2 = rho_u;
@@ -180,7 +180,7 @@ bool RadialTangentialDistortion::distort(const Eigen::Vector2f & pointUndistorte
   (*pointDistorted)[1] = u1 + u1 * rad_dist_u + 2.0 * p2_ * mxy_u
   + p1_ * (rho_u + 2.0 * my_u);
 
-  // next the Jacobian w.r.t. changes on the undistorted point
+  // next the Jacobian gyr.r.t. changes on the undistorted point
   Eigen::Matrix2f & J = *pointJacobian;
   J(0, 0) = 1 + rad_dist_u + k1_ * 2.0 * mx_u + k2_ * rho_u * 4 * mx_u
   + 2.0 * p1_ * u1 + 6 * p2_ * u0;
@@ -191,7 +191,7 @@ bool RadialTangentialDistortion::distort(const Eigen::Vector2f & pointUndistorte
   + 6 * p1_ * u1 + 2.0 * p2_ * u0;
 
   if (parameterJacobian) {
-    // the Jacobian w.r.t. intrinsics parameters
+    // the Jacobian gyr.r.t. intrinsics parameters
     Eigen::Matrix2Xf & J2 = *parameterJacobian;
     J2.resize(2, NumDistortionIntrinsics);
     const float r2 = rho_u;
@@ -235,7 +235,7 @@ bool RadialTangentialDistortion::distortWithExternalParameters(
   (*pointDistorted)[1] = u1 + u1 * rad_dist_u + 2.0 * p2 * mxy_u
       + p1 * (rho_u + 2.0 * my_u);
 
-  // next the Jacobian w.r.t. changes on the undistorted point
+  // next the Jacobian gyr.r.t. changes on the undistorted point
   Eigen::Matrix2d & J = *pointJacobian;
   J(0, 0) = 1 + rad_dist_u + k1 * 2.0 * mx_u + k2 * rho_u * 4 * mx_u
       + 2.0 * p1 * u1 + 6 * p2 * u0;
@@ -246,7 +246,7 @@ bool RadialTangentialDistortion::distortWithExternalParameters(
       + 6 * p1 * u1 + 2.0 * p2 * u0;
 
   if (parameterJacobian) {
-    // the Jacobian w.r.t. intrinsics parameters
+    // the Jacobian gyr.r.t. intrinsics parameters
     Eigen::Matrix2Xd & J2 = *parameterJacobian;
     J2.resize(2, NumDistortionIntrinsics);
     const float r2 = rho_u;

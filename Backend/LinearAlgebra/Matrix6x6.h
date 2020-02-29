@@ -1356,13 +1356,13 @@ template<> inline void SymmetricMatrix6x6f::Get33(SymmetricMatrix3x3d *M) const 
 }
 
 template<> inline void SymmetricMatrix6x6f::GetAlignedMatrix6x6f(AlignedMatrix6x6f &M) const {
-  memcpy(M[0], &m00(), 24);
+  memcpy(M[0], &m00(), 24);//先设置一下上三角部分
   memcpy(M[1] + 1, &m11(), 20);
   memcpy(M[2] + 2, &m22(), 16);
   memcpy(M[3] + 3, &m33(), 12);
   memcpy(M[4] + 4, &m44(), 8);
   M[5][5] = m55();
-  M.SetLowerFromUpper();
+  M.SetLowerFromUpper();//再对称设置一下
 }
 }  // namespace LA
 

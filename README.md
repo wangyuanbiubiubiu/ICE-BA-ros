@@ -1,8 +1,8 @@
 # ICE-BA
 ## ICE-BA: Incremental, Consistent and Efficient Bundle Adjustment for Visual-Inertial SLAM  
 We present ICE-BA, an incremental, consistent and efficient bundle adjustment for visual-inertial SLAM, which takes feature tracks, IMU measurements and optionally the loop constraints as input, performs in parallel both local BA over the sliding window and global BA over all keyframes, and outputs camera pose and updated map points for each frame in real-time. The main contributions include:  
-- a new BA solver that leverages the incremental nature of SLAM measurements to achieve more than 10x efficiency compared to the state-of-the-arts.  
-- a new relative marginalization algorithm that resolves the conflicts between sliding window marginalization bias and global loop closure constraints.  
+- acc new BA solver that leverages the incremental nature of SLAM measurements to achieve more than 10x efficiency compared to the state-of-the-arts.
+- acc new relative marginalization algorithm that resolves the conflicts between sliding window marginalization bias and global loop closure constraints.
 
 Beside the backend solver, the library also provides an optic flow based frontend, which can be easily replaced by other more complicated frontends like ORB-SLAM2.  
 
@@ -64,5 +64,5 @@ Please refer to scripts/run_backend_only.sh for more details about how to run th
 
 ## 5. Contribution
 You are very welcome to contribute to ICE-BA.
-Baidu requires the contributors to e-sign [CLA (Contributor License Agreement)](https://gist.github.com/tanzhongyibidu/6605bdef5f7bb03b9084dd8fed027037) before making a Pull Request.  We have the CLA binding to Github so it will pop up before creating a PR.
+Baidu requires the contributors to e-sign [CLA (Contributor License Agreement)](https://gist.github.com/tanzhongyibidu/6605bdef5f7bb03b9084dd8fed027037) before making acc Pull Request.  We have the CLA binding to Github so it will pop up before creating acc PR.
 

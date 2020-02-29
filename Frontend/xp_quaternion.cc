@@ -18,7 +18,6 @@
 #include <glog/logging.h>
 #include <iostream>
 namespace XP {
-
 // Quaternion multiplication
 XpQuaternion quat_multiply(const XpQuaternion& lhs,
                            const XpQuaternion& rhs) {
@@ -50,20 +49,14 @@ Eigen::Quaternionf XpQuaternion::ToEigenQuaternionf() const {
                             (*this)(1),
                             (*this)(2)};
 }
-
 Eigen::Matrix3f XpQuaternion::ToRotationMatrix() const {
   const XpQuaternion &q = *this;
   Eigen::Matrix3f R;
-  R << 1 - 2 * (q(1)*q(1) + q(2)*q(2)),
-       2 * (q(0)*q(1) - q(2)*q(3)),
-       2 * (q(0)*q(2) + q(1)*q(3)),
-       2 * (q(0)*q(1) + q(2)*q(3)),
-       1 - 2 * (q(0)*q(0) + q(2)*q(2)),
-       2 * (q(1)*q(2) - q(0)*q(3)),
-       2 * (q(0)*q(2) - q(1)*q(3)),
-       2 * (q(1)*q(2) + q(0)*q(3)),
-       1 - 2 * (q(0)*q(0) + q(1)*q(1));
-  return R;
+  R << 1 - 2 * (q(1)*q(1) + q(2)*q(2)),2 * (q(0)*q(1) - q(2)*q(3)),2 * (q(0)*q(2) + q(1)*q(3)),
+       2 * (q(0)*q(1) + q(2)*q(3)),1 - 2 * (q(0)*q(0) + q(2)*q(2)),2 * (q(1)*q(2) - q(0)*q(3)),
+       2 * (q(0)*q(2) - q(1)*q(3)),2 * (q(1)*q(2) + q(0)*q(3)),1 - 2 * (q(0)*q(0) + q(1)*q(1));
+
+        return R;
 }
 
 Eigen::Vector3f XpQuaternion::ToEulerRadians() const {
@@ -146,7 +139,7 @@ XpQuaternion XpQuaternion::inverse() const {
 XpQuaternion XpQuaternion::mul(const XpQuaternion& rhs) const {
   return quat_multiply(*this, rhs);
 }
-
+//k时刻角速度,k+1时刻角速度,k时刻旋转,dalta_t,k+1时刻旋转
 void IntegrateQuaternion(
     const Eigen::Vector3f &omega_begin, const Eigen::Vector3f &omega_end,
     const XpQuaternion &q_begin, const float dt,
@@ -159,17 +152,20 @@ void IntegrateQuaternion(
 
   // divide dt time interval into num_segment segments
   // TODO(mingyu): Reduce to 2 or 4 segments as 8 segments may overkill
-  const int num_segment = 8;
+  const int num_segment = 8;//步数
 
   // the time duration in each segment
-  const float inv_num_segment = 1.0 / num_segment;
+  const float inv_num_segment = 1.0 / num_segment;//步长
   const float dt_seg = dt * inv_num_segment;
 
   Eigen::Vector3f delta_omega = omega_end - omega_begin;
   for (int i = 0; i < num_segment; ++i) {
     // integrate in the region: [i/num_segment, (i+1)/num_segment]
-
-    Eigen::Vector3f omega_tmp = omega_begin + (i * inv_num_segment) * delta_omega;
+//这里利用陀螺仪的测量RK4积分算出前后帧一个imu测量出的旋转,JPL格式四元数
+// div(qpre_cur(t)) = 0.5 * qpre_cur(t) * omega(w)
+// 改成div(qcur_pre(t)) = 0.5 * omega(-w) * qcur_pre(t)
+// 那么XpQuaternionDerivative(q_0, omega_tmp)应该是 - 0.5 * omega(w) × qcur_pre(t)
+    Eigen::Vector3f omega_tmp = omega_begin + (i * inv_num_segment) * delta_omega;//当前步长内的imu角速度
     Eigen::Vector4f k1 = XpQuaternionDerivative(q_0, omega_tmp);
     omega_tmp = omega_begin + 0.5 * (2 * i + 1) * inv_num_segment * delta_omega;
     Eigen::Vector4f k2 = XpQuaternionDerivative(q_0 + 0.5 * k1 * dt_seg, omega_tmp);

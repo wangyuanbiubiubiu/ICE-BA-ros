@@ -20,7 +20,7 @@
 #include "Utility.h"
 #include <string>
 #include <algorithm>
-
+//#define CFG_DEBUG_EIGEN
 namespace LA {
 
 class AlignedVector3f {

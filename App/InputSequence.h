@@ -195,7 +195,7 @@ class InputSequence {
 #ifdef IBA_WITH_CVD
         CVD::Image<ubyte> I, ITmp;
         UT::ImageLoad(m_filesImg[0], I, ITmp);
-        m_K.w = I.size().x;
+        m_K.gyr = I.size().x;
         m_K.h = I.size().y;
 #endif
       }
@@ -514,8 +514,8 @@ class InputSequence {
         if (iFrm < KF_FIRST_LOCAL_FRAMES && KF_MIN_FRAME_STEP > 0 &&
             iFrm - solver->GetKeyFrameIndex(solver->GetKeyFrames() - 1) == KF_MIN_FRAME_STEP) {
           KF->iFrm = CF->iFrm;
-          KF->C = CF->C.C;
-          KF->zs = CF->zs;
+          KF->Cam_pose = CF->Cam_state.Cam_pose;
+          KF->feat_measures = CF->feat_measures;
           KF->Xs.resize(0);
           KF->d = CF->d;
         }
@@ -525,15 +525,15 @@ class InputSequence {
           const int NX = static_cast<int>(KF->Xs.size());
           for (int iX = 0; iX < NX; ++iX) {
             IBA::MapPoint &X = KF->Xs[iX];
-            const int Nz = static_cast<int>(X.zs.size());
+            const int Nz = static_cast<int>(X.feat_measures.size());
             for (i = j = 0; i < Nz; ++i) {
-              IBA::MapPointMeasurement &z = X.zs[i];
+              IBA::MapPointMeasurement &z = X.feat_measures[i];
               z.iFrm = m_iFrms[z.iFrm];
               if (z.iFrm != -1) {
-                X.zs[j++] = z;
+                X.feat_measures[j++] = z;
               }
             }
-            X.zs.resize(j);
+            X.feat_measures.resize(j);
           }
         }
 #if 0
@@ -549,46 +549,46 @@ class InputSequence {
           const int NX = static_cast<int>(KF->Xs.size());
           for (iX = jX = 0; iX < NX; ++iX) {
             IBA::MapPoint &X = KF->Xs[iX];
-            const int Nz = static_cast<int>(X.zs.size());
+            const int Nz = static_cast<int>(X.feat_measures.size());
             for (i = j = 0; i < Nz; ++i) {
-              const IBA::MapPointMeasurement &z = X.zs[i];
+              const IBA::MapPointMeasurement &z = X.feat_measures[i];
               if (kfs[z.iFrm]) {
-                X.zs[j++] = z;
+                X.feat_measures[j++] = z;
               }
             }
-            if (j == 1 && X.zs.front().iFrm != KF->iFrm) {
+            if (j == 1 && X.feat_measures.front().iFrm != KF->iFrm) {
               j = 0;
             }
-            X.zs.resize(j);
-            if (!X.zs.empty()) {
+            X.feat_measures.resize(j);
+            if (!X.feat_measures.empty()) {
               KF->Xs[jX++] = X;
             }
           }
           KF->Xs.resize(jX);
         }
-        if (KF->Xs.size() < KF_MIN_FEATURE_SROUCES && KF->zs.size() >= KF_MIN_FEATURE_MEASUREMENTS &&
+        if (KF->Xs.size() < KF_MIN_FEATURE_SROUCES && KF->feat_measures.size() >= KF_MIN_FEATURE_MEASUREMENTS &&
             iFrm >= KF_FIRST_LOCAL_FRAMES &&
             (KF_MIN_FRAME_STEP <= 0 || iFrm - solver->GetKeyFrameIndex(solver->GetKeyFrames() - 1) != KF_MIN_FRAME_STEP) &&
             (m_kfs.empty() || (m_kfs[iFrm] != 2 && (m_kfs[iFrm] != 1 || KF_MIN_FRAME_STEP != -1)))) {
           KF->iFrm = -1;
-          KF->zs.resize(0);
+          KF->feat_measures.resize(0);
           KF->Xs.resize(0);
         }
 #endif
       }
 #ifdef CFG_DEBUG
       if (!m_ius.empty()) {
-        LA::AlignedVector3f a, w;
+        LA::AlignedVector3f acc, gyr;
         const int i1 = m_ius[iFrm], i2 = m_ius[iFrm + 1], N = i2 - i1;
-        UT_ASSERT(static_cast<int>(CF->us.size()) == N);
-        const IMU::Measurement *us = m_us.Data() + i1;
+        UT_ASSERT(static_cast<int>(CF->imu_measures.size()) == N);
+        const IMU::Measurement *imu_measures = m_imu_measures.Data() + i1;
         for (int i = 0; i < N; ++i) {
-          const IMU::Measurement &u1 = us[i];
-          const IBA::IMUMeasurement &u2 = CF->us[i];
-          a.Set(u2.a);
-          w.Set(u2.w);
-          u1.m_a.AssertEqual(a);
-          u1.m_w.AssertEqual(w);
+          const IMU::Measurement &u1 = imu_measures[i];
+          const IBA::IMUMeasurement &u2 = CF->imu_measures[i];
+          acc.Set(u2.acc);
+          gyr.Set(u2.gyr);
+          u1.m_a.AssertEqual(acc);
+          u1.m_w.AssertEqual(gyr);
           UT::AssertEqual(u1.t(), u2.t);
         }
       }
@@ -596,28 +596,28 @@ class InputSequence {
       return true;
     }
     CF->iFrm = iFrm;
-    CF->C.C.R[0][0] = FLT_MAX;
+    CF->Cam_state.Cam_pose.R[0][0] = FLT_MAX;
     std::vector<IBA::MapPoint> *Xs = KF_MIN_FRAME_STEP == -1 && !m_kfs.empty() && !m_kfs[iFrm] ?
                                      NULL : &KF->Xs;
     const std::vector<int> *iFrms = m_iFrms.empty() ? NULL : &m_iFrms;
-    solver->LoadFeatures(m_filesFtr[iFrm], iFrm, &CF->zs, Xs, iFrms);
+    solver->LoadFeatures(m_filesFtr[iFrm], iFrm, &CF->feat_measures, Xs, iFrms);
     //////////////////////////////////////////////////////////////////////////
     if (Xs && (Xs->empty() || (Xs->size() < KF_MIN_FEATURE_SROUCES &&
-                               CF->zs.size() >= KF_MIN_FEATURE_MEASUREMENTS))) {
+                               CF->feat_measures.size() >= KF_MIN_FEATURE_MEASUREMENTS))) {
       Xs = NULL;
     }
     //////////////////////////////////////////////////////////////////////////
 #ifdef CFG_STEREO
-    solver->LoadFeatures(m_filesFtrRight[iFrm], iFrm, &CF->zs, Xs, iFrms, 1);
+    solver->LoadFeatures(m_filesFtrRight[iFrm], iFrm, &CF->feat_measures, Xs, iFrms, 1);
 #endif
     const int i1 = m_ius[iFrm], i2 = m_ius[iFrm + 1], N = i2 - i1;
     const IMU::Measurement *us = m_us.Data() + i1;
-    CF->us.resize(N);
+    CF->imu_measures.resize(N);
     for (int i = 0; i < N; ++i) {
       const IMU::Measurement &u1 = us[i];
-      IBA::IMUMeasurement &u2 = CF->us[i];
-      u1.m_a.Get(u2.a);
-      u1.m_w.Get(u2.w);
+      IBA::IMUMeasurement &u2 = CF->imu_measures[i];
+      u1.m_a.Get(u2.acc);
+      u1.m_w.Get(u2.gyr);
       u2.t = u1.t();
     }
     CF->t = m_ts[iFrm];
@@ -631,15 +631,15 @@ class InputSequence {
        (KF_MIN_FRAME_STEP > 0 && iFrm - solver->GetKeyFrameIndex(solver->GetKeyFrames() - 1) == KF_MIN_FRAME_STEP) ||
        (!m_kfs.empty() && (m_kfs[iFrm] == 2 || m_kfs[iFrm] == 1 && KF_MIN_FRAME_STEP == -1))) {
       KF->iFrm = CF->iFrm;
-      KF->C = CF->C.C;
-      KF->zs = CF->zs;
+      KF->Cam_pose = CF->Cam_state.Cam_pose;
+      KF->feat_measures = CF->feat_measures;
       if (!Xs) {
         KF->Xs.resize(0);
       }
       KF->d = CF->d;
     } else {
       KF->iFrm = -1;
-      KF->zs.resize(0);
+      KF->feat_measures.resize(0);
       KF->Xs.resize(0);
     }
     return true;
@@ -674,8 +674,8 @@ class InputSequence {
     for (int i = 0; i < N; ++i) {
       const Camera &C = Cs[i];
       IBA::CameraIMUState &X = Xs->at(i);
-      C.m_T.LA::AlignedMatrix3x3f::Get(X.C.R);
-      C.m_p.Get(X.C.p);
+      C.m_Cam_pose.LA::AlignedMatrix3x3f::Get(X.Cam_pose.R);
+      C.m_p.Get(X.Cam_pose.p);
       C.m_v.Get(X.v);
       C.m_ba.Get(X.ba);
       C.m_bw.Get(X.bw);
@@ -691,9 +691,9 @@ class InputSequence {
     for (int i = 0; i < N; ++i) {
       const IBA::CameraIMUState &X = Xs[i];
       Camera &C = _Cs[i];
-      C.m_T.LA::AlignedMatrix3x3f::Set(X.C.R);
-      C.m_p.Set(X.C.p);
-      C.m_T.SetPosition(C.m_p);
+      C.m_Cam_pose.LA::AlignedMatrix3x3f::Set(X.Cam_pose.R);
+      C.m_p.Set(X.Cam_pose.p);
+      C.m_Cam_pose.SetPosition(C.m_p);
       C.m_v.Set(X.v);
       C.m_ba.Set(X.ba);
       C.m_bw.Set(X.bw);
@@ -727,7 +727,7 @@ class InputSequence {
 #ifdef CFG_STEREO
   std::vector<std::string> m_filesImgRight, m_filesFtrRight;
 #endif
-  std::vector<int> m_iFrms;
+  std::vector<int> m_iFrms;//关键帧和普通帧之间的id对应 m_iFrms[关键帧id] = 帧的全局id
   AlignedVector<IMU::Measurement> m_us;
   std::vector<int> m_ius;
   CameraTrajectory m_CTGT;

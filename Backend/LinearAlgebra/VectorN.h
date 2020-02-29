@@ -912,7 +912,7 @@ class AlignedVectorXf : public AlignedVectorX<float> {
     SIMD::Multiply(this->Size(), S.Data(), this->Data());
   }
   inline void Bind(void *V, const int N) {
-    AlignedVectorX<float>::Bind(V, N);
+    AlignedVectorX<float>::Bind(V, N);//保存V的指针
     m_capacity = SIMD_FLOAT_CEIL(N);
   }
   inline int BindSize(const int N) const {

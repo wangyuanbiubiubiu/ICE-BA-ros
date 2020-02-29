@@ -65,7 +65,7 @@ template<class TYPE> inline void ListLoadB(std::list<TYPE> &L, FILE *fp) {
     it->LoadB(fp);
   }
 }
-
+//每帧的标签类
 class Tag {
  public:
   inline Tag() {}
@@ -96,14 +96,14 @@ class Tag {
 #endif
   }
  public:
-  int m_iFrm;
-  float m_t;
-  std::string m_fileName;
+  int m_iFrm;//帧的id
+  float m_t;//帧的时间戳
+  std::string m_fileName;//帧的文件名称,仅仅用来debug
 #ifdef CFG_STEREO
   std::string m_fileNameRight;
 #endif
 };
-
+//对于地图点的观测数据
 class Measurement {
  public:
   inline Measurement() {}
@@ -119,7 +119,8 @@ class Measurement {
     UT_ASSERT(m_iKF >= 0 && m_ik >= 0 && m_iz1 <= m_iz2);
   }
  public:
-  int m_iKF, m_ik, m_iz1, m_iz2;
+  int m_iKF/*被第几个关键帧所看到的*/, m_ik/*这个关键帧对应在m_iKFsMatch中的索引*/,
+  m_iz1/*观测到的这个关键帧的地图点在m_zs存储的起始位置,也是观测在LF的局部id*/, m_iz2/*观测到的这个关键帧的地图点在m_zs存储的终止位置,也是观测在LF的局部id*/;
 };
 
 class Frame {
@@ -250,12 +251,12 @@ class Frame {
     m_iKFsMatch.resize(0);
     m_iKFNearest = -1;
   }
-  inline void PushFrameMeasurement(const int iKF, const int Nz) {
+  inline void PushFrameMeasurement(const int iKF/*关键帧id*/, const int Nz/*新地图点数量*/) {
     const int iZ = int(m_Zs.size());
-    m_Zs.resize(iZ + 1);
+    m_Zs.resize(iZ + 1);//扩容然后构造测量
     Measurement &Z = m_Zs[iZ];
-    Z.m_iKF = iKF;
-    if (m_iKFsMatch.empty() || m_iKFsMatch.back() < iKF) {
+    Z.m_iKF = iKF;//保存一下是被哪个关键帧看到,这里存的不是帧的id,是关键帧在所有关键帧之中的索引
+    if (m_iKFsMatch.empty() || m_iKFsMatch.back() < iKF) {//如果m_iKFsMatch空,那么就把和它匹配的关键帧加进去,这个肯定是最匹配的关键帧
       Z.m_ik = static_cast<int>(m_iKFsMatch.size());
       m_iKFsMatch.push_back(iKF);
     } else {
@@ -269,16 +270,16 @@ class Frame {
     Z.m_iz1 = static_cast<int>(m_zs.size());
     Z.m_iz2 = Z.m_iz1 + Nz;
     m_zs.resize(Z.m_iz2);
-  }
+  }//向普通帧中push观测信息:观测到的地图点肯定是属于某些关键帧的,这里就是输入的关键帧id以及对这个关键帧的地图点的观测
   inline void PushFrameMeasurement(const int iKF, const std::vector<FTR::Measurement> &zs) {
     const int iZ = static_cast<int>(m_Zs.size());
     m_Zs.resize(iZ + 1);
     Measurement &Z = m_Zs[iZ];
-    Z.m_iKF = iKF;
-    if (m_iKFsMatch.empty() || m_iKFsMatch.back() < iKF) {
+    Z.m_iKF = iKF;//关键帧的id
+    if (m_iKFsMatch.empty() || m_iKFsMatch.back() < iKF) {//说明是新的一个关键帧
       Z.m_ik = static_cast<int>(m_iKFsMatch.size());
       m_iKFsMatch.push_back(iKF);
-    } else {
+    } else {//应该不会出现这情况吧
       const std::vector<int>::iterator ik = std::lower_bound(m_iKFsMatch.begin(),
                                                              m_iKFsMatch.end(), iKF);
       Z.m_ik = static_cast<int>(ik - m_iKFsMatch.begin());
@@ -286,10 +287,10 @@ class Frame {
         m_iKFsMatch.insert(ik, iKF);
       }
     }
-    const int Nz = static_cast<int>(zs.size());
-    Z.m_iz1 = static_cast<int>(m_zs.size());
-    Z.m_iz2 = Z.m_iz1 + Nz;
-    m_zs.insert(m_zs.end(), zs.begin(), zs.end());
+    const int Nz = static_cast<int>(zs.size());//观测到的地图点数量
+    Z.m_iz1 = static_cast<int>(m_zs.size());//观测到的这个关键帧的地图点在m_zs存储的起始位置
+    Z.m_iz2 = Z.m_iz1 + Nz;//观测到的这个关键帧的地图点在m_zs存储的终止位置
+    m_zs.insert(m_zs.end(), zs.begin(), zs.end());//保存
   }
   inline void PushFeatureMeasurements(const int iKF, const std::vector<FTR::Measurement> &zs,
                                       int *iZ, int *iz) {
@@ -431,9 +432,9 @@ class Frame {
   }
   inline void SortFeatureMeasurements() {
     const int NZ = int(m_Zs.size());
-    for (int iZ = 0; iZ < NZ; ++iZ) {
+    for (int iZ = 0; iZ < NZ; ++iZ) {//遍历对每个关键帧的观测
       Measurement &Z = m_Zs[iZ];
-      std::sort(m_zs.begin() + Z.m_iz1, m_zs.begin() + Z.m_iz2);
+      std::sort(m_zs.begin() + Z.m_iz1, m_zs.begin() + Z.m_iz2);//将m_zs每个关键帧内的地图点按局部id进行排序
     }
   }
   inline void SaveB(FILE *fp) const {
@@ -491,12 +492,12 @@ class Frame {
 #endif
   }
  public:
-  Tag m_T;
-  Depth::InverseGaussian m_d;
-  std::vector<Measurement> m_Zs;
-  std::vector<FTR::Measurement> m_zs;
-  std::vector<int> m_iKFsMatch;
-  int m_iKFNearest;
+  Tag m_T;//标签,用来记录这帧的信息:帧的id,时间戳,可视化时的文件名称
+  Depth::InverseGaussian m_d;//左相机坐标系下特征点平均分布的逆深度和协方差,用来给没有右目信息的点或者无法三角化的点给深度初值使用
+  std::vector<Measurement> m_Zs;//这帧都观测到了哪些关键帧中的地图点,每个关键帧的观测存在m_zs中的位置
+  std::vector<FTR::Measurement> m_zs;//保存了所有对于老地图点的观测,这里是按照一个关键帧有一组老地图点的观测这种顺序插入的
+  std::vector<int> m_iKFsMatch;//共视的关键帧(包含了次共视帧),IBA的地图点都是依附于对应首次看到它的关键帧上的
+  int m_iKFNearest;//最近的关键帧的id,最近指的是和当前帧之间图像运动最小的关键帧
 };
 
 class MeasurementMatch {
@@ -551,19 +552,22 @@ class MeasurementMatch {
     m_Mczms.InsertZero(static_cast<int>(i - m_izms.begin()), Nzm, work);
     m_izms.insert(i, izms.begin(), izms.end());
   }
-  inline void PushFeatureMeasurementMatches(const std::vector<FTR::Measurement::Match> &izms,
+  inline void PushFeatureMeasurementMatches(const std::vector<FTR::Measurement::Match> &izms,/*关键帧中所有可以被这两帧同时观测到的地图点,存的是各自的m_zs的索引*/
                                             ubyte *first = NULL) {
-    const int Nzm1 = m_ik2zm.back(), Nzm = static_cast<int>(izms.size()), Nzm2 = Nzm1 + Nzm;
-    if (!first || *first) {
-      if (first) {
+    const int Nzm1 = m_ik2zm.back(), Nzm = static_cast<int>(izms.size())/*两帧对当前这个关键帧的共视地图点数量*/, Nzm2 = Nzm1 + Nzm;
+    if (!first || *first)
+    {//如果是第一个关键帧的话
+      if (first)
+      {
         *first = 0;
       }
       m_ik2zm.push_back(Nzm2);
-      m_SMczms.Push().MakeZero();
-    } else {
-      m_ik2zm.back() = Nzm2;
+      m_SMczms.Push().MakeZero();//共视的话,两个帧的pose就会在H上产生一个新的视觉因子
+    } else
+    {
+        m_ik2zm.back() = Nzm2;//如果有多个关键帧同时被这两个滑窗帧共视到,那么累加
     }
-    m_izms.insert(m_izms.end(), izms.begin(), izms.end());
+    m_izms.insert(m_izms.end(), izms.begin(), izms.end());//将两帧对这个关键帧的共视信息加进去
     m_Mczms.InsertZero(Nzm1, Nzm, NULL);
 //#ifdef CFG_DEBUG
 #if 0
@@ -688,9 +692,11 @@ class MeasurementMatch {
     }
   }
  public:
-  std::vector<int> m_ik2zm;
-  std::vector<FTR::Measurement::Match> m_izms;
-  AlignedVector<Camera::Factor::Binary::CC> m_Mczms, m_SMczms;
+  std::vector<int> m_ik2zm;//[2]的值就表示比这帧新2帧的帧和它的共视地图点的个数(包含了[1][0]的值),只是为了方便索引m_izms
+  std::vector<FTR::Measurement::Match> m_izms;/*所有关键帧中所有可以被这两帧同时观测到的地图点,存的是各自的m_zs的索引(这个数据结构所在的帧的m_zs,后面的帧的m_zs)*/
+  AlignedVector<Camera::Factor::Binary::CC> m_Mczms/*HLFp_u*∑ST_Huu^-1*H_LFp_u.t*/,
+  m_SMczms/*这帧维护的和其他帧的共视所导致的边缘化时产生的HLFp_u*∑ST_Huu^-1*H_LFp_u.t,其中LF是本身这帧,_LF是共视的这帧*/;
+  //当在GBA中时KF.m_Zm.m_SMczms[Z.m_ik]中维护两个共视帧之间的所有地图点造成的投影前posex投影后pose的影响 ∑H投影前pose_u * Huu^-1 * H投影后pose_u.t
 };
 
 }

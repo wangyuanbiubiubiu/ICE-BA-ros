@@ -32,7 +32,7 @@ class PoseViewer {
   typedef Eigen::Matrix<float, 9, 1> SpeedAndBias;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   constexpr static const int imageSize = 400;
-  PoseViewer();  // this we can register as a callback
+  PoseViewer();  // this we can register as acc callback
   void set_clear_canvas_before_draw(bool clear_canvas_before_draw);
   void addPose(const Eigen::Matrix4f & T_WS,
                const Eigen::Matrix<float, 9, 1> & speedAndBiases,

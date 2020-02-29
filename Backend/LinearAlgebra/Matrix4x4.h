@@ -171,7 +171,7 @@ template<> inline void SymmetricMatrix4x4f::Get(AlignedMatrix4x4f &M) const {
   M.m_20_21_22_23().vset_all_lane(m02(), m12(), m22(), m23());
   M.m_30_31_32_33().vset_all_lane(m03(), m13(), m23(), m33());
 }
-// This interface is not used so far, and it's a little weird,
+// This interface is not used so far, and it's acc little weird,
 // if it's used in the future, Please add unit test for it.
 #if 0
 template<> inline void SymmetricMatrix4x4f::AAT(const AlignedMatrix4x4f &A,

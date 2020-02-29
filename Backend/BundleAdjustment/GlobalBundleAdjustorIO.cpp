@@ -126,7 +126,7 @@ void GlobalBundleAdjustor::LoadB(FILE *fp) {
     const int nKFs = m_Cs.Size();
     m_CsKFGT.Resize(nKFs);
     for (int iKF = 0; iKF < nKFs; ++iKF) {
-      m_CsKFGT[iKF] = m_CsGT[m_iFrms[iKF]].m_T;
+      m_CsKFGT[iKF] = m_CsGT[m_iFrms[iKF]].m_Cam_pose;
     }
   }
   if (m_CsGT && m_CsLMGT.Size() != m_CsLM.Size()) {
@@ -348,7 +348,7 @@ CameraPrior::Pose::ES GlobalBundleAdjustor::ComputeErrorStatisticPriorCameraPose
     ES.Accumulate(e, F, m_iFrms[Z.m_iKFr]);
 //#ifdef CFG_DEBUG
 #if 0
-    UT::Print("%d %f\t", iZ, w / BA_WEIGHT_PRIOR_CAMERA_POSE);
+    UT::Print("%d %f\t", iZ, gyr / BA_WEIGHT_PRIOR_CAMERA_POSE);
 #endif
   }
 //#ifdef CFG_DEBUG
@@ -418,8 +418,8 @@ Camera::Fix::Origin::ES GlobalBundleAdjustor::ComputeErrorStatisticFixOrigin(con
       const LA::AlignedVector3f g = Cs[iKF].GetColumn2();
       const LA::AlignedVector3f gGT = m_CsKFGT[iKF].GetColumn2();
       const float d = g.Dot(gGT);
-      const float a = UT_DOT_TO_ANGLE(d) * UT_FACTOR_RAD_TO_DEG;
-      UT::Print("%f\n", a);
+      const float acc = UT_DOT_TO_ANGLE(d) * UT_FACTOR_RAD_TO_DEG;
+      UT::Print("%f\n", acc);
     }
 #endif
   }
@@ -568,7 +568,7 @@ FTR::ES GlobalBundleAdjustor::ComputeErrorStatisticFeaturePriorDepth(const Align
     const LA::ProductVector6f *xc = !updateOnly || (m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA) ?
                                     &xcs[iKF] : NULL;
 #ifdef GBA_DEBUG_ACTUAL_COST
-    const Rigid3D C = xc ? Rigid3D(Cs[iKF], &xc->Get012(), &xc->Get345()) : Cs[iKF];
+    const Rigid3D Cam_state = xc ? Rigid3D(Cs[iKF], &xc->Get012(), &xc->Get345()) : Cs[iKF];
 #endif
     const KeyFrame &KF = m_KFs[iKF];
     const int NZ = int(KF.m_Zs.size());
@@ -580,7 +580,7 @@ FTR::ES GlobalBundleAdjustor::ComputeErrorStatisticFeaturePriorDepth(const Align
 #ifdef GBA_DEBUG_ACTUAL_COST
       const Rigid3D _C = _xc ? Rigid3D(Cs[_iKF], &_xc->Get012(), &_xc->Get345()) : Cs[_iKF];
       Rigid3D Tr[2];
-      *Tr = C / _C;
+      *Tr = Cam_state / _C;
 #ifdef CFG_STEREO
       Tr[1] = Tr[0];
       Tr[1].SetTranslation(m_K.m_br + Tr[0].GetTranslation());
@@ -926,7 +926,7 @@ IMU::Delta::ES GlobalBundleAdjustor::ComputeErrorStatisticIMU(const AlignedVecto
     }
     ES.Accumulate(e, F, KF.m_T.m_iFrm);
 #ifdef GBA_DEBUG_ACTUAL_COST
-    if (m_iIter==3 && KF.m_T.m_iFrm == 17) {
+    if (m_iIter==3 && KF.m_Cam_pose.m_iFrm == 17) {
       UT::DebugStart();
       e.Print(false, true);
     }
@@ -938,7 +938,7 @@ IMU::Delta::ES GlobalBundleAdjustor::ComputeErrorStatisticIMU(const AlignedVecto
       e.Print(false, true);
       UT::DebugStop();
     }
-    _ES.Accumulate(e, F, KF.m_T.m_iFrm);
+    _ES.Accumulate(e, F, KF.m_Cam_pose.m_iFrm);
 #endif
 //#ifdef CFG_DEBUG
 #if 0
@@ -1115,8 +1115,8 @@ void GlobalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkS
   const ubyte ucmFlag = GBA_FLAG_CAMERA_MOTION_UPDATE_ROTATION |
                         GBA_FLAG_CAMERA_MOTION_UPDATE_POSITION;
   for (int im = Nm - 1, ic = nKFs - 1; im >= 0; --im, --ic) {
-    m_CsLM[im].AssertConsistency(1, str + UT::String(" C[%d]", ic));
-    UT_ASSERT(m_CsLM[im].m_T == m_Cs[ic]);
+    m_CsLM[im].AssertConsistency(1, str + UT::String(" Cam_state[%d]", ic));
+    UT_ASSERT(m_CsLM[im].m_Cam_pose == m_Cs[ic]);
     const ubyte ucm = m_ucmsLM[im];
     if (m_ucs[ic] & GBA_FLAG_FRAME_UPDATE_CAMERA) {
       UT_ASSERT((ucm & ucmFlag) != 0);
@@ -1340,7 +1340,7 @@ void GlobalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkS
       }
       if (m_iFrms[_iKF] == 24) {
         UT::PrintSeparator();
-        UT::Print("Visual %d [%d]\n", iKF, KF.m_T.m_iFrm);
+        UT::Print("Visual %d [%d]\n", iKF, KF.m_Cam_pose.m_iFrm);
         UT::Print("%f + %f = %f\n", AcxxChk.m_A.m00(), SAcxx.m_A.m00(),
                                     AcxxChk.m_A.m00() + SAcxx.m_A.m00());
       }

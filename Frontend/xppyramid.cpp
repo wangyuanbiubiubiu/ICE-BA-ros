@@ -233,7 +233,7 @@ typedef int32_t itemtype;
 typedef float acctype;
 typedef float itemtype;
 #endif
-
+//求协方差矩阵
 void XPTrackerInvoker::compute_covariance_matrix_and_update_patch(const Point2i& iprevPt,
                                                                   const InterpolationParam& inter_param,
                                                                   cv::Mat* IWinBuf, cv::Mat* derivIWinBuf,
@@ -277,8 +277,8 @@ void XPTrackerInvoker::compute_covariance_matrix_and_update_patch(const Point2i&
     const deriv_type* dsrc_row0 = derivI.ptr<deriv_type>(y + iprevPt.y) + iprevPt.x * cn2;
     const deriv_type* dsrc_row1 = derivI.ptr<deriv_type>(y + iprevPt.y + 1) + iprevPt.x * cn2;
 
-    deriv_type* Iptr = IWinBuf->ptr<deriv_type>(y);
-    deriv_type* dIptr = derivIWinBuf->ptr<deriv_type>(y);
+    deriv_type* Iptr = IWinBuf->ptr<deriv_type>(y);//patch图像像素值
+    deriv_type* dIptr = derivIWinBuf->ptr<deriv_type>(y);//patchI图像xy方向梯度
 
     x = 0;
 #if CV_SSE2
@@ -363,21 +363,21 @@ void XPTrackerInvoker::compute_covariance_matrix_and_update_patch(const Point2i&
     for (; x < winSize.width; ++x, dsrc_row0 += 2, dsrc_row1 += 2, dIptr += 2) {
       int ival = CV_DESCALE(src_row0[x]*inter_param.iw00 + src_row0[x+1]*inter_param.iw01 +
           src_row1[x]*inter_param.iw10 + src_row1[x+1]*inter_param.iw11,
-                            inter_param.w_bits - 5);
+                            inter_param.w_bits - 5);//像素值
       int ixval = CV_DESCALE(dsrc_row0[0]*inter_param.iw00 + dsrc_row0[2]*inter_param.iw01 +
           dsrc_row1[0]*inter_param.iw10 + dsrc_row1[2]*inter_param.iw11,
-                             inter_param.w_bits);
+                             inter_param.w_bits);//x方向梯度
       int iyval = CV_DESCALE(dsrc_row0[1]*inter_param.iw00 + dsrc_row0[3]*inter_param.iw01 +
           dsrc_row1[1]*inter_param.iw10 + dsrc_row1[3]*inter_param.iw11,
-                             inter_param.w_bits);
+                             inter_param.w_bits);//y方向梯度
 
-      Iptr[x] = static_cast<int16_t>(ival);
-      dIptr[0] = static_cast<int16_t>(ixval);
-      dIptr[1] = static_cast<int16_t>(iyval);
+      Iptr[x] = static_cast<int16_t>(ival);//像素值（都是带缩放的）
+      dIptr[0] = static_cast<int16_t>(ixval);//x方向梯度
+      dIptr[1] = static_cast<int16_t>(iyval);//y方向梯度
 
-      iA11 += static_cast<itemtype>(ixval * ixval);
-      iA12 += static_cast<itemtype>(ixval * iyval);
-      iA22 += static_cast<itemtype>(iyval * iyval);
+      iA11 += static_cast<itemtype>(ixval * ixval);//Ix的平方
+      iA12 += static_cast<itemtype>(ixval * iyval);//Ix*Iy
+      iA22 += static_cast<itemtype>(iyval * iyval);//Iy的平方
     }
   }
 #if CV_SSE2
@@ -410,23 +410,31 @@ void XPTrackerInvoker::compute_covariance_matrix_and_update_patch(const Point2i&
   *(A_ptr + 2) = A22;
   *(A_ptr + 3) = (A22 + A11 - std::sqrt((A11 - A22) * (A11 - A22) +
       4.f * A12 * A12)) / (2 * winSize.width * winSize.height);
-  *(A_ptr + 4) = 1.f / (A11 * A22 - A12 * A12);
+  *(A_ptr + 4) = 1.f / (A11 * A22 - A12 * A12);//det(A)
 }
 
-
+//残差函数: r(delta) = sum{[J(x + delta.x , y + delta.y) - I(x,y)]^2 } 其中xy是在当前patch内的所有点,delta就是光流,优化变量就是delta
+//        对delta求导（1×2维度） Div(r(delta)) = 2 * sum [J(x + delta.x , y + delta.y) - I(x,y)] * [Jx , Jy]
+//         泰勒展开到一阶             = 2 * sum [J(x , y) + Jx * delta.x + Jy * delta.y - I(x,y)] * [Jx , Jy]
+//假设图片内的像素不变(我不知道这么推对不对)  = 2 * sum {J(x , y) + [delta.x,delta.y] * [Ix , Iy].t - I(x,y)} * [Ix , Iy]
+//J(x , y) - I(x,y) 是代码里的diff ,[Ix,Iy]写成dI
+//                            0.5 * Div(r(delta))    =  sum {[diff +delta* dI.t ] * dI}
+// 两边转置                    0.5 * Div(r(delta)).t    =  sum {dI.t * [diff + dI * delta.t ]}
+//导数为0,移项，构造AX = b -> X = A^-1 * b    sum{dI.t * dI } * delta.t =diff * sum {dI.t}
+//              代码里A就是矩阵A,代码里A的行列式是D -》 A^-1 = Ad(A) * D^-1 ,b就是[b1,b2].t，也就可以求解出delta了
 void XPTrackerInvoker::operator()(const Range& range) const {
-  const Point2f halfWin((winSize.width - 1) * 0.5f, (winSize.height - 1) * 0.5f);
+  const Point2f halfWin((winSize.width - 1) * 0.5f, (winSize.height - 1) * 0.5f);//winsize 7*7
   const Point2i halfWini(3, 3);
-  const cv::Size iter_cache_size(15, 15);
+  const cv::Size iter_cache_size(15, 15);//这个应该是用来留边框的吧
   const cv::Point2i half_diff(iter_cache_size.width / 2 - halfWini.x,
                               iter_cache_size.height / 2 - halfWin.y);
-  const Mat& I = *prevImg;
+  const Mat& I = *prevImg;//I,J分别是前一帧和当前帧图像
   const Mat& J = *nextImg;
-  const Mat& derivI = *prevDeriv;
-  const std::vector<XPKeyPoint>& prevPts = *m_prevPts;
+  const Mat& derivI = *prevDeriv;//前一帧的图像xy梯度
+  const std::vector<XPKeyPoint>& prevPts = *m_prevPts;//前一帧的特征点
   const int W_BITS = 14;
   const float FLT_SCALE = 1.f / (1 << 20);
-  std::vector<Point2f>& nextPts = *m_nextPts;
+  std::vector<Point2f>& nextPts = *m_nextPts;//有了imu,一般这里就会给用imu预测出的这个特征点修正了旋转以后的位置
   std::vector<bool>& status = *m_status;
   std::vector<float>& err = *m_err;
 
@@ -439,18 +447,18 @@ void XPTrackerInvoker::operator()(const Range& range) const {
 #endif
 
   int wh = winSize.height;
-
+//有效区域,裁掉iter_cache_size规定的边
   cv::Rect valid_region(half_diff.x, half_diff.y,
                         Jcols - iter_cache_size.width, Jrows - iter_cache_size.height);
   const bool get_min_eigenvals = (flags & OPTFLOW_LK_GET_MIN_EIGENVALS) != 0;
   cv::Mat J_patch(iter_cache_size, CV_MAKETYPE(DataType<uchar>::depth, 1),
                   iteration_patch_buffer.get());
   __builtin_prefetch(J_patch.data, 1, 3);
-  for (int ptidx = range.start; ptidx < range.end; ++ptidx) {
-    Point2f prevPt = prevPts[ptidx].pt * static_cast<float>(1. / (1 << (level - start_level)));
-    Point2f nextPt;
-    if (level == maxLevel) {
-      if (flags & cv::OPTFLOW_USE_INITIAL_FLOW)
+  for (int ptidx = range.start; ptidx < range.end; ++ptidx) {//遍历所有的之前点
+    Point2f prevPt = prevPts[ptidx].pt * static_cast<float>(1. / (1 << (level - start_level)));//在当前层这个特征点的坐标
+    Point2f nextPt;//当前帧特征点的位置
+    if (level == maxLevel) {//最顶层
+      if (flags & cv::OPTFLOW_USE_INITIAL_FLOW)//用预先给的位置，否则直接从之前的点开始找
         nextPt = nextPts[ptidx] * static_cast<float>(1. / (1 << (level - start_level)));
       else
         nextPt = prevPt;
@@ -462,13 +470,13 @@ void XPTrackerInvoker::operator()(const Range& range) const {
     DBG_XP_PYRAMID("ft_id: " << prevPts[ptidx].class_id << " cur level = " << level);
     DBG_XP_PYRAMID("prevPt = " << prevPt << " nextPt = " << nextPt);
 
-    Point2i iprevPt, inextPt;
-    prevPt -= halfWin;
+    Point2i iprevPt, inextPt;//之前帧和当前帧的整型,向左上角取点
+    prevPt -= halfWin;//以prevPt为中心7*7的patch的左上角坐标
     iprevPt.x = cvFloor(prevPt.x);
     iprevPt.y = cvFloor(prevPt.y);
 
     if (XPTrackerInvoker::is_keypoint_not_in_valid_range(iprevPt, valid_region)) {
-      if (level == start_level) {
+      if (level == start_level) {//如果不在有效区域那么就直接不进行光流追踪了
         status[ptidx] = false;
         err[ptidx] = 0.f;
       }
@@ -477,8 +485,8 @@ void XPTrackerInvoker::operator()(const Range& range) const {
     }
 
     int x, y;
-    float a = prevPt.x - iprevPt.x;
-    float b = prevPt.y - iprevPt.y;
+    float a = prevPt.x - iprevPt.x;//
+    float b = prevPt.y - iprevPt.y;//双线性插值
     int iw00 = cvRound((1.f - a) * (1.f - b) * (1 << W_BITS));
     int iw01 = cvRound(a * (1.f - b) * (1 << W_BITS));
     int iw10 = cvRound((1.f - a) * b * (1 << W_BITS));
@@ -507,16 +515,18 @@ void XPTrackerInvoker::operator()(const Range& range) const {
     XPKeyPointRepo* kp_repo =
         &(prevPts[ptidx].keypoint_repo->pyramids[level]);
 
-    Mat IWinBuf(winSize, CV_MAKETYPE(derivDepth, cn), kp_repo->patch);
+    Mat IWinBuf(winSize, CV_MAKETYPE(derivDepth, cn), kp_repo->patch);//这个patch的像素值
 
-    Mat derivIWinBuf(winSize, CV_MAKETYPE(derivDepth, cn2), kp_repo->xy_gradient);
+    Mat derivIWinBuf(winSize, CV_MAKETYPE(derivDepth, cn2), kp_repo->xy_gradient);//这个patch的梯度
     // to decide whether to recompute convariance matrix
     if (prevPts[ptidx].need_to_update_repo) {
-      compute_covariance_matrix_and_update_patch(iprevPt,
-                                                 InterpolationParam(iw00, iw01, iw10, iw11),
-                                                 &IWinBuf, &derivIWinBuf,
-                                                 kp_repo->covariance_maxtrix);
+      compute_covariance_matrix_and_update_patch(iprevPt/*前一帧的特征点的最近的左上角坐标*/,
+                                                 InterpolationParam(iw00, iw01, iw10, iw11)/*双线性插值相关函数*/,
+                                                 &IWinBuf/*I图像这个点patch的像素*/, &derivIWinBuf/*I图像这个点patch的xy梯度*/,
+                                                 kp_repo->covariance_maxtrix/*协方差矩阵*/);
     }
+    //矩阵A [A11(Ix * Ix) , A12(Ix * Iy)]
+    //      [A21(Ix * Iy) , A11(Iy * Iy)]
     // get the convariance matrix
     float A11 = kp_repo->covariance_maxtrix[0];
     float A12 = kp_repo->covariance_maxtrix[1];
@@ -535,9 +545,9 @@ void XPTrackerInvoker::operator()(const Range& range) const {
       continue;
     }
 
-    float D = kp_repo->covariance_maxtrix[4];
+    float D = kp_repo->covariance_maxtrix[4];//Det(A),A的行列式
 
-    nextPt -= halfWin;
+    nextPt -= halfWin;//也取左上角patch坐标
     Point2f prevDelta;
     Point2i init_pos;
 
@@ -545,11 +555,11 @@ void XPTrackerInvoker::operator()(const Range& range) const {
     init_pos.y = cvFloor(nextPt.y);
 
     const int max_iterations = criteria.maxCount;
-    for (j = 0; j < max_iterations; ++j) {
+    for (j = 0; j < max_iterations; ++j) {//迭代次数
       inextPt.x = cvFloor(nextPt.x);
       inextPt.y = cvFloor(nextPt.y);
 
-      if (XPTrackerInvoker::is_keypoint_not_in_valid_range(inextPt, valid_region)) {
+      if (XPTrackerInvoker::is_keypoint_not_in_valid_range(inextPt, valid_region)) {//如果当前点不在有效区域,也不追踪
         if (level == start_level) {
           status[ptidx] = false;
         }
@@ -558,7 +568,7 @@ void XPTrackerInvoker::operator()(const Range& range) const {
       }
       // compute the current optical flow in pixels
       // this info will be used to decide whether update the cached buffer.
-      Point2i off = inextPt - init_pos;
+      Point2i off = inextPt - init_pos;//当前光流
 
       if (std::abs(off.x) > half_diff.x ||
           std::abs(off.y) > half_diff.y ||
@@ -587,7 +597,7 @@ void XPTrackerInvoker::operator()(const Range& range) const {
       }
 
       a = nextPt.x - inextPt.x;
-      b = nextPt.y - inextPt.y;
+      b = nextPt.y - inextPt.y;/*一样双线性插值算像素*/
       iw00 = cvRound((1.f - a) * (1.f - b) * (1 << W_BITS));
       iw01 = cvRound(a * (1.f - b) * (1 << W_BITS));
       iw10 = cvRound((1.f - a) * b * (1 << W_BITS));
@@ -607,14 +617,14 @@ void XPTrackerInvoker::operator()(const Range& range) const {
           const int16x4_t d28_2 = vdup_n_s16(static_cast<int16_t>(iw10));
           const int16x4_t d29_2 = vdup_n_s16(static_cast<int16_t>(iw11));
 #endif
-
+//遍历这个窗口的高
       for (y = 0; y < wh; y++) {
-        const uchar* Jptr0 = J_patch.ptr<uchar>(y + half_diff.y + off.y) +
+        const uchar* Jptr0 = J_patch.ptr<uchar>(y + half_diff.y + off.y) +//这个应该是要线性插值的点的上面那个y行的像素值?
             (half_diff.x + off.x);
-        const uchar* Jptr1 = J_patch.ptr<uchar>((y + half_diff.y) + (off.y + 1)) +
+        const uchar* Jptr1 = J_patch.ptr<uchar>((y + half_diff.y) + (off.y + 1)) +//这个是点下面的那个y行的像素值?
             (half_diff.x + off.x);
         const deriv_type* Iptr = IWinBuf.ptr<deriv_type>(y);
-        const deriv_type* dIptr = derivIWinBuf.ptr<deriv_type>(y);
+        const deriv_type* dIptr = derivIWinBuf.ptr<deriv_type>(y);//I图像的梯度
 
         x = 0;
 #if CV_SSE2
@@ -695,12 +705,12 @@ void XPTrackerInvoker::operator()(const Range& range) const {
             nb2 = vmlaq_s32(nb2, q2, vmovl_s16(q3.val[1]));
             x += 3;
 #endif
-        for (; x < winSize.width; ++x, dIptr += 2) {
+        for (; x < winSize.width; ++x, dIptr += 2) {//遍历窗口的宽
           int diff = CV_DESCALE(Jptr0[x] * iw00 + Jptr0[x + 1] * iw01 +
               Jptr1[x] * iw10 + Jptr1[x + 1] * iw11,
-                                W_BITS - 5) - Iptr[x];
-          ib1 += diff * dIptr[0];
-          ib2 += diff * dIptr[1];
+                                W_BITS - 5) - Iptr[x];//算这个patch内的总像素,delta_Ix
+          ib1 += diff * dIptr[0];//deltaI * Ix
+          ib2 += diff * dIptr[1];//deltaI * Iy
         }
       }
 #if CV_SSE2
@@ -784,17 +794,17 @@ void XPTrackerInvoker::operator()(const Range& range) const {
     }
   }
 }
-
-void XPcalcOpticalFlowPyrLK(const std::vector<cv::Mat>& _prevPyramids,
-                            const std::vector<cv::Mat>& _nextPyramids,
-                            std::vector<XPKeyPoint>* _prevPts,
-                            std::vector<Point2f>* _nextPts,
-                            std::vector<bool>* _status,
-                            std::vector<float>* _err,
-                            const cv::Size _win_size,
-                            int _max_level,
-                            int _start_level,
-                            TermCriteria _criteria,
+//光流追踪
+void XPcalcOpticalFlowPyrLK(const std::vector<cv::Mat>& _prevPyramids/*之前帧的所有金字塔图片*/,
+                            const std::vector<cv::Mat>& _nextPyramids/*当前帧的所有金字塔图片*/,
+                            std::vector<XPKeyPoint>* _prevPts/*前一帧提取到的特征点*/,
+                            std::vector<Point2f>* _nextPts/*前一帧特征点在当前帧的位置*/,
+                            std::vector<bool>* _status/*记录了每个点有没有被光流追踪上*/,
+                            std::vector<float>* _err/*误差*/,
+                            const cv::Size _win_size/*每个金字塔等级的搜索窗口的winSize大小*/,
+                            int _max_level/*金字塔层数*/,
+                            int _start_level/*从第几层开始*/,
+                            TermCriteria _criteria/*终止条件*/,
                             int _flags, double _minEigThreshold) {
 #ifdef _XP_OPTICAL_FLOW_DEBUG_MODE_
   CHECK_EQ(_win_size.width, 7) << "only support window size 7 for now";
@@ -803,11 +813,11 @@ void XPcalcOpticalFlowPyrLK(const std::vector<cv::Mat>& _prevPyramids,
   CHECK_NOTNULL(_nextPts);
   CHECK_NOTNULL(_status);
   CHECK_NOTNULL(_err);
-  CHECK_LT(_max_level, 4) << "only support 4 level pyramids";
+  CHECK_LT(_max_level, 4) << "only support 4 level pyramids";//最大支持4层
 #endif
   const int npoints = _prevPts->size();
   CHECK_GT(npoints, 0);
-  _nextPts->resize(npoints);
+  _nextPts->resize(npoints);//扩容
   _err->resize(npoints);
   _status->resize(npoints);
 
@@ -815,7 +825,7 @@ void XPcalcOpticalFlowPyrLK(const std::vector<cv::Mat>& _prevPyramids,
   std::vector<bool>& status = *_status;
   std::vector<XPKeyPoint>& prevPts = *_prevPts;
   // allocate memory for new keypoint,
-  for (i = 0; i < npoints; i++) {
+  for (i = 0; i < npoints; i++) {//给之前的特征点的winsize的patch分配内存
     if (prevPts[i].need_to_update_repo) {
       prevPts[i].allocate();  // will not reallocate memory
     }
@@ -831,16 +841,17 @@ void XPcalcOpticalFlowPyrLK(const std::vector<cv::Mat>& _prevPyramids,
   else
     _criteria.epsilon = std::min(std::max(_criteria.epsilon, 0.), 10.);
   _criteria.epsilon *= _criteria.epsilon;
-
+//从最高金字塔开始遍历,最高只支持4层金字塔,即最高层数是3
   for (level = _max_level; level >= _start_level; --level) {
     // compute deriv images
     Size imgSize = _prevPyramids[level].size();
     Mat derivI(imgSize.height, imgSize.width, CV_MAKETYPE(DataType<deriv_type>::depth, 2),
                xy_gradient_buffer_prev.get());
-    calcSharrDeriv(_prevPyramids[level], &derivI);
+    calcSharrDeriv(_prevPyramids[level], &derivI);//求图像差分
 
     // invoke optical flow, single thread
     DBG_XP_PYRAMID("XPTrackerInvoker at level " << level);
+    //光流部分的注释去看operator()这部分的注释
     XPTrackerInvoker(_prevPyramids[level], derivI,
                      _nextPyramids[level], _prevPts, _nextPts,
                      _status, _err,

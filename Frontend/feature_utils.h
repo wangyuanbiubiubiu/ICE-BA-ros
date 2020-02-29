@@ -135,7 +135,7 @@ inline cv::Mat fast_pyra_down(const cv::Mat& img_in_smooth, uchar* const data = 
   } else {
     cv::Mat img_in_small(img_in_smooth.rows / compress_ratio,
                          img_in_smooth.cols / compress_ratio,
-                         CV_8U, data);
+                         CV_8U, data);//直接存到data所指的地址
     fast_pyra_down_internal(img_in_smooth, &img_in_small);
     return img_in_small;
   }
@@ -154,11 +154,12 @@ void build_pyramids(const cv::Mat& img, int max_level,
                     std::vector<cv::Mat>* pyramids,
                     uchar* const pyra_buf_ptr = NULL);
 
-
+//地图点id生成器
 class IdGenerator {
  public:
   IdGenerator() : id_(0) {}
-  int get() {
+  int get()//得到新的id,首个id从1开始
+  {
     std::lock_guard<std::mutex> lock(id_mutex_);
     ++id_;
     // wrap around
@@ -173,13 +174,14 @@ class IdGenerator {
 
 // This class performs feature (re)detection + feature propagation with optical flow by
 // only considering the master view
-class FeatureTrackDetector {
- public:
+class FeatureTrackDetector
+        {
+ public://点管理的结构,对每一个特征点进行点管理
   struct FeatureTrack {
     explicit FeatureTrack(const cv::Point2f pt) : length(1), isActive(true), point(pt) {}
-    int length;
-    bool isActive;
-    cv::Point2f point;
+    int length;//点被追踪的长度,比如它用光流追,第一帧点被提取出长度就是1，到第二帧还被追踪上的话,追踪长度+1
+    bool isActive;//点是否还能看到
+    cv::Point2f point;//最后一次被观测到时的像素坐标
   };
 
   FeatureTrackDetector(const int length_thres,
@@ -204,7 +206,7 @@ class FeatureTrackDetector {
                                const cv::Matx33f* old_R_new_ptr = nullptr,
                                const bool absolute_static = false);
   void update_img_pyramids() {
-    curr_img_pyramids_.swap(prev_img_pyramids_);
+    curr_img_pyramids_.swap(prev_img_pyramids_);//更新一下buffer
     curr_pyramids_buffer_.swap(prev_pyramids_buffer_);
   }
   bool detect(const cv::Mat& img_in_smooth,
@@ -225,31 +227,32 @@ class FeatureTrackDetector {
  protected:
   // Once feature track exceeds this threshold, we break this feature track randomly
   // with drop_rate.
-  // [NOTE] Use a negative drop rate for no drop out
+  // [NOTE] Use acc negative drop rate for no drop out
   int length_threshold_;
   float drop_rate_;
-  bool use_fast_;
+  bool use_fast_;//默认使用fast
   int uniform_radius_;
-  IdGenerator id_generator_;
+  IdGenerator id_generator_;//地图点id生成器
 
   // A very simple-minded data structure to bookkeep feature track ids and lengths
   // We will have at most request_feat_num active feature tracks
-  std::map<int,  FeatureTrack> feature_tracks_map_;
+  std::map<int,  FeatureTrack> feature_tracks_map_;//用来点管理,只保存还能追踪到的地图点,key是这个地图点的全局id,value是这个特征点对应的轨迹追踪数据结构
 
   // A mask to hold the mask of the union of input mask and optical flow feats mask
   cv::Mat_<uchar> mask_with_of_out_;
 
  private:
   // Random generator
+  //随机数产生器
   std::default_random_engine generator_;
-  std::uniform_real_distribution<float> distribution_;
+  std::uniform_real_distribution<float> distribution_;//定义上下界
 
  private:
   // For XP optical flow
-  std::shared_ptr<uchar> prev_pyramids_buffer_;  // buffer for storing previous pyramids
-  std::shared_ptr<uchar> curr_pyramids_buffer_;  // buffer for storing current pyramids
-  std::vector<cv::Mat> prev_img_pyramids_;
-  std::vector<cv::Mat> curr_img_pyramids_;
+  std::shared_ptr<uchar> prev_pyramids_buffer_;  // buffer for storing previous pyramids //前一帧图片的金字塔图片
+  std::shared_ptr<uchar> curr_pyramids_buffer_;  // buffer for storing current pyramids //当前帧的图片的金字塔图片
+  std::vector<cv::Mat> prev_img_pyramids_;//前一帧图片的金字塔图片
+  std::vector<cv::Mat> curr_img_pyramids_;//当前图片的金字塔图片
 
  public:
   static constexpr int kMaxPyraLevelOF = 3;
@@ -271,8 +274,9 @@ class FeatureTrackDetector {
     BUILD_TO_PREV = 1
   };
 
-  void build_img_pyramids(const cv::Mat& img_in_smooth, int build_type = BUILD_TO_CURR) {
-    if (build_type == BUILD_TO_CURR) {
+  void build_img_pyramids(const cv::Mat& img_in_smooth, int build_type = BUILD_TO_CURR)
+  {
+    if (build_type == BUILD_TO_CURR) {//
       build_pyramids(img_in_smooth, kMaxPyraLevelOF,
                      &curr_img_pyramids_, curr_pyramids_buffer_.get());
     } else {
@@ -422,7 +426,7 @@ bool align2D_NEON(const cv::Mat& cur_img,
 #endif
 }  // namespace align
 
-// Warp a patch from the reference view to the current view (borrowed from SVO implementation)
+// Warp acc patch from the reference view to the current view (borrowed from SVO implementation)
 namespace warp {
 bool getWarpMatrixAffine(const vio::cameras::CameraBase& cam_ref,
                          const vio::cameras::CameraBase& cam_cur,
@@ -457,7 +461,7 @@ class DirectMatcher {
   struct Options {
     bool align_1d;   //!< in epipolar search: align patch 1D along epipolar line
     int max_iter;    //!< number of iterations for aligning the feature patches in gauss newton
-    float max_epi_length_optim;   //!< max length of epipolar line to skip epipolar search and directly go to img align  NOLINT
+    float max_epi_length_optim;//是否跳过极线搜索的阈值   //!< max length of epipolar line to skip epipolar search and directly go to img align  NOLINT
     size_t max_epi_search_steps;  //!< max number of evaluations along epipolar line
     bool subpix_refinement;       //!< do gauss newton feature patch alignment after epipolar search
     bool epi_search_edgelet_filtering;
@@ -472,20 +476,20 @@ class DirectMatcher {
         epi_search_edgelet_max_angle(0.7f)
     {}
   } options_;
-
+    //* 指定最小对齐字节数为了使用SSE
   // The patch_ and patch_with_border_ have to be aligned for SSE
   uint8_t patch_[patch_size_ * patch_size_] __attribute__((aligned(16)));
-  uint8_t patch_with_border_[(patch_size_ + 2) * (patch_size_ + 2)] __attribute__((aligned(16)));
+  uint8_t patch_with_border_[(patch_size_ + 2) * (patch_size_ + 2)] __attribute__((aligned(16)));// patch加上边界下的指针
   Eigen::Matrix2f A_cur_ref_;     //!< affine warp matrix
-  Eigen::Vector2f epi_dir_;
+  Eigen::Vector2f epi_dir_;//!< 极线段向量
   float epi_length_;  //!< length of epipolar line segment in pixels (only used for epipolar search)
   float h_inv_;       //!< hessian of 1d image alignment along epipolar line
-  Eigen::Vector2f px_cur_;
+  Eigen::Vector2f px_cur_;//!< 右相机的匹配特征位置
 
   DirectMatcher() {}
   ~DirectMatcher() = default;
 
-  // Find a match by directly applying subpix refinement.
+  // Find acc match by directly applying subpix refinement.
   // [NOTE] This function assumes that px_cur is already set to an estimate that is within
   // ~2-3 pixel of the final result!
   bool findMatchDirect(const vio::cameras::CameraBase& cam_ref,
@@ -523,48 +527,49 @@ class DirectMatcher {
 
   void createPatchFromPatchWithBorder();
 };
-
+//右目用来做立体匹配的
 class ImgFeaturePropagator {
  public:
   ImgFeaturePropagator(
-      const Eigen::Matrix3f& cur_camK,
-      const Eigen::Matrix3f& ref_camK,
-      const cv::Mat_<float>& cur_cv_dist_coeff,
-      const cv::Mat_<float>& ref_cv_dist_coeff,
-      const cv::Mat_<uchar>& cur_mask,
+      const Eigen::Matrix3f& right_camK,
+      const Eigen::Matrix3f& left_camK,
+      const cv::Mat_<float>& right_cv_dist_coeff,
+      const cv::Mat_<float>& left_cv_dist_coeff,
+      const cv::Mat_<uchar>& right_mask,
       int feat_det_pyramid_level,
       float min_feature_distance_over_baseline_ratio,
       float max_feature_distance_over_baseline_ratio);
   ~ImgFeaturePropagator() {}
 
   bool PropagateFeatures(
-      const cv::Mat& cur_img,
-      const cv::Mat& ref_img,  // TODO(mingyu): store image pyramids
-      const std::vector<cv::KeyPoint>& ref_keypoints,
-      const Eigen::Matrix4f& T_ref_cur,
-      std::vector<cv::KeyPoint>* cur_keypoints,
-      cv::Mat* cur_orb_features = nullptr,
+      const cv::Mat& right_img,
+      const cv::Mat& left_img,  // TODO(mingyu): store image pyramids
+      const std::vector<cv::KeyPoint>& left_keypoints,
+      const Eigen::Matrix4f& T_l_r,
+      std::vector<cv::KeyPoint>* right_keypoints,
+      cv::Mat* right_orb_features = nullptr,
       const bool draw_debug = false);
 
  protected:
   // options
   const float min_feature_distance_over_baseline_ratio_;
   const float max_feature_distance_over_baseline_ratio_;
-  const int feat_det_pyramid_level_;  // e.g. 2
+  const int feat_det_pyramid_level_;  // e.g. 2//总的金字塔层数
 
  protected:
   DirectMatcher direct_matcher_;
-  std::shared_ptr<vio::cameras::CameraBase> cam_ref_;
-  std::shared_ptr<vio::cameras::CameraBase> cam_cur_;
-  Eigen::Matrix3f R_cur_ref_;
-  Eigen::Vector3f t_cur_ref_;
-  cv::Mat_<uchar> mask_cur_;  // TODO(mingyu): may not be used
+  //左右相机投影&畸变模型
+  std::shared_ptr<vio::cameras::CameraBase> cam_left_;
+  std::shared_ptr<vio::cameras::CameraBase> cam_right_;
+  Eigen::Matrix3f R_r_l_;
+  Eigen::Vector3f t_r_l_;
+  cv::Mat_<uchar> mask_right_;  //右目相机的掩码// TODO(mingyu): may not be used
 
   // debug visualization
   cv::Mat dbg_img_;
-  cv::Mat dbg_ref_;
-  cv::Mat dbg_cur_;
-  cv::Mat* dbg_cur_ptr_ = nullptr;
+  cv::Mat dbg_left_;
+  cv::Mat dbg_right_;
+  cv::Mat* dbg_right_ptr_ = nullptr;
 };
 
 // Utility functions related to feature detections
@@ -587,7 +592,7 @@ bool detect_orb_features(const cv::Mat& img_in_raw,
                          float refine_harris_threshold = -1.f);
 
 // [NOTE] We keep this NON-pyramid general interface to support slave_det_mode = OF
-// This function is a wrapper of the pyramid version below.
+// This function is acc wrapper of the pyramid version below.
 void propagate_with_optical_flow(const cv::Mat& img_in_smooth,
                                  const cv::Mat_<uchar>& mask,
                                  const cv::Mat& pre_image,

@@ -42,24 +42,27 @@ struct Intrinsic {
   float ds[8];    // distortion parameters
 };
 
+
+//用于保存成dat文件所用
 struct Calibration {
   int w, h;       // image resolution
   bool fishEye;   // fish eye distortion model
-  float Tu[3][4]; // X_cam = Tu * X_imu
+  float Tu[3][4]; // X_cam = Tu * X_imu 存储的是Tc0_i
   float ba[3];    // initial acceleration bias
   float bw[3];    // initial gyroscope bias
   //float sa[3];
   Intrinsic K;    // intrinsic parameters
 #ifdef CFG_STEREO
-  float Tr[3][4]; // X_left = Tr * X_right
-  Intrinsic Kr;   // intrinsic parameters for right camera
+  float Tr[3][4]; // X_left = Tr * X_right  //Tc0_c1的外参
+        Intrinsic Kr;   // intrinsic parameters for right camera //右相机的内参
 #endif
 };
 
+//相机的位姿
 struct CameraPose {
   float R[3][3];  // rotation matrix, R[0][0] = FLT_MAX for unknown camera pose
   float p[3];     // position
-};                // for a 3D point in world frame X, its coordinate in camera frame is obtained by R * (X - p)
+};                // for acc 3D point in world frame X, its coordinate in camera frame is obtained by R * (X - p)
 
 struct CameraPoseCovariance {
   float S[6][6];  // position + rotation
@@ -67,32 +70,37 @@ struct CameraPoseCovariance {
                   // R = \hat R * exp(\tilde\theta)
 };
 
+//位姿因子和imu相关的运动状态的因子
 struct CameraIMUState {
-  CameraPose C;   // camera pose
+  CameraPose Cam_pose;   //原始名称C camera pose
   float v[3];     // velocity, v[0] = FLT_MAX for unknown velocity
   float ba[3];    // acceleration bias, ba[0] = FLT_MAX for unknown acceleration bias
-  float bw[3];    // gyroscope bias, bw[0] = FLT_MAX for unknown gyroscope bias
+  float bw[3];    //gyroscope bias, bw[0] = FLT_MAX for unknown gyroscope bias
 };
-
+//逆深度,其中d = 0是未知的深度
 struct Depth {
   float d;   // inverse depth, d = 0 for unknown depth
   float s2;  // variance
 };
 
+//像素坐标数据结构
 struct Point2D {
-  float x[2];     // feature location in the original image
-  float S[2][2];  // covariance matrix in the original image
+  float x[2];     //像素坐标 feature location in the original image
+  float S[2][2];  //协方差 covariance matrix in the original image
 };
 
 struct Point3D {
-  int idx;    // global point index
-  float X[3]; // 3D position, X[0] = FLT_MAX for unknown 3D position
+  int idx;    // 地图点全局id global point index
+  float X[3]; // 位置3D position, X[0] = FLT_MAX for unknown 3D position
 };
 
+//地图点测量的数据结构
 struct MapPointMeasurement {
-  union {
-    int iFrm; // frame ID
-    int idx;  // global point ID
+  union {//注意,这里如果是作为一个普通帧的观测结构来用的话,即在CF.feat_measures中时,iFrm,idx都表示的是全局的地图点id
+      //当被当作关键帧首次观测到的地图点的观测来用的时候,即在KF.Xs中的mp.feat_measures中时,iFrm,idx都表示的是这个关键帧的id
+
+    int iFrm; //首次看到这个地图点的关键帧的id// frame ID
+    int idx;  //全局地图点id,这个观测是观测的哪个地图点 global point ID
   };
   inline bool operator < (const MapPointMeasurement &X) const {
     return iFrm < X.iFrm
@@ -102,37 +110,37 @@ struct MapPointMeasurement {
 #endif
         ;
   }
-  Point2D x;
+  Point2D x;//特征点的像素坐标
 #ifdef CFG_STEREO
 //#if 1
-  ubyte right;
+  ubyte right;//是否是右目相机看到的地图点
 #endif
 };
 
 struct MapPoint {
-  Point3D X;
-  std::vector<MapPointMeasurement> zs;
+  Point3D X;//地图点在世界坐标系中的位置
+  std::vector<MapPointMeasurement> feat_measures;//原始名称zs 这个地图点的所有观测,这里左目右目的观测是各算一个观测的,分开算的
 };
 
 struct FeatureTrack {
   int idx;
   Point2D x;
 };
-
+//imu测量
 struct IMUMeasurement {
-  float a[3];     // acceleration
-  float w[3];     // gyroscope
+  float acc[3];     //原始名称c acceleration
+  float gyr[3];     //原始名称w gyroscope
   float t;        // timestamp
 };
 
 struct CurrentFrame {
-  int iFrm;                             // frame index
-  CameraIMUState C;                     // initial camera/IMU state of current frame
-  std::vector<MapPointMeasurement> zs;  // feature measurements of current frame
-  std::vector<IMUMeasurement> us;       // IMU measurements between last frame and current frame;
+  int iFrm;//当前帧的id                             //frame index
+  CameraIMUState Cam_state;                     //原始名称C initial camera/IMU state of current frame
+  std::vector<MapPointMeasurement> feat_measures;  //原始名称zs 这里存储老地图点的观测,左右两目都观测到了地图点也是分开push进去的 feature measurements of current frame
+  std::vector<IMUMeasurement> imu_measures;       //原始名称us IMU measurements between last frame and current frame;
                                         // the timestamp of first IMU must be the same as last frame
-  float t;                              // timestamp of current frame, should be greater than the timestamp of last IMU
-  Depth d;                              // a rough depth estimate for current frame
+  float t;                              //当前帧的时间戳,用的左相机的时间戳 timestamp of current frame, should be greater than the timestamp of last IMU
+  Depth d;                              // acc rough depth estimate for current frame
                                         // (e.g. average over all visible points in current frame)
   std::string fileName;                 // image file name, just for visualization
 #ifdef CFG_STEREO
@@ -142,21 +150,21 @@ struct CurrentFrame {
 };
 
 struct KeyFrame {
-  int iFrm;                             // frame index, -1 for invalid keyframe
-  CameraPose C;                         // initial camera pose of keyframe
-  std::vector<MapPointMeasurement> zs;  // feature measurements of keyframe
-  std::vector<MapPoint> Xs;             // new map points
-  Depth d;                              // a rough depth estimate
+  int iFrm;                             // frame index, -1 for invalid keyframe(这帧不是关键帧的时候)
+  CameraPose Cam_pose;                         //原始名称C initial camera pose of keyframe
+  std::vector<MapPointMeasurement> feat_measures;  //原始名称zs feature measurements of keyframe 存储的是对于老地图点的观测
+  std::vector<MapPoint> Xs;             // new map points 注意,这里的Xs只存储首次被这个关键帧看到的新的地图点,老的地图点它是不会存储的
+  Depth d;                              // acc rough depth estimate
 };
 
 struct SlidingWindow {
-  std::vector<int> iFrms;           // frame indexes of those sliding window frames whose
+  std::vector<int> iFrms;           //滑窗中帧id frame indexes of those sliding window frames whose
                                     // camera/IMU state has been updated since last call
-  std::vector<CameraIMUState> CsLF; // camera/IMU states corresponding to iFrms
-  std::vector<int> iFrmsKF;         // frame indexes of those keyframes whose camera pose
+  std::vector<CameraIMUState> CsLF; //滑窗中所有帧的状态 camera/IMU states corresponding to iFrms  //
+  std::vector<int> iFrmsKF;         //关键帧中的帧id frame indexes of those keyframes whose camera pose
                                     // has been updated since last call
-  std::vector<CameraPose> CsKF;     // camera poses corresponding to iFrmsKF
-  std::vector<Point3D> Xs;          // updated 3D points since last call
+  std::vector<CameraPose> CsKF;     //所有关键帧的pose camera poses corresponding to iFrmsKF
+  std::vector<Point3D> Xs;          //上一次call之后更新的地图点,世界坐标系下 updated 3D points since last call
 #ifdef CFG_CHECK_REPROJECTION
   std::vector<std::pair<float, float> > esLF, esKF;
 #endif
@@ -165,7 +173,7 @@ struct SlidingWindow {
 struct RelativeConstraint {
   int iFrm1, iFrm2;
   CameraPose T;       // X2 = T * X1 = R * (X1 - p)
-  CameraPoseCovariance S;      
+  CameraPoseCovariance S;
 };
 
 struct Error {

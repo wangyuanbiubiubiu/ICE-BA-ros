@@ -142,13 +142,18 @@ bool align1D(const cv::Mat& cur_img,
 }
 
 
-
+ //逆向组合法进行2D图像对齐,这个好像是在LK十年那个论文里有说过
+ //输入右相机的图像,从左相机变换到右相机上的patch_border,从左相机变换到右相机上的patch,最大迭代次数
+ //输出最终块匹配残差最小的右目中特征点的像素坐标
+ //残差: r = I(p_cur) - I(p_ref) + m ,其中I(*)表示在某个像素位置的光度, m是均值差.cur是右相机,ref是左相机
+ //优化变量是p_ref,m，这里为什么是p_ref而不是p_cur,是因为如果用p_cur，每次增量以后还需要再计算一次这个的J,用p_ref只用算一次,均值差也做为优化变量是防止噪声
 bool align2D(const cv::Mat& cur_img,
              uint8_t* ref_patch_with_border,
              uint8_t* ref_patch,
              const int n_iter,
              Vector2f* cur_px_estimate,
-             bool no_simd) {
+             bool no_simd)
+             {
 /*
 #ifdef __ARM_NEON__
   Vector2f cur_px_estimate_neon = *cur_px_estimate;
@@ -158,23 +163,26 @@ bool align2D(const cv::Mat& cur_img,
 #endif
 */
   bool converged = false;
-
+// 模板图像对像素 x,y 坐标进行求导
   // compute derivative of template and prepare inverse compositional
   float __attribute__((__aligned__(16))) ref_patch_dx[patch_area];
   float __attribute__((__aligned__(16))) ref_patch_dy[patch_area];
   Matrix3f H; H.setZero();
 
   // compute gradient and hessian
-  const int ref_step = patch_size+2;
+  const int ref_step = patch_size+2;//patch框边长
+     // 图像导数的指针
   float* it_dx = ref_patch_dx;
   float* it_dy = ref_patch_dy;
+  //构造H矩阵
   for (int y = 0; y < patch_size; ++y) {
     uint8_t* it = ref_patch_with_border + (y + 1) * ref_step + 1;
     for (int x = 0; x < patch_size; ++x, ++it, ++it_dx, ++it_dy) {
       Vector3f J;
+      //p_ref像素值关于位置，其实就是梯度
       J[0] = 0.5 * (it[1] - it[-1]);
       J[1] = 0.5 * (it[ref_step] - it[-ref_step]);
-      J[2] = 1;
+      J[2] = 1;//均值差的导数
       *it_dx = J[0];
       *it_dy = J[1];
       H += J*J.transpose();
@@ -184,17 +192,20 @@ bool align2D(const cv::Mat& cur_img,
   float mean_diff = 0;
 
   // Compute pixel location in new image:
+     //初值
   float u = (*cur_px_estimate)(0);
   float v = (*cur_px_estimate)(1);
 
   // termination condition
-  const float min_update_squared = 0.03 * 0.03;
+  const float min_update_squared = 0.03 * 0.03;//收敛条件
   const int cur_step = cur_img.step.p[0];
   float chi2 = std::numeric_limits<int>::max();
-  Vector3f update; update.setZero();
-  for (int iter = 0; iter < n_iter; ++iter) {
+  Vector3f update; update.setZero();//优化变量的增量
+  for (int iter = 0; iter < n_iter; ++iter) //优化开始
+  {
     int u_r = floor(u);
     int v_r = floor(v);
+    //边缘处跳过
     if (u_r < half_patch_size || v_r < half_patch_size ||
         u_r >= cur_img.cols-half_patch_size || v_r >= cur_img.rows-half_patch_size) {
       break;
@@ -205,6 +216,7 @@ bool align2D(const cv::Mat& cur_img,
     }
 
     // compute interpolation weights
+    //双线性插值I(i+u,j+v) = (1-u)(1-v)I(i,j) + (1-u)vI(i,j+1) + u(1-v)I(i+1,j) + uvI(i+1,j+1) 以算出这个特征点在右目图像中的像素值
     float subpix_x = u - u_r;
     float subpix_y = v - v_r;
     float wTL = (1.0 - subpix_x) * (1.0 - subpix_y);
@@ -213,21 +225,25 @@ bool align2D(const cv::Mat& cur_img,
     float wBR = subpix_x * subpix_y;
 
     // loop through search_patch, interpolate
-    uint8_t* it_ref = ref_patch;
-    float* it_ref_dx = ref_patch_dx;
-    float* it_ref_dy = ref_patch_dy;
+    uint8_t* it_ref = ref_patch;// 左图像 patch指针
+    float* it_ref_dx = ref_patch_dx; // 左图像 patch x方向导数指针
+    float* it_ref_dy = ref_patch_dy;// 左图像 patch y方向导数指针
     float new_chi2 = 0.0;
     Vector3f Jres; Jres.setZero();
-    for (int y = 0; y < patch_size; ++y) {
+    for (int y = 0; y < patch_size; ++y)
+    {
       uint8_t* it = static_cast<uint8_t*>(cur_img.data) +
           (v_r + y - half_patch_size) * cur_step + u_r - half_patch_size;
-      for (int x = 0; x < patch_size; ++x, ++it, ++it_ref, ++it_ref_dx, ++it_ref_dy) {
-        float search_pixel = wTL*it[0] + wTR*it[1] + wBL*it[cur_step] + wBR*it[cur_step+1];
+      for (int x = 0; x < patch_size; ++x, ++it, ++it_ref, ++it_ref_dx, ++it_ref_dy)
+      {
+          //残差r = I(p_cur) - I(p_ref) + m
+        float search_pixel = wTL*it[0] + wTR*it[1] + wBL*it[cur_step] + wBR*it[cur_step+1];//双线性插值得到curimg中的像素值
         float res = search_pixel - *it_ref + mean_diff;
+        //计算 H * deltax = -Jr中的Jres
         Jres[0] -= res*(*it_ref_dx);
         Jres[1] -= res*(*it_ref_dy);
         Jres[2] -= res;
-        new_chi2 += res*res;
+        new_chi2 += res*res;// 卡方
       }
     }
 
@@ -243,6 +259,8 @@ bool align2D(const cv::Mat& cur_img,
     */
     chi2 = new_chi2;
 
+    //更新变量
+    //deltax = H.inv * -Jr
     update = Hinv * Jres;
     u += update[0];
     v += update[1];
@@ -255,7 +273,9 @@ bool align2D(const cv::Mat& cur_img,
             << "\t chi2 = " << chi2;
 #endif
 
-    if (update[0] * update[0] + update[1] * update[1] < min_update_squared) {
+    if (update[0] * update[0] + update[1] * update[1] < min_update_squared)
+    {
+        //满足收敛条件
 #if SUBPIX_VERBOSE
       VLOG(2) << "converged.";
 #endif

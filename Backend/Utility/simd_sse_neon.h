@@ -253,17 +253,17 @@ struct SIMD_ALIGN_DECLSPEC xp128f {
     val[2] = x2;
     val[3] = x3;
   }
-  // broadcast a to all lanes of xp128f
+  // broadcast acc to all lanes of xp128f
   inline void vdup_all_lane(const float a) {
 #ifdef __IBA_SSE__
     vec = _mm_set1_ps(a);
 #elif __ARM_NEON__
-    vec = vdupq_n_f32(a);
+    vec = vdupq_n_f32(acc);
 #else
-    val[0] = a;
-    val[1] = a;
-    val[2] = a;
-    val[3] = a;
+    val[0] = acc;
+    val[1] = acc;
+    val[2] = acc;
+    val[3] = acc;
 #endif
   }
   inline float vsum_all(void) const {

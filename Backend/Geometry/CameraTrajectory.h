@@ -115,14 +115,14 @@ class CameraTrajectory {
         ++_v;
       }
       if (n2 == 1) {
-        fscanf(fp, "%f %f %f\n", &C.m_T.r00(), &C.m_T.r01(), &C.m_T.r02());
-        fscanf(fp, "%f %f %f\n", &C.m_T.r10(), &C.m_T.r11(), &C.m_T.r12());
-        fscanf(fp, "%f %f %f\n", &C.m_T.r20(), &C.m_T.r21(), &C.m_T.r22());
-        fscanf(fp, "%f %f %f\n", &C.m_T.tx(), &C.m_T.ty(), &C.m_T.tz());
+        fscanf(fp, "%f %f %f\n", &C.m_Cam_pose.r00(), &C.m_Cam_pose.r01(), &C.m_Cam_pose.r02());
+        fscanf(fp, "%f %f %f\n", &C.m_Cam_pose.r10(), &C.m_Cam_pose.r11(), &C.m_Cam_pose.r12());
+        fscanf(fp, "%f %f %f\n", &C.m_Cam_pose.r20(), &C.m_Cam_pose.r21(), &C.m_Cam_pose.r22());
+        fscanf(fp, "%f %f %f\n", &C.m_Cam_pose.tx(), &C.m_Cam_pose.ty(), &C.m_Cam_pose.tz());
         if (flag & CT_FLAG_INVERSE) {
-          C.m_T.Inverse();
+          C.m_Cam_pose.Inverse();
         }
-        C.m_T.GetPosition(C.m_p);
+        C.m_Cam_pose.GetPosition(C.m_p);
       } else if (n2 == 7 || n2 == 8 || n2 == 17) {
         C.m_p.Set(_v);
         if (flag & CT_FLAG_XYZW) {
@@ -134,7 +134,7 @@ class CameraTrajectory {
           q.Inverse();
         }
         q.Normalize();
-        C.m_T.Set(q, C.m_p);
+        C.m_Cam_pose.Set(q, C.m_p);
         if (n2 == 17) {
           C.m_v.Set(_v + 7);
           if (flag & CT_FLAG_MOTION_BABW) {
@@ -149,21 +149,21 @@ class CameraTrajectory {
           ++SN;
         }
       } else {
-        C.m_T.Set(_v);
+        C.m_Cam_pose.Set(_v);
 //#ifdef CFG_DEBUG
 #if 0
         T.AssertOrthogonal();
 #endif
         if (flag & CT_FLAG_INVERSE) {
-          C.m_T.Inverse();
+          C.m_Cam_pose.Inverse();
         }
-        C.m_T.GetPosition(C.m_p);
+        C.m_Cam_pose.GetPosition(C.m_p);
       }
       if (flag & CT_FLAG_LEFT_HAND) {
-        C.m_T.GetQuaternion(q);
+        C.m_Cam_pose.GetQuaternion(q);
         q.y() = -q.y();
         C.m_p.y() = -C.m_p.y();
-        C.m_T.Set(q, C.m_p);
+        C.m_Cam_pose.Set(q, C.m_p);
       }
 //#ifdef CFG_DEBUG
 #if 0
@@ -301,12 +301,12 @@ class CameraTrajectory {
     const float t1 = m_ts[i1], t2 = m_ts[i2];
     const float w1 = (t2 - t) / (t2 - t1);
     const Camera &C1 = m_Cs[i1], &C2 = m_Cs[i2];
-    const Quaternion q1 = C1.m_T.GetQuaternion();
-    const Quaternion q2 = C2.m_T.GetQuaternion();
+    const Quaternion q1 = C1.m_Cam_pose.GetQuaternion();
+    const Quaternion q2 = C2.m_Cam_pose.GetQuaternion();
     Quaternion q;
     q.Slerp(w1, q1, q2);
     C.m_p.Interpolate(w1, C1.m_p, C2.m_p);
-    C.m_T.Set(q, C.m_p);
+    C.m_Cam_pose.Set(q, C.m_p);
     if (m_flag & CT_FLAG_MOTION) {
       C.m_v.Interpolate(w1, C1.m_v, C2.m_v);
       C.m_ba.Interpolate(w1, C1.m_ba, C2.m_ba);
@@ -322,8 +322,8 @@ class CameraTrajectory {
     const int N = Cs.Size();
     for (int i = 0; i < N; ++i) {
       Camera &C = Cs[i];
-      C.m_T = T * C.m_T;
-      C.m_T.GetPosition(C.m_p);
+      C.m_Cam_pose = T * C.m_Cam_pose;
+      C.m_Cam_pose.GetPosition(C.m_p);
     }
   }
   static inline void TransformBias(const Rotation3D &R, AlignedVector<Camera> &Cs,
@@ -349,18 +349,18 @@ class CameraTrajectory {
     Rigid3D Tr;
     if (g) {
       Rigid3D Tg;
-      const Rigid3D &T0 = Cs[0].m_T;
+      const Rigid3D &T0 = Cs[0].m_Cam_pose;
       const LA::AlignedVector3f g = T0.GetGravity();
       Tg.MakeIdentity(&g);
       Tr = Tg.GetInverse() * T0;
     } else {
-      Tr = Cs[0].m_T;
+      Tr = Cs[0].m_Cam_pose;
     }
     const int N = Cs.Size();
     for (int i = 0; i < N; ++i) {
       Camera &C = Cs[i];
-      C.m_T = C.m_T / Tr;
-      C.m_T.GetPosition(C.m_p);
+      C.m_Cam_pose = C.m_Cam_pose / Tr;
+      C.m_Cam_pose.GetPosition(C.m_p);
       if (m) {
         C.m_v = Tr.GetAppliedRotation(C.m_v);
       }

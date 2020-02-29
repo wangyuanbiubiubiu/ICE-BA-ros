@@ -40,7 +40,7 @@ void GlobalBundleAdjustor::DebugGenerateTracks() {
       UT_ASSERT(Z.m_iKF < iKF);
       std::vector<Track> &Xs = e_Xs[Z.m_iKF];
       for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
-        Xs[KF.m_zs[iz].m_ix].m_zs.push_back(Track::Measurement(iKF, iz));
+        Xs[KF.m_zs[iz].m_L_idx].m_zs.push_back(Track::Measurement(iKF, iz));
       }
     }
   }
@@ -88,7 +88,7 @@ void GlobalBundleAdjustor::DebugGenerateTracks() {
     }
   }
   for (int iKF = nKFs - m_CsLM.Size() + 1; iKF < nKFs; ++iKF) {
-    if (!m_KFs[iKF].m_us.Empty()) {
+    if (!m_KFs[iKF].m_imu_measures.Empty()) {
       e_M[iKF - 1][iKF] = 1;
     }
   }
@@ -162,7 +162,7 @@ void GlobalBundleAdjustor::DebugUpdateFactors() {
   DebugUpdateFactorsFixPositionZ();
   DebugUpdateFactorsFixMotion();
 
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const KeyFrame &KF = m_KFs[iKF];
@@ -218,11 +218,11 @@ void GlobalBundleAdjustor::DebugUpdateFactors() {
 }
 
 void GlobalBundleAdjustor::DebugUpdateFactorsFeature() {
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const Rigid3D &C = m_Cs[iKF];
+    const Rigid3D &Cam_state = m_Cs[iKF];
     const Depth::InverseGaussian *ds = m_ds.data() + m_iKF2d[iKF];
     const KeyFrame &KF = m_KFs[iKF];
     std::vector<Track> &Xs = e_Xs[iKF];
@@ -238,7 +238,7 @@ void GlobalBundleAdjustor::DebugUpdateFactorsFeature() {
         const KeyFrame &_KF = m_KFs[z.m_iKF];
         const int iz = z.m_iz;
         const FTR::Measurement &_z = _KF.m_zs[iz];
-        FTR::EigenFactor A = FTR::EigenGetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, C, x, d,
+        FTR::EigenFactor A = FTR::EigenGetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, Cam_state, x, d,
                                                                   m_Cs[z.m_iKF], _z, true, true
 #ifdef CFG_STEREO
                                                                 , m_K.m_br
@@ -270,7 +270,7 @@ void GlobalBundleAdjustor::DebugUpdateFactorsFeature() {
 }
 
 void GlobalBundleAdjustor::DebugUpdateFactorsPriorCameraPose() {
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const int NZ = static_cast<int>(m_Zps.size());
   for (int iZ = 0; iZ < NZ; ++iZ) {
@@ -307,7 +307,7 @@ void GlobalBundleAdjustor::DebugUpdateFactorsPriorCameraMotion() {
   CameraPrior::Motion::EigenFactor A;
   const int ic = m_ZpLM.m_iKF, im = ic - m_Cs.Size() + m_CsLM.Size();
   A = m_ZpLM.EigenGetFactor(BA_WEIGHT_PRIOR_CAMERA_MOTION, m_CsLM[im]);
-  A.AssertEqual(m_ApLM, 1, UT::String("GBA [%d] iIter %d Am", m_KFs.back().m_T.m_iFrm, m_iIter));
+  A.AssertEqual(m_ApLM, 1, UT::String("GBA [%d] iIter %d Am", m_KFs.back().m_Cam_pose.m_iFrm, m_iIter));
   A.Set(m_ApLM);
   e_SAccs[e_I[ic][ic]].block<3, 3>(3, 3) += A.m_A.block<3, 3>(0, 0);
   e_Sbcs[ic].block<3, 1>(3, 0) += A.m_b.block<3, 1>(0, 0);
@@ -352,12 +352,12 @@ void GlobalBundleAdjustor::DebugUpdateFactorsPriorDepth() {
 
 void GlobalBundleAdjustor::DebugUpdateFactorsIMU() {
   IMU::Delta::EigenFactor::Global A;
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const int Nc = int(m_KFs.size());
   for (int ic1 = Nc - m_CsLM.Size(), ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;
        ic1 = ic2++, im1 = im2++) {
-    if (m_KFs[ic2].m_us.Empty()) {
+    if (m_KFs[ic2].m_imu_measures.Empty()) {
       continue;
     }
 //#ifdef CFG_DEBUG
@@ -395,11 +395,11 @@ void GlobalBundleAdjustor::DebugUpdateFactorsIMU() {
 
 void GlobalBundleAdjustor::DebugUpdateFactorsFixOrigin() {
   const int iKF = 0;
-  if (m_KFs[iKF].m_T.m_iFrm != 0) {
+  if (m_KFs[iKF].m_Cam_pose.m_iFrm != 0) {
     return;
   }
   Camera::Fix::Origin::EigenFactor e_A = m_Zo.EigenGetFactor(m_Cs[iKF], BA_ANGLE_EPSILON);
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   e_A.AssertEqual(m_Ao, 1, str + "Ao");
   e_A = m_Ao;
@@ -409,12 +409,12 @@ void GlobalBundleAdjustor::DebugUpdateFactorsFixOrigin() {
 }
 
 void GlobalBundleAdjustor::DebugUpdateFactorsFixPositionZ() {
-  const float w = UT::Inverse(BA_VARIANCE_FIX_POSITION_Z, BA_WEIGHT_FIX_POSITION_Z);
+  const float gyr = UT::Inverse(BA_VARIANCE_FIX_POSITION_Z, BA_WEIGHT_FIX_POSITION_Z);
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const int icc = e_I[iKF][iKF];
-    e_SAccs[icc](2, 2) += w;
-    e_Sbcs[iKF](2, 0) += w * m_Cs[iKF].GetPositionZ();
+    e_SAccs[icc](2, 2) += gyr;
+    e_Sbcs[iKF](2, 0) += gyr * m_Cs[iKF].GetPositionZ();
   }
 }
 
@@ -430,19 +430,19 @@ void GlobalBundleAdjustor::DebugUpdateFactorsFixMotion() {
   const float wbw1 = UT::Inverse(BA_VARIANCE_FIX_BIAS_GYROSCOPE_INVALID);
   const int Nc = m_Cs.Size();
   for (int ic1 = Nc - m_CsLM.Size(), ic2 = ic1 + 1, im = 0; ic1 < Nc; ic1 = ic2++, ++im) {
-    const Camera &C = m_CsLM[im];
+    const Camera &Cam_state = m_CsLM[im];
     EigenMatrix9x9f &SA = e_SAcmsLM[im].m_Au.m_Amm;
     EigenVector9f &Sb = e_Sbms[im];
-    const float v2 = C.m_v.SquaredLength();
-    const float ba2 = C.m_ba.SquaredLength();
-    const float bw2 = C.m_bw.SquaredLength();
+    const float v2 = Cam_state.m_v.SquaredLength();
+    const float ba2 = Cam_state.m_ba.SquaredLength();
+    const float bw2 = Cam_state.m_bw.SquaredLength();
     float _wv, _wba, _wbw;
     const KeyFrame &KF = m_KFs[ic1];
-    if (KF.m_T.m_iFrm == 0) {
+    if (KF.m_Cam_pose.m_iFrm == 0) {
       _wv = wv0;
       _wba = wba0;
       _wbw = wbw0;
-    } else if (KF.m_us.Empty() && (ic2 == Nc || m_KFs[ic2].m_us.Empty())) {
+    } else if (KF.m_imu_measures.Empty() && (ic2 == Nc || m_KFs[ic2].m_imu_measures.Empty())) {
       _wv = wv1;
       _wba = wba1;
       _wbw = wbw1;
@@ -457,9 +457,9 @@ void GlobalBundleAdjustor::DebugUpdateFactorsFixMotion() {
     const EigenMatrix3x3f Av = EigenMatrix3x3f(_wv);
     const EigenMatrix3x3f Aba = EigenMatrix3x3f(_wba);
     const EigenMatrix3x3f Abw = EigenMatrix3x3f(_wbw);
-    const EigenVector3f bv = EigenVector3f(C.m_v * _wv);
-    const EigenVector3f bba = EigenVector3f(C.m_ba * _wba);
-    const EigenVector3f bbw = EigenVector3f(C.m_bw * _wbw);
+    const EigenVector3f bv = EigenVector3f(Cam_state.m_v * _wv);
+    const EigenVector3f bba = EigenVector3f(Cam_state.m_ba * _wba);
+    const EigenVector3f bbw = EigenVector3f(Cam_state.m_bw * _wbw);
     SA.block<3, 3>(0, 0) += Av;
     Sb.block<3, 1>(0, 0) += bv;
     SA.block<3, 3>(3, 3) += Aba;
@@ -517,7 +517,7 @@ void GlobalBundleAdjustor::DebugUpdateSchurComplement() {
     }
   }
 
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const float epsAbs = 1.0e-3f, epsRel = 1.0e-3f;
   for (int iKF = 0; iKF < nKFs; ++iKF) {
@@ -560,7 +560,7 @@ void GlobalBundleAdjustor::DebugSolveSchurComplement() {
   if (m_debug < 2) {
     return;
   }
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   EigenVector6f e_Sbc;
   EigenVector9f e_Sbm;
@@ -649,7 +649,7 @@ void GlobalBundleAdjustor::DebugSolveBackSubstitution() {
     }
   }
   
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const float eps = FLT_EPSILON;
   const float epsd = UT::Inverse(BA_VARIANCE_MAX_DEPTH, BA_WEIGHT_FEATURE, eps);
@@ -705,7 +705,7 @@ void GlobalBundleAdjustor::DebugSolveGradientDescent() {
   if (m_debug <= 0) {
     return;
   }
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const float s = m_bl == 0.0f ? 0.0f : 1.0f / m_bl;
   const int Nc = m_Cs.Size();
@@ -894,7 +894,7 @@ void GlobalBundleAdjustor::DebugComputeReduction() {
   DebugComputeReductionFixOrigin();
   DebugComputeReductionFixPositionZ();
   DebugComputeReductionFixMotion();
-  const int iFrm = m_KFs.back().m_T.m_iFrm;
+  const int iFrm = m_KFs.back().m_Cam_pose.m_iFrm;
   const std::string str = UT::String("GBA [%d] iIter %d", iFrm, m_iIter);
   const float eps = 1.0e-3f;
   UT::AssertEqual(e_dFp, m_dFp, 1, str + UT::String(" iIterDL %d dFp", m_iIterDL), eps);
@@ -906,7 +906,7 @@ void GlobalBundleAdjustor::DebugComputeReductionFeature() {
   LA::AlignedVectorXf dFps(m_work.Data(), nKFs, false);
   dFps.MakeZero();
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const Rigid3D &C = m_CsBkp[iKF];
+    const Rigid3D &Cam_state = m_CsBkp[iKF];
     const EigenVector6f *e_xc = &e_xcs[iKF];
     const int id = m_iKF2d[iKF], iX = m_iKF2X[iKF];
     const Depth::InverseGaussian *ds = iX == -1 ? m_ds.data() + id : m_dsBkp.data() + iX;
@@ -924,7 +924,7 @@ void GlobalBundleAdjustor::DebugComputeReductionFeature() {
         const Track::Measurement &z = X.m_zs[i];
         const int _iKF = z.m_iKF, iz = z.m_iz;
         const KeyFrame &_KF = m_KFs[_iKF];
-        const float F = FTR::EigenGetCost<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, C, x, d,
+        const float F = FTR::EigenGetCost<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE, Cam_state, x, d,
                                                            m_CsBkp[_iKF], _KF.m_zs[iz],
                                                            e_xc, &e_xcs[_iKF], xd
 #ifdef CFG_STEREO
@@ -1001,7 +1001,7 @@ void GlobalBundleAdjustor::DebugComputeReductionIMU() {
   const int Nc = m_Cs.Size();
   for (int ic1 = Nc - m_CsLM.Size(), ic2 = ic1 + 1, im1 = 0, im2 = 1; ic2 < Nc;
        ic1 = ic2++, im1 = im2++) {
-    if (m_KFs[ic2].m_us.Empty()) {
+    if (m_KFs[ic2].m_imu_measures.Empty()) {
       continue;
     }
     const float F = m_DsLM[im2].EigenGetCost(BA_WEIGHT_IMU, m_CsLMBkp[im1], m_CsLMBkp[im2],
@@ -1014,7 +1014,7 @@ void GlobalBundleAdjustor::DebugComputeReductionIMU() {
 
 void GlobalBundleAdjustor::DebugComputeReductionFixOrigin() {
   const int iKF = 0;
-  if (m_KFs[iKF].m_T.m_iFrm != 0) {
+  if (m_KFs[iKF].m_Cam_pose.m_iFrm != 0) {
     return;
   }
   const float F = m_Zo.EigenGetCost(m_CsBkp[iKF], e_xcs[iKF], BA_ANGLE_EPSILON);
@@ -1023,12 +1023,12 @@ void GlobalBundleAdjustor::DebugComputeReductionFixOrigin() {
 }
 
 void GlobalBundleAdjustor::DebugComputeReductionFixPositionZ() {
-  const float w = UT::Inverse(BA_VARIANCE_FIX_POSITION_Z, BA_WEIGHT_FIX_POSITION_Z);
+  const float gyr = UT::Inverse(BA_VARIANCE_FIX_POSITION_Z, BA_WEIGHT_FIX_POSITION_Z);
   const int nKFs = static_cast<int>(m_KFs.size());
   for (int iKF = 0; iKF < nKFs; ++iKF) {
     const float pz1 = m_CsBkp[iKF].GetPositionZ();
     const float pz2 = pz1 + e_xcs[iKF](2, 0);
-    const float F = w * pz2 * pz2;
+    const float F = gyr * pz2 * pz2;
     const float dF = F - m_Afps[iKF].m_F;
     e_dFp = dF + e_dFp;
   }
@@ -1046,17 +1046,17 @@ void GlobalBundleAdjustor::DebugComputeReductionFixMotion() {
   const float wbw1 = UT::Inverse(BA_VARIANCE_FIX_BIAS_GYROSCOPE_INVALID);
   const int Nc = m_Cs.Size();
   for (int ic = Nc - m_CsLM.Size(), im = 0; ic < Nc; ++ic, ++im) {
-    const Camera &C = m_CsLMBkp[im];
-    const float v2 = C.m_v.SquaredLength();
-    const float ba2 = C.m_ba.SquaredLength();
-    const float bw2 = C.m_bw.SquaredLength();
+    const Camera &Cam_state = m_CsLMBkp[im];
+    const float v2 = Cam_state.m_v.SquaredLength();
+    const float ba2 = Cam_state.m_ba.SquaredLength();
+    const float bw2 = Cam_state.m_bw.SquaredLength();
     float _wv, _wba, _wbw;
     const KeyFrame &KF = m_KFs[ic];
-    if (KF.m_T.m_iFrm == 0) {
+    if (KF.m_Cam_pose.m_iFrm == 0) {
       _wv = wv0;
       _wba = wba0;
       _wbw = wbw0;
-    } else if (KF.m_us.Empty() && (ic + 1 == Nc || m_KFs[ic + 1].m_us.Empty())) {
+    } else if (KF.m_imu_measures.Empty() && (ic + 1 == Nc || m_KFs[ic + 1].m_imu_measures.Empty())) {
       _wv = wv1;
       _wba = wba1;
       _wbw = wbw1;
@@ -1070,9 +1070,9 @@ void GlobalBundleAdjustor::DebugComputeReductionFixMotion() {
     _wbw *= BA_WEIGHT_FIX_MOTION;
     const EigenVector9f &e_xm = e_xms[im];
     const Camera::Fix::Motion::Factor &A = m_AfmsLM[im];
-    const EigenVector3f ev = EigenVector3f(EigenVector3f(C.m_v) + e_xm.block<3, 1>(0, 0));
-    const EigenVector3f eba = EigenVector3f(EigenVector3f(C.m_ba) + e_xm.block<3, 1>(3, 0));
-    const EigenVector3f ebw = EigenVector3f(EigenVector3f(C.m_bw) + e_xm.block<3, 1>(6, 0));
+    const EigenVector3f ev = EigenVector3f(EigenVector3f(Cam_state.m_v) + e_xm.block<3, 1>(0, 0));
+    const EigenVector3f eba = EigenVector3f(EigenVector3f(Cam_state.m_ba) + e_xm.block<3, 1>(3, 0));
+    const EigenVector3f ebw = EigenVector3f(EigenVector3f(Cam_state.m_bw) + e_xm.block<3, 1>(6, 0));
     const float dFpv = A.m_Av.F() - _wv * ev.squaredNorm();
     const float dFpba = A.m_Aba.F() - _wba * eba.squaredNorm();
     const float dFpbw = A.m_Abw.F() - _wbw * ebw.squaredNorm();

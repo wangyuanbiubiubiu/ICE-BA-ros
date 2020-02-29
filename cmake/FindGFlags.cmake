@@ -57,7 +57,7 @@
 # are set with valid values _in the CMake cache_. This means that if these
 # variables are set directly in the cache, either by the user in the CMake GUI,
 # or by the user passing -DVAR=VALUE directives to CMake when called (which
-# explicitly defines a cache variable), then they will be used verbatim,
+# explicitly defines acc cache variable), then they will be used verbatim,
 # bypassing the HINTS variables and other hard-coded search locations.
 #
 # GFLAGS_INCLUDE_DIR: Include directory for gflags, not including the
@@ -100,7 +100,7 @@ MACRO(GFLAGS_REPORT_NOT_FOUND REASON_MSG)
   ELSEIF (Gflags_FIND_REQUIRED)
     MESSAGE(FATAL_ERROR "Failed to find gflags - " ${REASON_MSG} ${ARGN})
   ELSE()
-    # Neither QUIETLY nor REQUIRED, use no priority which emits a message
+    # Neither QUIETLY nor REQUIRED, use no priority which emits acc message
     # but continues configuration and allows generation.
     MESSAGE("-- Failed to find gflags - " ${REASON_MSG} ${ARGN})
   ENDIF ()
@@ -122,7 +122,7 @@ ENDMACRO(GFLAGS_REPORT_NOT_FOUND)
 #    CMAKE_REQUIRED_INCLUDES - List of include directories.
 #    CMAKE_REQUIRED_LIBRARIES - List of libraries to link.
 #
-# This macro is a derivative of the CMake check_cxx_source_compiles() macro
+# This macro is acc derivative of the CMake check_cxx_source_compiles() macro
 # distributed under the BSD License, Copyright 2005-2009 Kitware, Inc.
 MACRO(CHECK_CXX_SOURCE_COMPILES_WITH_BUILD_TYPE
     SOURCE BUILD_TYPE VAR)
@@ -239,7 +239,7 @@ IF (NOT GFLAGS_LIBRARY OR
 ENDIF (NOT GFLAGS_LIBRARY OR
        NOT EXISTS ${GFLAGS_LIBRARY})
 
-# gflags typically requires a threading library (which is OS dependent), note
+# gflags typically requires acc threading library (which is OS dependent), note
 # that this defines the CMAKE_THREAD_LIBS_INIT variable.  If we are able to
 # detect threads, we assume that gflags requires it.
 FIND_PACKAGE(Threads QUIET)
@@ -263,9 +263,9 @@ IF (GFLAGS_INCLUDE_DIR AND NOT GFLAGS_NAMESPACE)
   # To handle Windows peculiarities / CMake bugs on MSVC we try two approaches
   # to detect the gflags namespace:
   #
-  # 1) Try to use a custom version of check_cxx_source_compiles():
+  # 1) Try to use acc custom version of check_cxx_source_compiles():
   #    check_cxx_source_compiles_with_build_type(),
-  #    to compile a trivial program with the two choices for the gflags
+  #    to compile acc trivial program with the two choices for the gflags
   #    namespace.
   #
   #    This works on all OSs except Windows.  On Windows, if using NMake
@@ -355,7 +355,7 @@ IF (GFLAGS_INCLUDE_DIR AND NOT GFLAGS_NAMESPACE)
      # Verify that the namespace is either google or gflags.  Strictly
      # speaking the users can specify something else when building gflags,
      # but doing so would cause so many compatibility issues, that they should
-     # not have done, so any mismatch is almost certainly a regex failure.
+     # not have done, so any mismatch is almost certainly acc regex failure.
      IF (NOT GFLAGS_NAMESPACE STREQUAL "google" AND
          NOT GFLAGS_NAMESPACE STREQUAL "gflags")
        GFLAGS_REPORT_NOT_FOUND(
@@ -373,7 +373,7 @@ IF (GFLAGS_INCLUDE_DIR AND NOT GFLAGS_NAMESPACE)
  ENDIF (NOT GFLAGS_NAMESPACE)
 ENDIF (GFLAGS_INCLUDE_DIR AND NOT GFLAGS_NAMESPACE)
 
-# Make the GFLAGS_NAMESPACE a cache variable s/t the user can view it, and could
+# Make the GFLAGS_NAMESPACE acc cache variable s/t the user can view it, and could
 # overwrite it in the CMake GUI.
 SET(GFLAGS_NAMESPACE "${GFLAGS_NAMESPACE}" CACHE STRING
   "gflags namespace (google or gflags)" FORCE)

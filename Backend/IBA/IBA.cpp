@@ -33,20 +33,22 @@
 //#define IBA_DEBUG_INVALIDATE_INITIAL_POINTS
 #endif
 
+#include <iostream>
 #ifndef _WIN32
 #include <boost/filesystem.hpp>
 #endif
-
+#include <glog/logging.h>
 namespace IBA {
 
 static inline void ConvertCamera(const CameraIMUState &Ci, Camera *Co) {
-  if (Ci.C.R[0][0] == FLT_MAX) {
+  if (Ci.Cam_pose.R[0][0] == FLT_MAX) {
     Co->Invalidate();
     return;
   }
-  Co->m_T.LA::AlignedMatrix3x3f::Set(Ci.C.R);
-  Co->m_p.Set(Ci.C.p);
-  Co->m_T.SetPosition(Co->m_p);
+  //将Ci的数据导入Co中
+  Co->m_Cam_pose.LA::AlignedMatrix3x3f::Set(Ci.Cam_pose.R);
+  Co->m_p.Set(Ci.Cam_pose.p);
+  Co->m_Cam_pose.SetPosition(Co->m_p);
   Co->m_v.Set(Ci.v);
   Co->m_ba.Set(Ci.ba);
   Co->m_bw.Set(Ci.bw);
@@ -63,13 +65,13 @@ static inline void ConvertCamera(const CameraPose &Ci, Rigid3D *Co) {
 }
 
 static inline void ConvertCamera(const Camera &Ci, CameraIMUState *Co) {
-  Ci.m_T.LA::AlignedMatrix3x3f::Get(Co->C.R);
-  Ci.m_p.Get(Co->C.p);
+  Ci.m_Cam_pose.LA::AlignedMatrix3x3f::Get(Co->Cam_pose.R);
+  Ci.m_p.Get(Co->Cam_pose.p);
   Ci.m_v.Get(Co->v);
   Ci.m_ba.Get(Co->ba);
   Ci.m_bw.Get(Co->bw);
 }
-
+//逆深度的类型转换
 static inline void ConvertDepth(const Depth &di, ::Depth::InverseGaussian *_do) {
   _do->u() = di.d;
   _do->s2() = di.s2;
@@ -89,27 +91,30 @@ Solver::~Solver() {
   UT_ASSERT(m_internal == NULL);
 #endif
 }
-
+//左右目的内外参,,是否要输出细节内容,是否输出debug信息,,参数所在位置
 void Solver::Create(const Calibration &K, const int serial, const int verbose, const int debug,
                     const int history, const std::string param, const std::string dir,
                     const std::vector<CameraIMUState> *XsGT, const std::vector<Depth> *dsGT) {
 #ifdef CFG_DEBUG
   UT_ASSERT(m_internal == NULL);
 #endif
-  m_internal = new Internal();
+  m_internal = new Internal();//内核
 #ifdef CFG_DEBUG
   UT_ASSERT(m_internal != NULL);
 #ifndef WIN32
   UT_ASSERT((reinterpret_cast<std::uintptr_t>(m_internal) & (SIMD_ALIGN - 1)) == 0);
 #endif
 #endif
+  //设置左相机的内参,外参Tc0_i
   Camera::Calibration &_K = m_internal->m_K;
+  //img_Size,内参,畸变,是否是鱼眼
   _K.m_K.Set(K.w, K.h, K.K.fx, K.K.fy, K.K.cx, K.K.cy, K.K.ds, K.fishEye);
-  const Rigid3D Tu(K.Tu);
+  const Rigid3D Tu(K.Tu);//外参Tc0_i
   _K.m_Ru = Tu;
   _K.m_pu = Tu.GetTranslation();
 #ifdef CFG_STEREO
-  const Rigid3D Tr(K.Tr);
+  //设置右目的内参
+  const Rigid3D Tr(K.Tr);//Tc0_c1的外参
   _K.m_Kr.Set(K.w, K.h, K.Kr.fx, K.Kr.fy, K.Kr.cx, K.Kr.cy, K.Kr.ds, K.fishEye,
               _K.m_K.fx(), _K.m_K.fy(), _K.m_K.cx(), _K.m_K.cy(), &Tr);
   _K.m_Rr = Tr;
@@ -121,13 +126,17 @@ void Solver::Create(const Calibration &K, const int serial, const int verbose, c
   _K.m_K.Print();
   _K.m_Kr.Print();
 #endif
+  //设置bias
   _K.m_ba.Set(K.ba);
   _K.m_bw.Set(K.bw);
   //_K.m_sa.Set(K.sa);
+  //读取配置参数,不过我看配置文件里也没配置这里的相关参数,param开头的是配置参数
   LoadParameters(param);
   AlignedVector<Camera> &CsGT = m_internal->m_CsGT;
-  if (XsGT) {
-    const int N = static_cast<int>(XsGT->size());
+  //XsGT和dsGT没用到,应该是和真值有关系吧
+  if (XsGT)
+  {
+      const int N = static_cast<int>(XsGT->size());
     CsGT.Resize(N);
     for (int i = 0; i < N; ++i) {
       Camera &C = CsGT[i];
@@ -140,7 +149,7 @@ void Solver::Create(const Calibration &K, const int serial, const int verbose, c
   }
   std::vector<::Depth::InverseGaussian> &DsGT = m_internal->m_DsGT;
   if (dsGT) {
-    const int N = static_cast<int>(dsGT->size());
+      const int N = static_cast<int>(dsGT->size());
     DsGT.resize(N);
     for (int i = 0; i < N; ++i) {
       ConvertDepth(dsGT->at(i), &DsGT[i]);
@@ -149,13 +158,17 @@ void Solver::Create(const Calibration &K, const int serial, const int verbose, c
     DsGT.clear();
   }
   m_internal->m_dir = dir;
+
+  /////暂时还不知道每个成员变量的含义,先往下看吧
+  //局部BA初始化
   m_internal->m_LBA.Initialize(this, serial & 255, verbose & 255,
                                static_cast<int>(static_cast<char>(debug & 255)),
                                static_cast<int>(static_cast<char>(history & 255)));
+  //全局BA
   m_internal->m_GBA.Initialize(this, (serial >> 8) & 255, (verbose >> 8) & 255,
                                static_cast<int>(static_cast<char>((debug >> 8) & 255)),
                                static_cast<int>(static_cast<char>((history >> 8) & 255)));
-  m_internal->m_debug = static_cast<int>(static_cast<char>(debug & 255));
+  m_internal->m_debug = static_cast<int>(static_cast<char>(debug & 255));//是否要debug
 }
 
 void Solver::Destroy() {
@@ -164,14 +177,16 @@ void Solver::Destroy() {
 }
 
 void Solver::Start() {
+  //启动LBA和GBA求解器
   m_internal->m_LBA.Start();
   m_internal->m_GBA.Start();
+  //
   m_internal->m_nFrms = 0;
   m_internal->m_Ts.resize(0);
   m_internal->m_LM.IBA_Reset();
   m_internal->m_iKF2d.assign(1, 0);
-  m_internal->m_id2X.resize(0);
-  m_internal->m_iX2d.resize(0);
+  m_internal->m_id2iX.resize(0);
+  m_internal->m_iX2id.resize(0);
   m_internal->m_id2idx.resize(0);
   m_internal->m_idx2iX.resize(0);
   m_internal->m_xs.resize(0);
@@ -203,30 +218,36 @@ void Solver::PushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF, const 
   }
 #endif
   //UT::Print("[%d]\n", CF.iFrm);
+    //如果是关键帧的话
   if (KF) {
     //UT::Print("[%d]\n", KF->iFrm);
-    //UT::Print("%f\n", KF->C.R[0][0]);
+    //UT::Print("%f\n", KF->Cam_state.R[0][0]);
     if (KF->iFrm == CF.iFrm) {
-      m_internal->PushCurrentFrame(CF);
-      m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_C);
-      m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_C, CF.iFrm));
+      m_internal->PushCurrentFrame(CF);//构造输入当前帧, 向m_ILF中存储imu测量
+      //输入关键帧,相机位姿状态,同时构造m_IKF,
+      m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_Cam_state);
+      //向局部地图中m_CsLF中push局部帧
+      m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state/**/, CF.iFrm/*当前帧的帧id*/));
+      //向局部地图中m_CsKF增加相机关键帧状态,以及m_iKF2d地图点历史数量的更新等
       m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
+      //向LBA输入普通帧和关键帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
       m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
       m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
     } else {
       m_internal->PushKeyFrame(*KF);
       m_internal->PushCurrentFrame(CF);
       m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
-      m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_C, CF.iFrm));
+      m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));
       m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
       m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
     }
-  } else {
-    m_internal->PushCurrentFrame(CF);
-    m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_C, CF.iFrm));
-    m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
+  } else
+  {
+    m_internal->PushCurrentFrame(CF);//输入当前帧, 向m_ILF中存储imu测量
+    m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));//向局部地图中m_CsLF中push局部帧
+    m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF/*当前输入关键帧*/);//向LBA输入普通帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
   }
-  m_internal->m_LBA.WakeUp(serial);
+  m_internal->m_LBA.WakeUp(serial);//唤醒LBA如果有关键帧还会唤醒GBA
   if (m_internal->m_debug) {
     m_internal->AssertConsistency();
   }
@@ -241,7 +262,7 @@ void Solver::PushKeyFrame(const KeyFrame &KF, const bool serial) {
     m_internal->AssertConsistency();
   }
 }
-
+//用来做闭环
 bool Solver::PushRelativeConstraint(const RelativeConstraint &Z) {
   if (Z.iFrm1 == -1 || Z.iFrm2 == -1) {
     return false;
@@ -323,7 +344,7 @@ static inline int PushTranslation(const LA::AlignedVector3f &t,
 
 void Solver::PushIMUMeasurementsGT(const CurrentFrame &CF) {
   m_internal->PushCurrentFrame(CF);
-  m_internal->m_usGT.Push(m_internal->m_ILF.m_us);
+  m_internal->m_usGT.Push(m_internal->m_ILF.m_imu_measures);
   m_internal->m_iusGT.push_back(m_internal->m_usGT.Size());
   m_internal->m_tsGT.push_back(CF.t);
 }
@@ -512,7 +533,7 @@ void Solver::PushDepthMeasurementsGT(const CurrentFrame &CF, const KeyFrame *KF,
     //UT::Print("[%d]\n", KF->iFrm);
     if (KF->iFrm == CF.iFrm) {
       m_internal->PushCurrentFrame(CF);
-      m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_C);
+      m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_Cam_state);
     } else {
       m_internal->PushKeyFrame(*KF);
       m_internal->PushCurrentFrame(CF);
@@ -539,7 +560,7 @@ void Solver::PushDepthMeasurementsGT(const CurrentFrame &CF, const KeyFrame *KF,
     const int N = static_cast<int>(IKF.m_Xs.size());
     for (int i1 = 0, i2 = 0; i1 < N; i1 = i2) {
       const int iKF = IKF.m_Xs[i1].m_iKF;
-      const Rigid3D &C = CsGT[CsKF[iKF].m_iFrm].m_T;
+      const Rigid3D &C = CsGT[CsKF[iKF].m_iFrm].m_Cam_pose;
       const int it0 = tsGT.Size();
       RsGT.Resize(0);
       its.assign(CsKF.size(), -1);
@@ -567,7 +588,7 @@ void Solver::PushDepthMeasurementsGT(const CurrentFrame &CF, const KeyFrame *KF,
         for (int j = 0; j < Nz; ++j) {
           const FTR::Measurement &z = X.m_zs[j];
           if ((it = its[z.m_iKF]) == -1) {
-            const Rigid3D T = CsGT[CsKF[z.m_iKF].m_iFrm].m_T / C;
+            const Rigid3D T = CsGT[CsKF[z.m_iKF].m_iFrm].m_Cam_pose / C;
             RsGT.Push(T);
             const LA::AlignedVector3f t = T.GetTranslation();
             it = its[z.m_iKF] = PushTranslation(t, &tsGT, &zsGT);
@@ -583,7 +604,7 @@ void Solver::PushDepthMeasurementsGT(const CurrentFrame &CF, const KeyFrame *KF,
                        ;
 //#ifdef CFG_DEBUG
 #if 0
-          const Rigid3D T = CsGT[CsKF[z.m_iKF].m_iFrm].m_T / C;
+          const Rigid3D T = CsGT[CsKF[z.m_iKF].m_iFrm].m_Cam_pose / Cam_state;
           const LA::AlignedVector3f t = T.GetTranslation();
           const LA::AlignedVector3f tr = t + br;
           Rs[iR].AssertEqual(T);
@@ -626,9 +647,9 @@ void Internal::PushDepthMeasurementsGT(const FRM::Frame &F) {
     const FRM::Measurement &Z = F.m_Zs[iZ];
     const int iFrmKF = m_CsKF[Z.m_iKF].m_iFrm;
 #ifdef CFG_DEBUG
-    UT_ASSERT(iFrmKF < F.m_T.m_iFrm);
+    UT_ASSERT(iFrmKF < F.m_Cam_pose.m_iFrm);
 #endif
-    const Rigid3D T = m_CsGT[F.m_T.m_iFrm].m_T / m_CsGT[iFrmKF].m_T;
+    const Rigid3D T = m_CsGT[F.m_T.m_iFrm].m_Cam_pose / m_CsGT[iFrmKF].m_Cam_pose;
     const LA::AlignedVector3f t = T.GetTranslation();
     const int it = PushTranslation(t, &m_TsGT, &m_zsGT);
 #ifdef CFG_STEREO
@@ -657,7 +678,7 @@ void Internal::PushDepthMeasurementsGT(const FRM::Frame &F) {
       ::Depth::Triangulate(1.0f, static_cast<int>(_zs.size()), _zs.data(),
                            &ds[ix], &m_work, true/*, &e*/);
       //UT::Print("iX = %d d = %f e = %f [%d]\n", iX, m_DsGT[iX].u(),
-      //          e * sqrtf(m_K.m_K.fxy()), F.m_T.m_iFrm);
+      //          e * sqrtf(m_K.m_K.fxy()), F.m_Cam_pose.m_iFrm);
     }
   }
 }
@@ -675,7 +696,7 @@ void Solver::TriangulateDepthsGT(std::vector<Depth> *dsGT) {
     if (iX == -1) {
       d.d = d.s2 = 0.0f;
     } else {
-      const int id = m_internal->m_iX2d[iX];
+      const int id = m_internal->m_iX2id[iX];
       ::Depth::InverseGaussian &_d = m_internal->m_dsGT[id];
       const std::vector<::Depth::Measurement> &zs = m_internal->m_zsGT[id];
       const int Nz = static_cast<int>(zs.size());
@@ -709,25 +730,30 @@ void Solver::SetCallbackLBA(const IbaCallback& iba_callback) {
 void Solver::SetCallbackGBA(const IbaCallback& iba_callback) {
   m_internal->m_GBA.SetCallback(iba_callback);
 }
-
+//获得LBA中的滑窗中更新了的普通帧以及更新了的关键帧还有更新了的地图点
 bool Solver::GetSlidingWindow(SlidingWindow *SW) {
-  const ubyte Uc = m_internal->m_LM.IBA_Synchronize(m_internal->m_nFrms,
-                                                    m_internal->m_CsLF, m_internal->m_CsKF,
-                                                    m_internal->m_ds, m_internal->m_uds);
+    //和LBA中数据同步,用来获得LBA中的滑窗中的相机状态,关键帧的相机状态以及所有的地图点
+  const ubyte Uc = m_internal->m_LM.IBA_Synchronize(m_internal->m_nFrms,/*LBA中已经输入的帧数,也就是当前是第几帧*/
+                                                    m_internal->m_CsLF/*lf的位姿*/, m_internal->m_CsKF/*kf的位姿*/,
+                                                    m_internal->m_ds/*所有地图点的逆深度*/, m_internal->m_uds/*所有地图点更新的flags*/);
   SW->iFrms.resize(0);
   SW->CsLF.resize(0);
 #ifdef CFG_CHECK_REPROJECTION
   SW->esLF.resize(0);
 #endif
-  if (Uc & LM_FLAG_FRAME_UPDATE_CAMERA_LF) {
-    CameraIMUState C;
+  if (Uc & LM_FLAG_FRAME_UPDATE_CAMERA_LF)
+  {//如果滑窗更新了
+
+      CameraIMUState C;
     for (std::list<LocalMap::CameraLF>::const_iterator i = m_internal->m_CsLF.begin();
-         i != m_internal->m_CsLF.end(); ++i) {
-      if (!i->m_uc) {
+         i != m_internal->m_CsLF.end(); ++i)
+    {
+      if (!i->m_uc)//没更新的就跳过
+      {
         continue;
       }
       SW->iFrms.push_back(i->m_iFrm);
-      ConvertCamera(i->m_C, &C);
+      ConvertCamera(i->m_C, &C);//得到一下r,p,v，ba,bw
       SW->CsLF.push_back(C);
 #ifdef CFG_CHECK_REPROJECTION
       SW->esLF.push_back(i->m_e);
@@ -740,17 +766,20 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW) {
   SW->esKF.resize(0);
 #endif
   const std::vector<LocalMap::CameraKF> &CsKF = m_internal->m_CsKF;
-  if (Uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) {
+  if (Uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF)
+  {
     ::Point3D p;
     Rigid3D C1;
     CameraPose C2;
     const int nKFs = static_cast<int>(CsKF.size());
-    for (int iKF = 0; iKF < nKFs; ++iKF) {
+    for (int iKF = 0; iKF < nKFs; ++iKF)//遍历所有的关键帧
+    {
       const LocalMap::CameraKF &C = CsKF[iKF];
-      if (!(C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF)) {
+      if (!(C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF))//没更新的就跳过
+      {
         continue;
       }
-      C1 = C.m_C;
+      C1 = C.m_Cam_pose;
       C1.LA::AlignedMatrix3x3f::Get(C2.R);
       C1.GetPosition(p);
       p.Get(C2.p);
@@ -764,15 +793,18 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW) {
   SW->Xs.resize(0);
   const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
   //if (Uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
-  if (Uc & ucFlag) {
+  if (Uc & ucFlag)
+  {
     Rigid3D C;
     ::Point3D X1;
     Point3D X2;
     const int nKFs = static_cast<int>(CsKF.size());
-    for (int iKF = 0; iKF < nKFs; ++iKF) {
+    for (int iKF = 0; iKF < nKFs; ++iKF)
+    {
       const LocalMap::CameraKF &_C = CsKF[iKF];
       //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
-      if (!(_C.m_uc & ucFlag)) {
+      if (!(_C.m_uc & ucFlag))
+      {
         continue;
       }
       const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
@@ -782,17 +814,21 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW) {
       const ubyte *uds = m_internal->m_uds.data() + id1;
       const int *idxs = m_internal->m_id2idx.data() + id1;
       const int Nx = id2 - id1;
-      C = _C.m_C;
-      for (int ix = 0; ix < Nx; ++ix) {
+      C = _C.m_Cam_pose;
+      for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
+      {
         //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
-        if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
+        if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
+        {
           continue;
         }
-        X2.idx = idxs[ix];
-        if (X2.idx == -1) {
+        X2.idx = idxs[ix];//idx是全局的前端的全局id
+        if (X2.idx == -1)
+        {
           continue;
         }
-        C.ApplyInversely(xs[ix], 1.0f / ds[ix].u(), X1);
+        //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
+        C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
         X1.Get(X2.X);
         SW->Xs.push_back(X2);
       }
@@ -877,7 +913,7 @@ bool Solver::DeleteKeyFrame(const int iFrm) {
     iKF2d[jKF] -= Nd;
   }
   iKF2d.erase(iKF2d.begin() + iKF);
-  std::vector<int> &id2X = m_internal->m_id2X, &iX2d = m_internal->m_iX2d;
+  std::vector<int> &id2X = m_internal->m_id2iX, &iX2d = m_internal->m_iX2id;
   std::vector<int> &id2idx = m_internal->m_id2idx, &idx2iX = m_internal->m_idx2iX;
   for (int id = id1; id < id2; ++id) {
     const int iX = id2X[id], idx = id2idx[id];
@@ -933,7 +969,7 @@ void Solver::DeleteMapPoints(const std::vector<int> &idxs) {
     return;
   }
   std::vector<int> &ids = m_internal->m_idxsTmp;
-  std::vector<int> &id2X = m_internal->m_id2X, &iX2d = m_internal->m_iX2d;
+  std::vector<int> &id2X = m_internal->m_id2iX, &iX2d = m_internal->m_iX2id;
   std::vector<int> &id2idx = m_internal->m_id2idx, &idx2iX = m_internal->m_idx2iX;
   const int N = static_cast<int>(idxs.size());
 //  ids.resize(N);
@@ -1009,8 +1045,8 @@ bool Solver::PropagateState(const std::vector<IMUMeasurement> &us, const float t
   for (int i = 0; i < N; ++i) {
     const IMUMeasurement &u = us[i];
     IMU::Measurement &_u = _us[i];
-    _u.m_a.Set(u.a);
-    _u.m_w.Set(u.w);
+    _u.m_a.Set(u.acc);
+    _u.m_w.Set(u.gyr);
     if (Ru.Valid()) {
       _u.m_a = Ru.GetApplied(_u.m_a);
       _u.m_w = Ru.GetApplied(_u.m_w);
@@ -1042,7 +1078,7 @@ bool Solver::PropagateState(const std::vector<IMUMeasurement> &us, const float t
     W.GetBlock(6, 0, Spr);  W.GetBlock(6, 6, Spp);
     LA::AlignedMatrix3x3f U, Upp, Upr/*, Urp*/, Urr;
     const SkewSymmetricMatrix u = D.m_RT.GetApplied(pu);
-    const Rotation3D R1T = C1.m_T.GetRotationTranspose();
+    const Rotation3D R1T = C1.m_Cam_pose.GetRotationTranspose();
     SkewSymmetricMatrix::ABT(Spr, u, U);
     U += Spp;
     LA::AlignedMatrix3x3f::ABT(R1T, U, Upp);
@@ -1074,9 +1110,9 @@ bool Solver::SaveFeatures(const std::string fileName, const std::vector<MapPoint
   const int Nz = static_cast<int>(zs.size());
   for (int iz = 0; iz < Nz; ++iz) {
     const MapPointMeasurement &z = zs[iz];
-    //const int id = m_internal->m_iX2d[z.iX];
+    //const int id = m_internal->m_iX2id[z.iX];
     const int iX = m_internal->m_idx2iX[z.idx];
-    const int id = m_internal->m_iX2d[iX];
+    const int id = m_internal->m_iX2id[iX];
     if (id != -1) {
       fprintf(fp, "%f, %f, 0, 0, 0, 0, %d,\n", z.x.x[0], z.x.x[1], m_internal->m_id2idx[id]);
     }
@@ -1088,10 +1124,10 @@ bool Solver::SaveFeatures(const std::string fileName, const std::vector<MapPoint
     fprintf(fp, "%d\n", Nx);
     for (int ix = 0; ix < Nx; ++ix) {
       const MapPoint &X = Xs->at(ix);
-      const int Nz = static_cast<int>(X.zs.size());
+      const int Nz = static_cast<int>(X.feat_measures.size());
       fprintf(fp, "%d %d\n", X.X.idx, Nz);
       for (int i = 0; i < Nz; ++i) {
-        const MapPointMeasurement &z = X.zs[i];
+        const MapPointMeasurement &z = X.feat_measures[i];
         fprintf(fp, "%d %f %f\n", z.iFrm, z.x.x[0], z.x.x[1]);
       }
     }
@@ -1194,7 +1230,7 @@ bool Solver::LoadFeatures(const std::string fileName, const int iFrm,
                 UT_ASSERT(X.X.idx == z.idx);
 #endif
                 z.iFrm = iFrm;
-                X.zs.insert(std::lower_bound(X.zs.begin(), X.zs.end(), z), z);
+                X.feat_measures.insert(std::lower_bound(X.feat_measures.begin(), X.feat_measures.end(), z), z);
               }
             } else
 #endif
@@ -1211,7 +1247,7 @@ bool Solver::LoadFeatures(const std::string fileName, const int iFrm,
               idx2iXTmp[z.idx] = iX;
 #endif
               z.iFrm = iFrm;
-              X.zs.assign(1, z);
+              X.feat_measures.assign(1, z);
             }
           }
         } else {
@@ -1260,7 +1296,7 @@ bool Solver::LoadFeatures(const std::string fileName, const int iFrm,
         {
           iX = static_cast<int>(Xs->size());
           Xs->resize(iX + 1);
-          Xs->back().zs.resize(0);
+          Xs->back().feat_measures.resize(0);
 #ifdef CFG_STEREO
           if (idx >= static_cast<int>(idx2iXTmp.size())) {
             idx2iXTmp.resize(idx + 1, -1);
@@ -1282,7 +1318,7 @@ bool Solver::LoadFeatures(const std::string fileName, const int iFrm,
               continue;
             }
           }
-          X.zs.insert(std::lower_bound(X.zs.begin(), X.zs.end(), z), z);
+          X.feat_measures.insert(std::lower_bound(X.feat_measures.begin(), X.feat_measures.end(), z), z);
         }
       }
       break;
@@ -1300,8 +1336,8 @@ void Solver::SaveB(FILE *fp) {
   UT::SaveB(m_internal->m_nFrms, fp);
   FRM::VectorSaveB(m_internal->m_Ts, fp);
   UT::VectorSaveB(m_internal->m_iKF2d, fp);
-  UT::VectorSaveB(m_internal->m_id2X, fp);
-  UT::VectorSaveB(m_internal->m_iX2d, fp);
+  UT::VectorSaveB(m_internal->m_id2iX, fp);
+  UT::VectorSaveB(m_internal->m_iX2id, fp);
   UT::VectorSaveB(m_internal->m_id2idx, fp);
   UT::VectorSaveB(m_internal->m_idx2iX, fp);
   UT::VectorSaveB(m_internal->m_xs, fp);
@@ -1330,8 +1366,8 @@ void Solver::LoadB(FILE *fp) {
   UT::LoadB(m_internal->m_nFrms, fp);
   FRM::VectorLoadB(m_internal->m_Ts, fp);
   UT::VectorLoadB(m_internal->m_iKF2d, fp);
-  UT::VectorLoadB(m_internal->m_id2X, fp);
-  UT::VectorLoadB(m_internal->m_iX2d, fp);
+  UT::VectorLoadB(m_internal->m_id2iX, fp);
+  UT::VectorLoadB(m_internal->m_iX2id, fp);
   UT::VectorLoadB(m_internal->m_id2idx, fp);
   UT::VectorLoadB(m_internal->m_idx2iX, fp);
   UT::VectorLoadB(m_internal->m_xs, fp);
@@ -1414,6 +1450,7 @@ bool Solver::SaveCamerasLBA(const std::string fileName, const bool append, const
 
 bool Solver::SaveCamerasGBA(const std::string fileName, const bool append, const bool poseOnly) {
   const std::string _fileName = ConvertFileName(fileName, m_internal->m_dir, append);
+  std::cout<<"file:"<<fileName<<std::endl;
   return m_internal->m_GBA.SaveCameras(_fileName, poseOnly);
 }
 
@@ -1490,7 +1527,7 @@ bool Internal::SavePoints(const AlignedVector<Rigid3D> &CsKF,
     if (iX == -1) {
       continue;
     }
-    const int id = m_iX2d[iX];
+    const int id = m_iX2id[iX];
     if (id == -1) {
       continue;
     }
@@ -1521,114 +1558,122 @@ bool Solver::SaveTimesGBA(const std::string fileName, const bool append) {
   const std::string _fileName = ConvertFileName(fileName, m_internal->m_dir, append);
   return m_internal->m_GBA.SaveTimes(_fileName);
 }
-
-static inline void Rectify(const ::Intrinsic &K, const Point2D &x,
-                           ::Point2D *xn, LA::SymmetricMatrix2x2f *Wn,
-                           ::Intrinsic::UndistortionMap *UM = NULL,
+//去畸变,并且计算这个这个特征点畸变部分的H矩阵,第一次时还会生成畸变对照表
+static inline void Rectify(const ::Intrinsic &K/*内参*/, const Point2D &x/*特征点的畸变像素坐标*/,
+                           ::Point2D *xn/*无畸变的归一化坐标*/, LA::SymmetricMatrix2x2f *Wn/*畸变部分的信息矩阵*/,
+                           ::Intrinsic::UndistortionMap *UM/*畸变对照表,key是畸变像素坐标,value是无畸变归一化坐标*/ = NULL,
                            const float eps = 0.0f
 #ifdef CFG_STEREO
-                         , Rotation3D *Rr = NULL
+                         , Rotation3D *Rr = NULL/*Tc0_c1如果给的话,就说明是双目的情况*/
 #endif
                          ) {
-  ::Point2D xd;
+  ::Point2D xd/*归一化坐标的前两维*/;
   Point2DCovariance Sd, Sn;
-  LA::AlignedMatrix2x2f J, JS;
+  LA::AlignedMatrix2x2f J_t, JS;
   LA::AlignedMatrix2x2f Wd;
-  K.k().ImageToNormalized(x.x, xd);
-  K.Undistort(xd, xn, &J, UM);
+  K.k().ImageToNormalized(x.x, xd);//前者为像素坐标,后者为归一化坐标
+    //去畸变,如果没有UndistortionMap畸变对照表的时候,需要将图片缩到FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做畸变对照。
+//如果没有UndistortionMap输入或者生成UndistortionMap的时候,会用dogleg方法进行迭代求解。如果用了UndistortionMap作为初值的话,就用G-N求解即可
+  K.Undistort(xd/*带畸变的归一化坐标前两维*/, xn/*去完畸变以后的归一化坐标*/, &J_t/*畸变部分雅克比J.t，这里原来写的是J,不太准确*/, UM/**/);
 //#ifdef CFG_DEBUG
 #if 0
   UT::Print("fx = %f %f\n", K.k().m_fx, K.fx());
   UT::Print("cx = %f %f\n", K.k().m_cx, K.cx());
   UT::Print("x = %f %f\n", x.x[0], x.x[1]);
   UT::Print("xn = "); xn->Print();
-  UT::Print("J = ");  J.Print();
+  UT::Print("J_t = ");  J_t.Print();
 #endif
-  K.k().ImageToNormalized(x.S, Sd);
-  Sd.GetInverse(Wd);
-  LA::AlignedMatrix2x2f::ABT(J, Wd, JS);
-  LA::SymmetricMatrix2x2f::ABT(JS, J, *Wn);
-  Wn->GetInverse(Sn);
+  K.k().ImageToNormalized(x.S, Sd);//S[0][0] * m_fxxI,  S[0][1] * m_fxyI,S[1][1] * m_fyyI，生成协方差
+  Sd.GetInverse(Wd);//协方差矩阵的逆,即信息矩阵
+  LA::AlignedMatrix2x2f::ABT(J_t, Wd, JS);// JS = J.t*Wd.t
+  LA::SymmetricMatrix2x2f::ABT(JS, J_t, *Wn);//生成H矩阵 Wn = Js*J_t.t = J_t*Wd.t*J
+  Wn->GetInverse(Sn);//Sn = H.inv
 #ifdef CFG_STEREO
-  if (Rr) {
-    *xn = Rr->GetApplied(*xn, J);
-    LA::SymmetricMatrix2x2f::AB(J, Sn, JS);
-    LA::SymmetricMatrix2x2f::ABT(JS, J, Sn);
+  if (Rr) {//将归一化坐标左乘Rc0c1以后进行了归一化,所以求了一下Rx对x的导数
+    *xn = Rr->GetApplied(*xn, J_t);
+    LA::SymmetricMatrix2x2f::AB(J_t, Sn, JS);
+    LA::SymmetricMatrix2x2f::ABT(JS, J_t, Sn);//对H.inv进行更新
   }
 #endif
-  Sn.IncreaseDiagonal(eps);
-  Sn.GetInverse(*Wn);
+  Sn.IncreaseDiagonal(eps);//防止为0?
+  Sn.GetInverse(*Wn);//wn = H也就是信息矩阵
+
   //////////////////////////////////////////////////////////////////////////
   //Wn->Set(Wd.m00(), Wd.m01(), Wd.m11());
   //////////////////////////////////////////////////////////////////////////
 }
-
+//构造输入普通帧数据结构,将这帧对于地图点的观测区分为对于各个关键帧上的地图点,然后将共视到的关键帧存到m_iKFsMatch里
+// m_zs存着所有的观测,m_Zs存储了看到了哪个关键帧的地图点,对这个关键帧的观测在m_zs的哪个位置
 const LocalBundleAdjustor::InputLocalFrame& Internal::PushCurrentFrame(const CurrentFrame &CF) {
-  m_ILF.m_T.m_iFrm = CF.iFrm;
+  m_ILF.m_T.m_iFrm = CF.iFrm;//给LBA的局部输入帧赋值
   m_ILF.m_T.m_t = CF.t;
   m_ILF.m_T.m_fileName = CF.fileName;
 #ifdef CFG_STEREO
   m_ILF.m_T.m_fileNameRight = CF.fileNameRight;
 #endif
 #ifdef CFG_DEBUG
-  UT_ASSERT(m_Ts.empty() || m_Ts.back() < m_ILF.m_T);
+  UT_ASSERT(m_Ts.empty() || m_Ts.back() < m_ILF.m_Cam_pose);
 #endif
-  m_Ts.push_back(m_ILF.m_T);
-  ConvertCamera(CF.C, &m_ILF.m_C);
+  m_Ts.push_back(m_ILF.m_T);//m_Ts负责存储所有帧的标签
+  ConvertCamera(CF.Cam_state, &m_ILF.m_Cam_state);//如果Cam_state里存了相机的状态,那么就导入,否则只是初始化
   ConvertDepth(CF.d, &m_ILF.m_d);
-  ConvertFeatureMeasurements(CF.zs, &m_ILF);
-  const int Nu = static_cast<int>(CF.us.size());
-  m_ILF.m_us.Resize(Nu);
-  for (int i = 0; i < Nu; ++i) {
-    const IMUMeasurement &u = CF.us[i];
-    IMU::Measurement &_u = m_ILF.m_us[i];
-    _u.m_a.Set(u.a);
-    _u.m_w.Set(u.w);
+  ConvertFeatureMeasurements(CF.feat_measures, &m_ILF);//转换对于老地图的地图点的观测
+  const int Nu = static_cast<int>(CF.imu_measures.size());
+  m_ILF.m_imu_measures.Resize(Nu);
+  for (int i = 0; i < Nu; ++i) {//imu观测的数量
+    const IMUMeasurement &u = CF.imu_measures[i];
+    IMU::Measurement &_u = m_ILF.m_imu_measures[i];
+    _u.m_a.Set(u.acc);
+    _u.m_w.Set(u.gyr);
     if (m_K.m_Ru.Valid()) {
+        //acc or gry (in c0) = Rc0_i* acc or gry (in imu) 测量值的坐标系是本体坐标系,转到了左相机坐标系下
       _u.m_a = m_K.m_Ru.GetApplied(_u.m_a);
       _u.m_w = m_K.m_Ru.GetApplied(_u.m_w);
     }
-    _u.m_a -= m_K.m_ba;
+    _u.m_a -= m_K.m_ba;//这个是啥操作,为什么转到了相机坐标系以后再减去bias,那这个bias是左相机坐标系下的零偏？
     _u.m_w -= m_K.m_bw;
-    _u.t() = u.t;
+    _u.t() = u.t;//m_w的第4维负责存储时间
   }
   ++m_nFrms;
   return m_ILF;
 }
-
+//输入关键帧,相机位姿状态,同时构造m_IKF
+//首先是将这帧对于地图点的观测区分为对于各个关键帧上的地图点,然后将共视到的关键帧存到m_iKFsMatch里,m_zs存着所有的观测,
+// m_Zs存储了看到了哪个关键帧的地图点,对这个关键帧的观测在m_zs的哪个位置
+//然后再将这个关键帧的新地图点进行索引的构建,并将新地图点存储在m_Xs中
 const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const Camera *C) {
 //#ifdef CFG_DEBUG
 #if 0
   UT::Print("%d\n", KF.iFrm);
 #endif
-  const std::vector<FRM::Tag>::iterator T = std::lower_bound(m_Ts.begin(), m_Ts.end(), KF.iFrm);
+  const std::vector<FRM::Tag>::iterator T = std::lower_bound(m_Ts.begin(), m_Ts.end(), KF.iFrm);//从tag里找到和这个关键帧对应的当前帧
 #ifdef CFG_DEBUG
   UT_ASSERT(T != m_Ts.end() && T->m_iFrm == KF.iFrm);
 #endif
-  m_IKF.m_T = *T;
-  m_Ts.erase(m_Ts.begin(), T);
-  ConvertCamera(KF.C, &m_IKF.m_C.m_T);
-  m_IKF.m_C.m_p.Set(KF.C.p);
+  m_IKF.m_T = *T;//将这个的标签给关键帧
+  m_Ts.erase(m_Ts.begin(), T);//从m_Ts中将这个关键帧信息剔除掉
+  ConvertCamera(KF.Cam_pose, &m_IKF.m_Cam_state.m_Cam_pose);//没用上这个,因为Cam_pose始终就是非法值
+  m_IKF.m_Cam_state.m_p.Set(KF.Cam_pose.p);
   if (C) {
-    m_IKF.m_C.m_v = C->m_v;
-    m_IKF.m_C.m_ba = C->m_ba;
-    m_IKF.m_C.m_bw = C->m_bw;
+    m_IKF.m_Cam_state.m_v = C->m_v;
+    m_IKF.m_Cam_state.m_ba = C->m_ba;
+    m_IKF.m_Cam_state.m_bw = C->m_bw;
   } else {
-    m_IKF.m_C.m_v.Invalidate();
-    m_IKF.m_C.m_ba.Invalidate();
-    m_IKF.m_C.m_bw.Invalidate();
+    m_IKF.m_Cam_state.m_v.Invalidate();
+    m_IKF.m_Cam_state.m_ba.Invalidate();
+    m_IKF.m_Cam_state.m_bw.Invalidate();
   }
   ConvertDepth(KF.d, &m_IKF.m_d);
-  ConvertFeatureMeasurements(KF.zs, &m_IKF);
-  m_CsKF.push_back(LocalMap::CameraKF(m_IKF.m_C.m_T, KF.iFrm));
-
-  const int Nx1 = static_cast<int>(KF.Xs.size());
+//将这帧对于地图点的观测区分为对于各个关键帧上的地图点,然后将共视到的关键帧存到m_iKFsMatch里,m_zs存着所有的观测,m_Zs存储了看到了哪个关键帧的地图点,对这个关键帧的观测在m_zs的哪个位置
+  ConvertFeatureMeasurements(KF.feat_measures, &m_IKF);
+  m_CsKF.push_back(LocalMap::CameraKF(m_IKF.m_Cam_state.m_Cam_pose, KF.iFrm));//将当前关键帧添加到局部地图中
+  const int Nx1 = static_cast<int>(KF.Xs.size());//被这个关键帧首次观测到的地图点的个数,即新地图点的个数
 #ifdef CFG_DEBUG
   for (int ix = 0; ix < Nx1; ++ix) {
     const MapPoint &X = KF.Xs[ix];
-    const int Nz = static_cast<int>(X.zs.size());
+    const int Nz = static_cast<int>(X.feat_measures.size());
     for (int i = 1; i < Nz; ++i) {
-      const MapPointMeasurement &z1 = X.zs[i - 1], &z2 = X.zs[i];
+      const MapPointMeasurement &z1 = X.feat_measures[i - 1], &z2 = X.feat_measures[i];
 #ifdef CFG_STEREO
 //#if 1
       UT_ASSERT(z1.iFrm < z2.iFrm || z1.iFrm == z2.iFrm && !z1.right && z2.right);
@@ -1638,16 +1683,16 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
     }
   }
 #endif
-  int idxMax = static_cast<int>(m_idx2iX.size()) - 1;
-  std::vector<MapPointIndex> &ixsSort = m_idxsSortTmp;
+  int idxMax = static_cast<int>(m_idx2iX.size()) - 1;//目前最大的前端的地图点全局id
+  std::vector<MapPointIndex> &ixsSort = m_idxsSortTmp;//地图点的id管理,每一个元素存储帧的id,全局地图点id,局部地图点id
   ixsSort.resize(Nx1);
-  for (int ix = 0; ix < Nx1; ++ix) {
-    const MapPoint &X = KF.Xs[ix];
-    idxMax = std::max(idxMax, X.X.idx);
-    ixsSort[ix].Set(X.zs.front().iFrm, X.X.idx, ix);
+  for (int ix = 0; ix < Nx1; ++ix) {//遍历所有新地图点
+    const MapPoint &X = KF.Xs[ix];//当前地图点
+    idxMax = std::max(idxMax, X.X.idx);//更新目前最大的前端的地图点全局id
+    ixsSort[ix].Set(X.feat_measures.front().iFrm, X.X.idx, ix);//输入的是当前帧的id,地图点的全局id,在当前新地图点中的id
   }
-  std::sort(ixsSort.begin(), ixsSort.end());
-  int iKF0, iKF1, iKF2;
+  std::sort(ixsSort.begin(), ixsSort.end());//按照iFrm的顺序,如果是同一帧的话,就按照地图点全局id进行排列
+  int iKF0/*当前帧id?*/, iKF1, iKF2;
   Rigid3D C1;
   if (ixsSort.empty()) {
     iKF0 = iKF2 = -1;
@@ -1657,32 +1702,34 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
       iKF0 = 0;
     } else {
       iKF0 = static_cast<int>(std::upper_bound(m_CsKF.begin(), m_CsKF.end(), _C) -
-                                               m_CsKF.begin()) - 1;
+                                               m_CsKF.begin()) - 1;//找到ixsSort.front().m_iFrm所对应的这帧在关键帧中间的位置
     }
-    _C.m_iFrm = ixsSort.back().m_iFrm;
+    _C.m_iFrm = ixsSort.back().m_iFrm;//这里为啥要重复赋值,ixsSort里的帧就是当前帧,id是一样的
     iKF2 = static_cast<int>(std::upper_bound(m_CsKF.begin() + iKF0, m_CsKF.end(), _C) -
-                                             m_CsKF.begin());
-    C1 = m_CsKF[iKF0].m_C;
+                                             m_CsKF.begin());//iKF2是iKF0之后的这帧
+    C1 = m_CsKF[iKF0].m_Cam_pose;
   }
-  int i1, i2;
-  FTR::Measurement z;
+  int raw_idx, valid_idx;
+  FTR::Measurement z_GMap;//观测数据结构
 
   ::Point3D X;
   m_IKF.m_Xs.resize(Nx1);
-  std::vector<int> &ixs = m_idxsTmp;
+  std::vector<int> &ixs = m_idxsTmp;//下标对应于m_IKF.m_Xs的下标,值对应于KF.Xs的下标
   ixs.resize(Nx1);
   const float eps = FTR_VARIANCE_EPSILON * m_K.m_K.fxyI();
-  const int nKFs = static_cast<int>(m_CsKF.size());
-  for (i1 = i2 = 0, iKF1 = iKF0; i1 < Nx1; ++i1) {
-    const MapPointIndex &ix = ixsSort[i1];
+  const int nKFs = static_cast<int>(m_CsKF.size());//包含当前这个关键帧的所有关键帧的数量
+
+  //遍历KF.Xs中的所有地图点,构造m_IKF.m_Xs中的GlobalMap::Point。进行去畸变并且保存畸变部分的H矩阵
+  for (raw_idx = valid_idx = 0, iKF1 = iKF0; raw_idx < Nx1; ++raw_idx) {//遍历当前新地图点
+    const MapPointIndex &ix = ixsSort[raw_idx];//当前这个地图点的索引信息
 //#ifdef CFG_DEBUG
 #if 0
-    if (ix.m_idx == 2001) {
+    if (ix.m_G_idx == 2001) {
       UT::DebugStart();
       UT::DebugStop();
     }
 #endif
-    if (ix.m_iFrm < m_CsKF[iKF1].m_iFrm) {
+    if (ix.m_iFrm < m_CsKF[iKF1].m_iFrm) {//这两种情况啥意思,不会出现这两种情况的
       continue;
     } else if (ix.m_iFrm > m_CsKF[iKF1].m_iFrm) {
       iKF1 = static_cast<int>(std::lower_bound(m_CsKF.begin() + iKF1,
@@ -1692,154 +1739,158 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
         --iKF1;
         continue;
       }
-      C1 = m_CsKF[iKF1].m_C;
+      C1 = m_CsKF[iKF1].m_Cam_pose;
     }
-    z.m_iKF = iKF1;
-    const MapPoint &X1 = KF.Xs[ix.m_ix];
-    GlobalMap::Point &X2 = m_IKF.m_Xs[i2];
-    X2.m_zs.resize(0);
-    const int Nz1 = static_cast<int>(X1.zs.size());
-    for (int i = 0; i < Nz1; ++i) {
-      const MapPointMeasurement &_z = X1.zs[i];
+      z_GMap.m_iKF = iKF1;//给观测信息这帧所在的id
+    const MapPoint &New_Mp_KF = KF.Xs[ix.m_L_idx];//当前关键帧新看到的这个地图点 原始命名:X1
+    GlobalMap::Point &New_Mp_GMap = m_IKF.m_Xs[valid_idx];//GlobalMap中的点的数据结构,它的索引也是和KF.Xs中的索引是一致的 原始命名:X2
+    New_Mp_GMap.m_zs.resize(0);
+    const int Nz1 = static_cast<int>(New_Mp_KF.feat_measures.size());//这个地图点的观测信息
+    for (int i = 0; i < Nz1; ++i) {//遍历这个地图点的所有观测结果,这里的size只可能1(左目看到),2(两目均看到)
+      const MapPointMeasurement &z_KF = New_Mp_KF.feat_measures[i];
 #ifdef CFG_STEREO
-      if (_z.right) {
-        if (i == 0) {
+      if (z_KF.right) {//如果是右目的观测的话
+        if (i == 0) {//必然不可能出现这种情况
           continue;
         }
-        Rectify(m_K.m_Kr, _z.x, &z.m_zr, &z.m_Wr, &m_UMr, eps, &m_K.m_Rr);
-        if (X1.zs[i - 1].iFrm != _z.iFrm) {
-          z.m_z.Invalidate();
+        Rectify(m_K.m_Kr/*右相机内参*/, z_KF.x/*右目特征点畸变像素坐标*/, &z_GMap.m_zr/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
+                &z_GMap.m_Wr/*右畸变部分的H矩阵(加上了外参的影响)*/, &m_UMr/*右目畸变对照表*/, eps, &m_K.m_Rr/*Tc0_c1*/);
+        if (New_Mp_KF.feat_measures[i - 1].iFrm != z_KF.iFrm) {
+          z_GMap.m_z.Invalidate();
         }
-        z.m_iKF = static_cast<int>(std::lower_bound(m_CsKF.begin() + z.m_iKF,
-                                                    m_CsKF.begin() + iKF2, _z.iFrm) -
-                                                    m_CsKF.begin());
-        if (z.m_iKF != nKFs && m_CsKF[z.m_iKF].m_iFrm == _z.iFrm) {
-          X2.m_zs.push_back(z);
+          z_GMap.m_iKF = static_cast<int>(std::lower_bound(m_CsKF.begin() + z_GMap.m_iKF,
+                                                    m_CsKF.begin() + iKF2, z_KF.iFrm) -
+                                          m_CsKF.begin());
+        if (z_GMap.m_iKF != nKFs && m_CsKF[z_GMap.m_iKF].m_iFrm == z_KF.iFrm) {
+          New_Mp_GMap.m_zs.push_back(z_GMap);
         } else {
-          --z.m_iKF;
+          --z_GMap.m_iKF;
         }
       } else
 #endif
       {
-        Rectify(m_K.m_K, _z.x, &z.m_z, &z.m_W, &m_UM, eps);
+          //去畸变,并且为z_GMap计算这个特征点畸变部分的H矩阵,第一次时还会生成畸变对照表
+        Rectify(m_K.m_K/*左相机内参*/, z_KF.x/*左目的特征点*/, &z_GMap.m_z/*左目特征点去畸变后的归一化坐标*/,
+                &z_GMap.m_W/*左畸变部分的H矩阵*/, &m_UM/*左目畸变对照表*/, eps);
 #ifdef CFG_STEREO
         const int j = i + 1;
-        if (j == Nz1 || X1.zs[j].iFrm != _z.iFrm)
+        if (j == Nz1 || New_Mp_KF.feat_measures[j].iFrm != z_KF.iFrm)//说明这个特征点是没有右目观测的,否则转入下一次循环,对右目做畸变
 #endif
-        {
+        {//给右目的观测设成非法值
 #ifdef CFG_STEREO
-          z.m_zr.Invalidate();
+          z_GMap.m_zr.Invalidate();
 #endif
-          z.m_iKF = static_cast<int>(std::lower_bound(m_CsKF.begin() + z.m_iKF,
-                                                      m_CsKF.begin() + iKF2, _z.iFrm) -
-                                                      m_CsKF.begin());
-          if (z.m_iKF != nKFs && m_CsKF[z.m_iKF].m_iFrm == _z.iFrm) {
-            X2.m_zs.push_back(z);
-          } else {
-            --z.m_iKF;
+                z_GMap.m_iKF = static_cast<int>(std::lower_bound(m_CsKF.begin() + z_GMap.m_iKF,
+                                                      m_CsKF.begin() + iKF2, z_KF.iFrm) -
+                                                m_CsKF.begin());
+          if (z_GMap.m_iKF != nKFs && m_CsKF[z_GMap.m_iKF].m_iFrm == z_KF.iFrm) {
+            New_Mp_GMap.m_zs.push_back(z_GMap);//这是一个地图点的左右目观测,暂时push进全局地图的地图点观测中
+          } else {//但是m_zs实际是不存储首次观测的信息的,后续还要去掉
+            --z_GMap.m_iKF;
           }
         }
       }
     }
-    const int Nz2 = static_cast<int>(X2.m_zs.size());
-    if (Nz2 == 0) {
+    const int Nz2 = static_cast<int>(New_Mp_GMap.m_zs.size());
+    if (Nz2 == 0) {//如果去畸变失败等等可能会出现观测为0的情况,那么就跳过
       continue;
     }
-    const FTR::Measurement &_z = X2.m_zs.front();
+    const FTR::Measurement &_z = New_Mp_GMap.m_zs.front();
 #ifdef CFG_DEBUG
     UT_ASSERT(_z.m_iKF == iKF1);
-#endif
-    X2.m_iKF = _z.m_iKF;
-    X2.m_x.m_x = _z.m_z;
-    X2.m_W = _z.m_W;
+#endif//New_Mp_GMap的观测信息
+      New_Mp_GMap.m_iKF = _z.m_iKF;
+      New_Mp_GMap.m_x.m_x = _z.m_z;//左目无畸变归一化坐标
+      New_Mp_GMap.m_W = _z.m_W;//左目畸变H
 #ifdef CFG_STEREO
-    X2.m_x.m_xr = _z.m_zr;
-    X2.m_x.m_Wr = _z.m_Wr;
+      New_Mp_GMap.m_x.m_xr = _z.m_zr;//右目无畸变归一化坐标(左乘了Rc0_c1以后进行了归一化)
+      New_Mp_GMap.m_x.m_Wr = _z.m_Wr;//右目畸变H
 #endif
-    X2.m_zs.erase(X2.m_zs.begin());
-    X.Set(X1.X.X);
-    if (X.Valid()) {
-      X2.m_d.Initialize(1.0f / C1.GetAppliedZ(X));
+    New_Mp_GMap.m_zs.erase(New_Mp_GMap.m_zs.begin());//
+    X.Set(New_Mp_KF.X.X);
+    if (X.Valid()) {//在之前已经给这里设置过不合法了
+      New_Mp_GMap.m_d.Initialize(1.0f / C1.GetAppliedZ(X));
     } else {
-      X2.m_d.Invalidate();
+      New_Mp_GMap.m_d.Invalidate();
     }
 //#ifdef CFG_DEBUG
 #if 0
-    if (i2 == 0) {
+    if (valid_idx == 0) {
       X.Print();
-      X2.m_d.Print();
+      New_Mp_GMap.m_d.Print();
     }
 #endif
-    ixs[i2] = ix.m_ix;
-    ++i2;
+    ixs[valid_idx] = ix.m_L_idx;//全局id和关键帧局部id的对应
+    ++valid_idx;
   }
-  const int Nx2 = i2;
+  const int Nx2 = valid_idx;//最终有效的地图点,这里应该是Nx2 ==Nx1 的,它并没有设置什么跳过的条件
   m_IKF.m_Xs.resize(Nx2);
   ixs.resize(Nx2);
-
+//更新地图点的索引
   m_iKF2d.push_back(m_iKF2d.back());
-  const int NX1 = static_cast<int>(m_iX2d.size()), NX2 = NX1 + Nx1;
-  m_iX2d.resize(NX2, -1);
-  m_idx2iX.resize(idxMax + 1, -1);
-  for (int i1 = 0, i2 = 0; i1 < Nx2; i1 = i2) {
-    const int iKF = m_IKF.m_Xs[i1].m_iKF;
-    for (i2 = i1 + 1; i2 < Nx2 && m_IKF.m_Xs[i2].m_iKF == iKF; ++i2) {}
-    const int id = m_iKF2d[iKF + 1], Nx = i2 - i1;
+  const int NX1 = static_cast<int>(m_iX2id.size())/*这帧之前的所有关键帧地图点总和*/, NX2 = NX1 + Nx1;//所有关键帧的地图点总数
+  m_iX2id.resize(NX2, -1);
+  m_idx2iX.resize(idxMax + 1, -1);//这里应该记录的是全局id和局部id的对应关系吧
+  for (int i1 = 0, i2 = 0; i1 < Nx2; i1 = i2) {//遍历所有有效的地图点
+    const int iKF = m_IKF.m_Xs[i1].m_iKF;//这个就是当前关键帧的id
+    for (i2 = i1 + 1; i2 < Nx2 && m_IKF.m_Xs[i2].m_iKF == iKF; ++i2) {}//将i2 = Nx2
+    const int id = m_iKF2d[iKF + 1]/*这个关键帧之前总共有多少个关键帧的地图点*/, Nx = i2 - i1;//新地图点数量
     for (int jKF = iKF; jKF < nKFs; ++jKF) {
-      m_iKF2d[jKF + 1] += Nx;
+      m_iKF2d[jKF + 1] += Nx;//这里是提前给后一个关键帧这里赋值当前这个关键帧所看到的地图点数量
     }
-    m_id2X.insert(m_id2X.begin() + id, Nx, -1);
-    const int Nd = static_cast<int>(m_id2X.size());
-    for (int jd = id + Nx; jd < Nd; ++jd) {
-      const int iX = m_id2X[jd];
+    m_id2iX.insert(m_id2iX.begin() + id, Nx, -1);//加上当前的新地图点
+    const int Nd = static_cast<int>(m_id2iX.size());//当前总地图点数(包含新地图点)
+    for (int jd /*总地图点数*/= id + Nx; jd < Nd; ++jd) {
+      const int iX = m_id2iX[jd];
       if (iX != -1) {
-        m_iX2d[iX] += Nx;
+          m_iX2id[iX] += Nx;
       }
     }
-    m_id2idx.insert(m_id2idx.begin() + id, Nx, -1);
+    m_id2idx.insert(m_id2idx.begin() + id, Nx, -1);//加上当前的新地图点
     m_xs.insert(m_xs.begin() + id, Nx, ::Point2D());
     m_ds.insert(m_ds.begin() + id, Nx, ::Depth::InverseGaussian());
     m_uds.insert(m_uds.begin() + id, Nx, LM_FLAG_TRACK_DEFAULT);
-    const int *_ixs = ixs.data() + i1;
-    const GlobalMap::Point *Xs = m_IKF.m_Xs.data() + i1;
+    const int *_ixs = ixs.data() + i1;//这里需要确认下i1是否是0
+    const GlobalMap::Point *Xs = m_IKF.m_Xs.data() + i1;//当前地图点
     ::Point2D *xs = m_xs.data() + id;
     ::Depth::InverseGaussian *ds = m_ds.data() + id;
-#ifdef CFG_GROUND_TRUTH
+#ifdef CFG_GROUND_TRUTH//这里实际上没有真值
     ::Depth::InverseGaussian *dsGT = NULL;
     if (static_cast<int>(m_DsGT.size()) > idxMax) {
       m_dsGT.insert(m_dsGT.begin() + id, Nx, ::Depth::InverseGaussian());
       dsGT = m_dsGT.data() + id;
     }
-#endif
-    for (int i = 0, jd = id; i < Nx; ++i, ++jd) {
-      const int ix = _ixs[i], iX = NX1 + ix, idx = KF.Xs[ix].X.idx;
-      m_id2X[jd] = iX;
-      m_iX2d[iX] = jd;
-      m_id2idx[jd] = idx;
-      const int _iX = m_idx2iX[idx];
+#endif//有三种id,一种是地图点在这个关键帧中的id,一种是地图点在所有关键帧地图点中的全局id,也就是第几个加入到IBA里的，还有一个是前端的全局id
+    for (int i = 0, jd = id;/*第一个地图点的id*/ i < Nx/*新地图点数量*/; ++i, ++jd) {
+      const int Mp_L_idx = _ixs[i], iX = NX1 + Mp_L_idx/*地图点的id*/, Mp_G_idx = KF.Xs[Mp_L_idx].X.idx;
+        m_id2iX[jd] = iX;//jd就是这个
+      m_iX2id[iX] = jd;
+      m_id2idx[jd] = Mp_G_idx;
+      const int _iX = m_idx2iX[Mp_G_idx];
       if (_iX != -1) {
-        const int _id = m_iX2d[_iX];
+        const int _id = m_iX2id[_iX];
         if (_id != -1) {
 #ifdef CFG_DEBUG
-          UT_ASSERT(m_id2X[_id] == _iX);
+          UT_ASSERT(m_id2iX[_id] == _iX);
 #endif
 #if 1
-          m_id2X[_id] = -1;
-          m_iX2d[_iX] = -1;
+            m_id2iX[_id] = -1;
+            m_iX2id[_iX] = -1;
 #endif
           m_id2idx[_id] = -1;
         }
       }
-      m_idx2iX[idx] = iX;
-      const GlobalMap::Point &X = Xs[i];
-      xs[i] = X.m_x.m_x;
-      ds[i] = X.m_d;
+      m_idx2iX[Mp_G_idx] = iX;
+      const GlobalMap::Point &X = Xs[i];//当前的地图点
+      xs[i] = X.m_x.m_x;//左目观测
+      ds[i] = X.m_d;//逆深度应该是0吧
 #ifdef CFG_GROUND_TRUTH
       if (dsGT) {
-        dsGT[i] = m_DsGT[idx];
+        dsGT[i] = m_DsGT[Mp_G_idx];
       }
 #endif
     }
+
   }
 //#ifdef CFG_DEBUG
 #if 0
@@ -1849,16 +1900,16 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
   iFrm2KF.assign(KF.iFrm + 1, -1);
   CsKF.Resize(nKFs);
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const LocalMap::CameraKF &C = m_CsKF[iKF];
-    iFrm2KF[C.m_iFrm] = iKF;
-    CsKF[iKF] = C.m_C;
+    const LocalMap::CameraKF &Cam_state = m_CsKF[iKF];
+    iFrm2KF[Cam_state.m_iFrm] = iKF;
+    CsKF[iKF] = Cam_state.m_Cam_pose;
   }
 #ifdef CFG_STEREO
   AlignedVector<Rigid3D> CsKFr;
   CsKFr.Set(CsKF);
   for (int iKF = 0; iKF < nKFs; ++iKF) {
-    Rigid3D &C = CsKFr[iKF];
-    C.SetTranslation(C.GetTranslation() + m_K.m_br);
+    Rigid3D &Cam_state = CsKFr[iKF];
+    Cam_state.SetTranslation(Cam_state.GetTranslation() + m_K.m_br);
   }
 #endif
   //CsKF.Back().Print();
@@ -1871,12 +1922,12 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
     }
     UT::Print("%d", X.X.idx);
     const ::Point3D _X(X.X.X);
-    const int Nz = static_cast<int>(X.zs.size());
+    const int Nz = static_cast<int>(X.feat_measures.size());
     for (int i = 0; i < Nz; ++i) {
-      const MapPointMeasurement &z = X.zs[i];
-      const int iKF = iFrm2KF[z.iFrm];
+      const MapPointMeasurement &z_GMap = X.feat_measures[i];
+      const int iKF = iFrm2KF[z_GMap.iFrm];
 #ifdef CFG_STEREO
-      if (z.right) {
+      if (z_GMap.right) {
         CsKFr[iKF].Apply(_X, e);
       } else
 #endif
@@ -1884,46 +1935,47 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
         CsKF[iKF].Apply(_X, e);
       }
       m_K.m_K.NormalizedToImage(e);
-      e -= ::Point2D(z.x.x);
-      //if (z.iFrm == KF.iFrm) {
+      e -= ::Point2D(z_GMap.x.x);
+      //if (z_GMap.iFrm == KF.iFrm) {
       //  continue;
       //}
-      UT::Print("\t[%d] %f", z.iFrm, sqrtf(e.SquaredLength()));
+      UT::Print("\t[%d] %f", z_GMap.iFrm, sqrtf(e.SquaredLength()));
     }
     UT::Print("\n");
   }
 #endif
   return m_IKF;
 }
-
-void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement> &zs,
-                                          FRM::Frame *F) {
-  F->ClearMeasurements();
+//将这帧对于地图点的观测区分为对于各个关键帧上的地图点,然后将共视到的关键帧存到m_iKFsMatch里,m_zs存着所有的观测,m_Zs存储了看到了哪个关键帧的地图点,对这个关键帧的观测在m_zs的哪个位置
+void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement> &cur_feat_measures/*对老地图点的观测*/,
+                                          FRM::Frame *F/*当前普通帧*/) {
+  F->ClearMeasurements();//数据清零
 
   int i, j;
-  const float eps = FTR_VARIANCE_EPSILON * m_K.m_K.fxyI();
-  const int N = static_cast<int>(m_idx2iX.size()), Nz1 = static_cast<int>(zs.size());
+  const float eps = FTR_VARIANCE_EPSILON * m_K.m_K.fxyI();//0.01f * 1/(fx * fy)
+  const int N = static_cast<int>(m_idx2iX.size())/*所有地图点的前端的全局id*/, Nz1 = static_cast<int>(cur_feat_measures.size());//Nz1是老地图点(前端的所有老地图点)的观测数量
   m_zsSortTmp.resize(Nz1);
-  for (i = j = 0; i < Nz1; ++i) {
-    const MapPointMeasurement &z1 = zs[i];
-    FeatureMeasurement &z2 = m_zsSortTmp[j];
-    if (z1.idx >= N) {
+  for (i = j = 0; i < Nz1; ++i) {//遍历所有观测
+    const MapPointMeasurement &z1 = cur_feat_measures[i];
+    FeatureMeasurement &z2 = m_zsSortTmp[j];//将cur_feat_measures[i]的观测信息去畸变后转换到m_zsSortTmp[j]
+    if (z1.idx/*这个是地图点的全局id*/ >= N) {//说明是新的地图的id,不过这种情况不会出现
       continue;
     }
-    const int iX = m_idx2iX[z1.idx];
-    if (iX == -1) {
+    const int iX = m_idx2iX[z1.idx];//地图点在所有关键帧地图点中的全局id
+    if (iX == -1) {//如果这个地图点没有存在关键帧地图点中就跳过,我感觉是会出现这种情况的,为啥一直没出现,有点意思
       continue;
     }
 #ifdef CFG_DEBUG
     UT_ASSERT(iX != -1);
 #endif
-    if ((z2.m_id = m_iX2d[iX]) == -1) {
+    if ((z2.m_id = m_iX2id[iX]) == -1) {
       continue;
     }
 #ifdef CFG_STEREO
     z2.m_right = z1.right;
     if (z1.right) {
-      Rectify(m_K.m_Kr, z1.x, &z2.m_z, &z2.m_W, &m_UMr, eps, &m_K.m_Rr);
+      Rectify(m_K.m_Kr/*右相机内参*/, z1.x/*右目特征点畸变像素坐标*/, &z2.m_z/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
+              &z2.m_W/*右畸变部分的H矩阵(加上了外参的影响)*/, &m_UMr/*右目畸变对照表*/, eps, &m_K.m_Rr/*Tc0_c1*/);
     } else
 #endif
     {
@@ -1931,9 +1983,9 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
     }
     ++j;
   }
-  const int Nz2 = j;
+  const int Nz2 = j;//对于老地图点的观测数量(且关键帧中有这些地图点)
   m_zsSortTmp.resize(Nz2);
-  std::sort(m_zsSortTmp.begin(), m_zsSortTmp.end());
+  std::sort(m_zsSortTmp.begin(), m_zsSortTmp.end());//按地图点局部id排序,左目在右目前面
 #ifdef CFG_DEBUG
   UT_ASSERT(m_zsSortTmp.empty() || m_zsSortTmp.front().m_id != -1);
   for (i = 1; i < Nz2; ++i) {
@@ -1941,16 +1993,16 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
   }
 #endif
   FTR::Measurement z;
-  for (int i1 = 0, i2 = 0, iKF = 0; i1 < Nz2; i1 = i2) {
-    const int id1 = m_zsSortTmp[i1].m_id;
+  for (int i1 = 0, i2 = 0, iKF = 0; i1 < Nz2; i1 = i2) {//遍历所有的老地图点观测
+    const int id1 = m_zsSortTmp[i1].m_id;//这个地图点在所有关键帧地图点中的全局id
     iKF = static_cast<int>(std::upper_bound(m_iKF2d.begin() + iKF, m_iKF2d.end(), id1) -
-                                            m_iKF2d.begin()) - 1;
-    const int id0 = m_iKF2d[iKF], id2 = m_iKF2d[iKF + 1];
+                                            m_iKF2d.begin()) - 1;//这个老地图点出现之前的那一帧,也就是首次看到这个老地图点的这个关键帧
+    const int id0 = m_iKF2d[iKF]/*m_zsSortTmp[i1]这个地图点所属的关键帧的第一个地图点的全局id(iX)*/, id2 = m_iKF2d[iKF + 1];//下一个关键帧的第一个地图点的全局id(iX)
 #ifdef CFG_DEBUG
     UT_ASSERT(id1 >= id0 && id1 < id2);
 #endif
     i2 = static_cast<int>(std::lower_bound(m_zsSortTmp.begin() + i1, m_zsSortTmp.end(), id2) -
-                                           m_zsSortTmp.begin());
+                                           m_zsSortTmp.begin());//就是m_zsSortTmp中属于下一个关键帧的第一个地图点之后的观测的索引位置
 #ifdef CFG_DEBUG
     UT_ASSERT(i2 == Nz2 || m_zsSortTmp[i2].m_id >= id2);
     for (i = i1; i < i2; ++i) {
@@ -1958,7 +2010,7 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
       UT_ASSERT(id >= id0 && id < id2);
     }
 #endif
-    m_zsTmp.resize(0);
+    m_zsTmp.resize(0);//m_zsSortTmp中所有这个关键帧的地图点观测
     for (i = i1; i < i2; ++i) {
 //#ifdef CFG_DEBUG
 #if 0
@@ -1968,7 +2020,7 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
       }
 #endif
       const FeatureMeasurement &_z = m_zsSortTmp[i];
-      z.m_ix = _z.m_id - id0;
+      z.m_ix = _z.m_id - id0;//_z.m_id - id0求的就是这个地图点在它首次被观测到的这个关键帧中的局部id
 #if 0
       if (m_zsTmp.size() == 368) {
         UT::DebugStart();
@@ -1990,18 +2042,18 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
         z.m_W = _z.m_W;
 #ifdef CFG_STEREO
         j = i + 1;
-        if (j == i2 || m_zsSortTmp[j].m_id != _z.m_id)
+        if (j == i2 || m_zsSortTmp[j].m_id != _z.m_id)//说明不是双目,是只有单目观测的情况
 #endif
         {
           z.m_ix = _z.m_id - id0;
 #ifdef CFG_STEREO
           z.m_zr.Invalidate();
 #endif
-          m_zsTmp.push_back(z);
+          m_zsTmp.push_back(z);//这里面存的id是局部id
         }
       }
     }
-    F->PushFrameMeasurement(iKF, m_zsTmp);
+    F->PushFrameMeasurement(iKF, m_zsTmp);//向帧中push进这个关键帧和输入这个关键帧新地图点的观测
   }
 }
 
@@ -2021,23 +2073,23 @@ void Internal::AssertConsistency() {
   }
   const int Nd = m_iKF2d.back();
   int SNd = 0;
-  const int NX = static_cast<int>(m_iX2d.size());
+  const int NX = static_cast<int>(m_iX2id.size());
   for (int iX = 0; iX < NX; ++iX) {
-    const int id = m_iX2d[iX];
+    const int id = m_iX2id[iX];
     if (id == -1) {
       continue;
     }
-    UT_ASSERT(m_id2X[id] == iX);
+    UT_ASSERT(m_id2iX[id] == iX);
     ++SNd;
   }
   //UT_ASSERT(SNd == Nd);
-  UT_ASSERT(static_cast<int>(m_id2X.size()) == Nd && static_cast<int>(m_id2idx.size()) == Nd);
+  UT_ASSERT(static_cast<int>(m_id2iX.size()) == Nd && static_cast<int>(m_id2idx.size()) == Nd);
   for (int id = 0; id < Nd; ++id) {
-    const int iX = m_id2X[id], idx = m_id2idx[id];
+    const int iX = m_id2iX[id], idx = m_id2idx[id];
     if (iX == -1) {
       UT_ASSERT(idx == -1);
     } else {
-      UT_ASSERT(m_iX2d[iX] == id);
+      UT_ASSERT(m_iX2id[iX] == id);
       //if (idx != -1) {
       //  UT_ASSERT(m_idx2iX[idx] == iX);
       //}
@@ -2051,7 +2103,7 @@ void Internal::AssertConsistency() {
     if (iX == -1) {
       continue;
     }
-    const int id = m_iX2d[iX];
+    const int id = m_iX2id[iX];
     if (id != -1) {
       UT_ASSERT(m_id2idx[id] == idx);
     }
@@ -2079,7 +2131,8 @@ void LoadParameters(const std::string fileName) {
     return;
   }
   const Configurator cfgor(fileName.c_str());
-  //cfgor.Print();
+
+//  cfgor.Print();
   ::LoadParameters(cfgor);
 }
 
@@ -2332,9 +2385,9 @@ bool SaveCurrentFrame(const std::string fileName, const CurrentFrame &CF, const 
     return false;
   }
   UT::SaveB(CF.iFrm, fp);
-  UT::SaveB(CF.C, fp);
-  UT::VectorSaveB(CF.zs, fp);
-  UT::VectorSaveB(CF.us, fp);
+  UT::SaveB(CF.Cam_state, fp);
+  UT::VectorSaveB(CF.feat_measures, fp);
+  UT::VectorSaveB(CF.imu_measures, fp);
   UT::SaveB(CF.t, fp);
   UT::SaveB(CF.d, fp);
   UT::StringSaveB(CF.fileName, fp);
@@ -2342,13 +2395,13 @@ bool SaveCurrentFrame(const std::string fileName, const CurrentFrame &CF, const 
   UT::StringSaveB(CF.fileNameRight, fp);
 #endif
   UT::SaveB(KF.iFrm, fp);
-  UT::SaveB(KF.C, fp);
-  UT::VectorSaveB(KF.zs, fp);
+  UT::SaveB(KF.Cam_pose, fp);
+  UT::VectorSaveB(KF.feat_measures, fp);
   const int NX = static_cast<int>(KF.Xs.size());
   UT::SaveB(NX, fp);
   for (int iX = 0; iX < NX; ++iX) {
     const MapPoint &X = KF.Xs[iX];
-    UT::VectorSaveB(X.zs, fp);
+    UT::VectorSaveB(X.feat_measures, fp);
     UT::SaveB(X.X, fp);
   }
   UT::SaveB(KF.d, fp);
@@ -2357,16 +2410,16 @@ bool SaveCurrentFrame(const std::string fileName, const CurrentFrame &CF, const 
 }
 
 #ifdef IBA_DEBUG_REMOVE_RIGHT_MEASUREMENTS
-static inline void RemoveRightMeasurements(std::vector<MapPointMeasurement> *zs) {
+static inline void RemoveRightMeasurements(std::vector<MapPointMeasurement> *feat_measures) {
   int i, j;
-  const int N = static_cast<int>(zs->size());
+  const int N = static_cast<int>(feat_measures->size());
   for (i = j = 0; i < N; ++i) {
-    const MapPointMeasurement &z = zs->at(i);
+    const MapPointMeasurement &z = feat_measures->at(i);
     if (!z.right) {
-      zs->at(j++) = z;
+      feat_measures->at(j++) = z;
     }
   }
-  zs->resize(j);
+  feat_measures->resize(j);
 }
 #endif
 
@@ -2376,9 +2429,9 @@ bool LoadCurrentFrame(const std::string fileName, CurrentFrame *CF, KeyFrame *KF
     return false;
   }
   UT::LoadB(CF->iFrm, fp);
-  UT::LoadB(CF->C, fp);
-  UT::VectorLoadB(CF->zs, fp);
-  UT::VectorLoadB(CF->us, fp);
+  UT::LoadB(CF->Cam_state, fp);
+  UT::VectorLoadB(CF->feat_measures, fp);
+  UT::VectorLoadB(CF->imu_measures, fp);
   UT::LoadB(CF->t, fp);
   UT::LoadB(CF->d, fp);
   UT::StringLoadB(CF->fileName, fp);
@@ -2387,20 +2440,20 @@ bool LoadCurrentFrame(const std::string fileName, CurrentFrame *CF, KeyFrame *KF
   UT::StringLoadB(CF->fileNameRight, fp);
 #endif
   UT::LoadB(KF->iFrm, fp);
-  UT::LoadB(KF->C, fp);
-  UT::VectorLoadB(KF->zs, fp);
+  UT::LoadB(KF->Cam_pose, fp);
+  UT::VectorLoadB(KF->feat_measures, fp);
   const int NX = UT::LoadB<int>(fp);
   KF->Xs.resize(NX);
   for (int iX = 0; iX < NX; ++iX) {
     MapPoint &X = KF->Xs[iX];
-    UT::VectorLoadB(X.zs, fp);
+    UT::VectorLoadB(X.feat_measures, fp);
     UT::LoadB(X.X, fp);
   }
   UT::LoadB(KF->d, fp);
   fclose(fp);
 #ifdef IBA_DEBUG_INVALIDATE_INITIAL_CAMERAS
-  CF->C.C.R[0][0] = FLT_MAX;
-  KF->C.R[0][0] = FLT_MAX;
+  CF->Cam_state.Cam_state.R[0][0] = FLT_MAX;
+  KF->Cam_state.R[0][0] = FLT_MAX;
 #endif
 #ifdef IBA_DEBUG_INVALIDATE_INITIAL_POINTS
   for (int iX = 0; iX < NX; ++iX) {
@@ -2411,15 +2464,15 @@ bool LoadCurrentFrame(const std::string fileName, CurrentFrame *CF, KeyFrame *KF
 //#if 1
   for (int iX = 0; iX < NX; ++iX) {
     const MapPoint &X = KF->Xs[iX];
-    UT_ASSERT(X.zs.back().iFrm == KF->iFrm);
+    UT_ASSERT(X.feat_measures.back().iFrm == KF->iFrm);
     //UT::Print("%d: %f %f %f\n", X.X.idx, X.X.X[0], X.X.X[1], X.X.X[2]);
   }
 #endif
 //#ifdef CFG_DEBUG
 #if 0
-  const int Nz = static_cast<int>(CF->zs.size());
+  const int Nz = static_cast<int>(CF->feat_measures.size());
   for (int iz = 0; iz < Nz; ++iz) {
-    const int idx = CF->zs[iz].idx;
+    const int idx = CF->feat_measures[iz].idx;
     if (idx == 845) {
       UT::DebugStart();
       UT::DebugStop();
@@ -2443,12 +2496,12 @@ bool LoadCurrentFrame(const std::string fileName, CurrentFrame *CF, KeyFrame *KF
   }
 #endif
 #ifdef IBA_DEBUG_REMOVE_RIGHT_MEASUREMENTS
-  RemoveRightMeasurements(&CF->zs);
+  RemoveRightMeasurements(&CF->feat_measures);
   if (KF->iFrm != -1) {
-    RemoveRightMeasurements(&KF->zs);
+    RemoveRightMeasurements(&KF->feat_measures);
     const int NX = static_cast<int>(KF->Xs.size());
     for (int iX = 0; iX < NX; ++iX) {
-      RemoveRightMeasurements(&KF->Xs[iX].zs);
+      RemoveRightMeasurements(&KF->Xs[iX].feat_measures);
     }
   }
 #endif

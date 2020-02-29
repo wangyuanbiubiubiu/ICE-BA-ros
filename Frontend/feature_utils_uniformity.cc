@@ -48,7 +48,7 @@ void XpEnforceKeyPointUniformity(const cv::Mat& LUT, double radius,
     const int cy = (it->y * scaling + 16);
     const int cx = (it->x * scaling + 16);
 
-    // Check if this is a high enough score.
+    // Check if this is acc high enough score.
     const float s0 = static_cast<float>(occupancy.at<unsigned char>(cy, cx));
     const float nsc1 = sqrtf(sqrtf(it->score / maxScore)) * 255.0f;
 

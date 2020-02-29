@@ -37,11 +37,14 @@ IBA::Intrinsic to_iba_intrinsic(const DuoCalibParam::Camera_t& cam, const int lr
   return K;
 }
 
-IBA::Calibration to_iba_calibration(const DuoCalibParam& calib) {
+//标定参数数据类型的转换
+IBA::Calibration to_iba_calibration(const DuoCalibParam& calib)
+{
   IBA::Calibration iba_calib;
+  //相机size
   iba_calib.w = calib.Camera.img_size.width;
   iba_calib.h = calib.Camera.img_size.height;
-  iba_calib.fishEye = false;
+  iba_calib.fishEye = false;//是否是鱼眼
   Eigen::Matrix4f Cl_T_I = calib.Camera.D_T_C_lr[0].inverse() * calib.Imu.D_T_I;
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 4; ++j) {
@@ -49,12 +52,14 @@ IBA::Calibration to_iba_calibration(const DuoCalibParam& calib) {
     }
   }
   Rotation3D R;
+  //我的理解是这里应该是对R做了一步四元数归一化,然后再重新设置一下iba_calib的外参
   R.Set(iba_calib.Tu[0], iba_calib.Tu[1], iba_calib.Tu[2]);
   R.MakeOrthogonal();
   R.Get(iba_calib.Tu[0], iba_calib.Tu[1], iba_calib.Tu[2]);
-  iba_calib.K = to_iba_intrinsic(calib.Camera, 0);
+  iba_calib.K = to_iba_intrinsic(calib.Camera, 0);//设置左相机的内参
 
 #ifdef CFG_STEREO
+//Tc0_c1的外参
   Eigen::Matrix4f Cl_T_Cr = calib.Camera.D_T_C_lr[0].inverse() * calib.Camera.D_T_C_lr[1];
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 4; ++j) {
@@ -64,9 +69,10 @@ IBA::Calibration to_iba_calibration(const DuoCalibParam& calib) {
   R.Set(iba_calib.Tr[0], iba_calib.Tr[1], iba_calib.Tr[2]);
   R.MakeOrthogonal();
   R.Get(iba_calib.Tr[0], iba_calib.Tr[1], iba_calib.Tr[2]);
-  iba_calib.Kr = to_iba_intrinsic(calib.Camera, 1);
+  iba_calib.Kr = to_iba_intrinsic(calib.Camera, 1);//设置右相机的内参
 #endif
 
+//设置初始bias
   for (int i = 0; i < 3; ++i) {
     iba_calib.ba[i] = calib.Imu.accel_bias(i);
     iba_calib.bw[i] = calib.Imu.gyro_bias(i);
@@ -74,12 +80,13 @@ IBA::Calibration to_iba_calibration(const DuoCalibParam& calib) {
   return iba_calib;
 }
 
+//ImuData数据类型转成IBA::IMUMeasurement
 IBA::IMUMeasurement to_iba_imu(const ImuData& imu_in) {
   IBA::IMUMeasurement imu_out;
   imu_out.t = imu_in.time_stamp;
   for (size_t i = 0; i < 3; ++i) {
-    imu_out.a[i] = imu_in.accel(i);
-    imu_out.w[i] = imu_in.ang_v(i);
+    imu_out.acc[i] = imu_in.accel(i);
+    imu_out.gyr[i] = imu_in.ang_v(i);
   }
   return imu_out;
 }
@@ -107,9 +114,9 @@ IBA::CameraIMUState vio_to_iba_state(const Eigen::Matrix4f& W_T_C,
   for (int i = 0; i < 3; ++i) {
     // Check IBA_datatype.h for the CameraPose notation:
     // R is R_CW, p is the camera position in W
-    state.C.p[i] = W_T_C(i, 3);
+    state.Cam_state.p[i] = W_T_C(i, 3);
     for (int j = 0; j < 3; ++j) {
-      state.C.R[i][j] = W_T_C(j, i);  // Transpose here!
+      state.Cam_state.R[i][j] = W_T_C(j, i);  // Transpose here!
     }
     state.v[i] = 0.f;  // WRONG velocity for now
     state.ba[i] = calib.Imu.accel_bias(i);

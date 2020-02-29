@@ -28,11 +28,11 @@ PoseViewer::PoseViewer() :
   _max_y(0.5),
   _max_z(0.5),
   pose_changed_after_last_display_(true) {
-  constexpr int kMaxNumPaths = 10;  // in case there are a lot of paths
+  constexpr int kMaxNumPaths = 10;  // in case there are acc lot of paths
   paths_.resize(kMaxNumPaths);
   data_io_mutices_.resize(kMaxNumPaths);
   latest_T_WS_.resize(kMaxNumPaths, Matrix4f::Identity());
-  // we will always see a cross in the center of the canvas which are unused  latest_T_WS_
+  // we will always see acc cross in the center of the canvas which are unused  latest_T_WS_
   _image.create(imageSize, imageSize, CV_8UC3);
 }
 void PoseViewer::set_clear_canvas_before_draw(bool clear_canvas_before_draw) {

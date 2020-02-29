@@ -15,18 +15,18 @@
  *****************************************************************************/
 #include "stdafx.h"
 #include "Feature.h"
-
+//#define CFG_DEBUG_EIGEN
 namespace FTR {
 
 #ifdef CFG_DEBUG_EIGEN
-//#define FTR_EIGEN_DEBUG_JACOBIAN
-EigenErrorJacobian EigenGetErrorJacobian(const Rigid3D &C1, const Source &x1, const Depth::InverseGaussian &d1, 
-                                         const Rigid3D &C2, const Point2D &z2, const bool cx, const bool cz
+#define FTR_EIGEN_DEBUG_JACOBIAN
+EigenErrorJacobian EigenGetErrorJacobian(const Rigid3D &C1/*关键帧Tc0w*/, const Source &x1/*关键帧对这个地图点的观测*/, const Depth::InverseGaussian &d1,/*KF中这点逆深度*/
+                                         const Rigid3D &C2/*当前帧Tc0w*/, const Point2D &z2/*当前帧左目观测*/, const bool cx, const bool cz
 #ifdef CFG_STEREO
                                        , const Point3D *br
 #endif
                                        ) {
-  Rigid3D T12 = C2 / C1;
+  Rigid3D T12 = C2 / C1;//*Tc0(LF)_c0(KF)*/
 #ifdef CFG_STEREO
   if (br) {
     T12.SetTranslation(*br + T12.GetTranslation());
@@ -36,28 +36,28 @@ EigenErrorJacobian EigenGetErrorJacobian(const Rigid3D &C1, const Source &x1, co
   const EigenRotation3D e_R1 = EigenRotation3D(C1), e_R2 = EigenRotation3D(C2);
   const EigenPoint3D e_p1 = EigenVector3f(C1.GetPosition()), e_p2 = EigenVector3f(C2.GetPosition());
   const EigenRotation3D e_R12 = EigenRotation3D(T12);
-  const EigenVector3f e_t12 = EigenVector3f(T12.GetTranslation());
+  const EigenVector3f e_t12 = EigenVector3f(T12.GetTranslation());//*tc0(LF)_c0(KF)*/
 #ifdef CFG_STEREO
   const EigenVector3f e_br = br ? EigenVector3f(*br) : EigenVector3f(0.0f, 0.0f, 0.0f);
 #endif
 
-  const EigenPoint3D e_x1 = EigenPoint2D(x1.m_x);
-  const float e_d1 = d1.u(), e_z1 = 1.0f / e_d1;
-  const EigenPoint3D e_X1 = EigenVector3f(e_x1 * e_z1);
-  const EigenPoint3D e_X2 = EigenVector3f(e_R12 * e_X1 + e_t12);
-  const EigenPoint2D e_x2 = e_X2.Project();
-  const float e_d2 = 1.0f / e_X2.z();
-  const EigenVector2f e_e = EigenVector2f(e_x2 - EigenVector2f(z2));
+  const EigenPoint3D e_x1 = EigenPoint2D(x1.m_x);//关键帧中的归一化观测
+  const float e_d1 = d1.u(),/*关键帧中这点的逆深度*/ e_z1 = 1.0f / e_d1;/*关键帧中这点的深度*/
+  const EigenPoint3D e_X1 = EigenVector3f(e_x1 * e_z1);//点在关键帧中的位置
+  const EigenPoint3D e_X2 = EigenVector3f(e_R12 * e_X1 + e_t12);//点在当前帧中的位置
+  const EigenPoint2D e_x2 = e_X2.Project();//投影以后的在当前帧中的归一化坐标
+  const float e_d2 = 1.0f / e_X2.z();//当前帧中的逆深度
+  const EigenVector2f e_e = EigenVector2f(e_x2 - EigenVector2f(z2));//归一化残差
     0.0f;
   //const EigenVector3f e_JXd = EigenVector3f(-e_R12 * e_x1 * e_z1 * e_z1);
   const EigenVector3f e_JXd_d1 = EigenVector3f(-e_R12 * e_x1 * e_z1);
-  const EigenVector3f e_w1 = EigenVector3f(e_R1.transpose() * e_X1);
+  const EigenVector3f e_w1 = EigenVector3f(e_R1.transpose() * e_X1);//Rwck * Xck
   const EigenMatrix3x3f e_JXr1 = EigenMatrix3x3f(-e_R2 * EigenSkewSymmetricMatrix(e_w1));
   const EigenMatrix3x3f e_JXp1 = e_R2;
   const EigenVector3f e_w2 = EigenVector3f(e_w1 + e_p1 - e_p2);
   const EigenMatrix3x3f e_JXr2 = EigenMatrix3x3f(e_R2 * EigenSkewSymmetricMatrix(e_w2));
   const EigenMatrix3x3f e_JXp2 = EigenMatrix3x3f(-e_R2);
-  const EigenMatrix2x3f e_JxX = e_X2.GetJacobianProjection();
+  const EigenMatrix2x3f e_JxX = e_X2.GetJacobianProjection();//归一化对X的导数
   //const EigenVector2f e_Jxd = EigenVector2f(e_JxX * e_JXd);
   //const EigenVector2f e_Jxd = EigenVector2f(e_JxX * e_z1 * e_JXd_d1);
   EigenMatrix2x3f e_JxX_z2;

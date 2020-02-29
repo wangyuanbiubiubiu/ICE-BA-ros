@@ -61,7 +61,8 @@ endif()
 
 # Debug / Release / RelWithDebInfo
 set(CMAKE_BUILD_TYPE Release)
-
+#set(CMAKE_BUILD_TYPE Debug)
+#set(CMAKE_CXX_FLAGS "-std=c++11 -O0 -Wall -g -march=native")
 # Thirdparty dependencies
 # If CFG_VIEW is turned on, need to install glut (freeglut3-dev) and glew (libglew-dev)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
@@ -207,7 +208,7 @@ set(SOURCES_UTILITY
 # TODO(mingyu): Move the include dir to code to be more clear,
 # e.g., <IBA.h> becomes <IBA/IBA.h>
 # Since IBA_INCLUDE_DIRS is relative, do NOT expose it outside of Solver
-# TODO(mingyu): Need to add a cached IBA_INCLUDE_DIRS that only exposes the necessary headers
+# TODO(mingyu): Need to add acc cached IBA_INCLUDE_DIRS that only exposes the necessary headers
 set(IBA_INCLUDE_DIRS 
  IBA
  BundleAdjustment
