@@ -1,6 +1,8 @@
 # ICE-BA
 ## ICE-BA-ros  
-If you want to use the ros version, set(USE_ROS true)   #true or false  
+If you want to use the ros version, set(USE_ROS true)   #true or false 
+
+![rviz](https://github.com/wangyuanbiubiubiu/ICE-BA-ros/blob/master/config/iba.png)  
 ## How to build
     export ROS_VERSION=kinetic
     export CATKIN_WS=~/ICE-BA_ws
@@ -17,8 +19,9 @@ If you want to use the ros version, set(USE_ROS true)   #true or false
 ## How to run
     cd $CATKIN_WS
     source devel/setup.bash
+    roslaunch ice_ba_ros ice_ba_rviz.launch
     ./src/ICE-BA/scripts/run_ice_ba_stereo_ros.sh
-    & rosbag play .....
+    rosbag play --pause -r 5.0 MH_05_difficult.bag #fast
 ## ICE-BA 的中文注释  
 基本全都注释了,推荐先看LBA流程,再看滑窗边缘化老帧的思路，以及滑窗是如何将先验给到GBA和LBA的,最后看GBA的部分  
 
