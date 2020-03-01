@@ -1,4 +1,24 @@
 # ICE-BA
+## ICE-BA-ros  
+If you want to use the ros version, set(USE_ROS true)   #true or false  
+## How to build
+    export ROS_VERSION=kinetic
+    export CATKIN_WS=~/ICE-BA_ws
+    mkdir -p $CATKIN_WS/src
+    cd $CATKIN_WS
+    catkin init
+    catkin config --merge-devel
+    catkin config --extend /opt/ros/$ROS_VERSION
+    catkin config --cmake-args -DCMAKE_BUILD_TYPE=Release
+    cd src
+    git clone https://github.com/wangyuanbiubiubiu/ICE-BA-ros.git
+    cd $CATKIN_WS
+    catkin build ice_ba_ros
+## How to run
+    cd $CATKIN_WS
+    source devel/setup.bash
+    ./src/ICE-BA/scripts/run_ice_ba_stereo_ros.sh
+    & rosbag play .....
 ## ICE-BA 的中文注释  
 基本全都注释了,推荐先看LBA流程,再看滑窗边缘化老帧的思路，以及滑窗是如何将先验给到GBA和LBA的,最后看GBA的部分  
 
