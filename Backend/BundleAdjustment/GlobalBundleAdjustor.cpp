@@ -857,6 +857,7 @@ void GlobalBundleAdjustor::SetCallback(const IBA::Solver::IbaCallback& iba_callb
 //  return SN;
 //}
 
+
 float GlobalBundleAdjustor::GetTotalTime(int *N) {
 #ifdef CFG_HISTORY
   const int _N = static_cast<int>(m_hists.size());

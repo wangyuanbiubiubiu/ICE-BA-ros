@@ -730,7 +730,6 @@ int main(int argc, char** argv) {
     //输入左相机特征点,右相机特征点,imu测量,左目时间戳,当前帧,关键帧
     //进行点管理(新旧地图点的观测更新),以及关键帧判断以及生成
     create_iba_frame(key_pnts, key_pnts_slave, imu_meas, time_stamp, &CF, &KF);
-      std::cout<<"key_pnts:"<<key_pnts.size()<<" "<<"key_pnts_slave: "<<key_pnts_slave.size()<<std::endl;
     //将当前帧以及关键帧(如果有的话)放进求解器
     solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,
     // 但是它里面的表达是Hx=-b,所以我注释的时候b都是标的-b,反正就记住是反的就好了
@@ -745,6 +744,7 @@ int main(int argc, char** argv) {
     prev_time_stamp = time_stamp;
   }
     std::string temp_file = "/tmp/" + std::to_string(offset_ts_ns) + ".txt";
+    solver.GetMapPointIndexes()
     solver.SaveCamerasGBA(temp_file, false /* append */, true /* pose only */);
     solver.Stop();
     solver.Destroy();

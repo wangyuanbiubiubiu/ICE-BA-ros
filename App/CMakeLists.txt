@@ -30,7 +30,7 @@ endif(USE_ROS)
 if(USE_ROS)
  add_executable(ice_ba_ros
          ../App/ICE-BA-ROS.cpp
-         )
+         ../ros_visualization/CameraPoseVisualization.cpp ../ros_visualization/CameraPoseVisualization.h ../ros_visualization/visualization.cpp ../ros_visualization/visualization.h)
  target_link_libraries(ice_ba_ros
          IBA
          OF

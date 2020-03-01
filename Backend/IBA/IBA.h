@@ -20,6 +20,7 @@
 #include <functional>  // for function
 #include <string>
 #include <vector>
+#include "LocalMap.h"
 
 class LocalBundleAdjustor;
 class GlobalBundleAdjustor;
@@ -73,12 +74,15 @@ class Solver {
   void SetCallbackLBA(const IbaCallback& iba_callback);
   void SetCallbackGBA(const IbaCallback& iba_callback);
 
+  std::vector<std::pair<int,CameraPose>> Get_Total_KFs();
+
   /*
    * @brief Call for each current frame to synchronize the optimization results
    * @param[out] SW The sliding window of interested
    */
   bool GetSlidingWindow(SlidingWindow *SW);
   void PrintSlidingWindow(const SlidingWindow &SW);
+   std::vector<LocalMap::CameraKF> GetTotalKeyFrames();
 
   int GetKeyFrames();
   int GetKeyFrameIndex(const int iKF);

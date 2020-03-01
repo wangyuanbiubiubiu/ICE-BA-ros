@@ -727,6 +727,23 @@ void Solver::SetCallbackLBA(const IbaCallback& iba_callback) {
 void Solver::SetCallbackGBA(const IbaCallback& iba_callback) {
   m_internal->m_GBA.SetCallback(iba_callback);
 }
+
+std::vector<std::pair<int,CameraPose>> Solver::Get_Total_KFs()
+{
+    std::vector<GlobalMap::Camera> GM_KFs= m_internal->m_GM.Get_Total_KFs();
+    std::vector<std::pair<int,CameraPose>> KF_poses;
+    KF_poses.resize(GM_KFs.size());
+    for (int l = 0; l < GM_KFs.size(); ++l)
+    {
+        ::Point3D p;
+        GM_KFs[l].m_Cam_pose.LA::AlignedMatrix3x3f::Get(KF_poses[l].second.R);
+        GM_KFs[l].m_Cam_pose.GetPosition(p);
+        p.Get(KF_poses[l].second.p);
+        KF_poses[l].first = GM_KFs[l].m_iFrm;
+    }
+
+    return KF_poses;
+}
 //获得LBA中的滑窗中更新了的普通帧以及更新了的关键帧还有更新了的地图点
 bool Solver::GetSlidingWindow(SlidingWindow *SW) {
     //和LBA中数据同步,用来获得LBA中的滑窗中的相机状态,关键帧的相机状态以及所有的地图点
@@ -749,6 +766,7 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW) {
       {
         continue;
       }
+
       SW->iFrms.push_back(i->m_iFrm);
       ConvertCamera(i->m_C, &C);//得到一下r,p,v，ba,bw
       SW->CsLF.push_back(C);
@@ -868,6 +886,11 @@ void Solver::PrintSlidingWindow(const SlidingWindow &SW) {
     UT::Print(" %d", SW.Xs[i].idx);
   }
   UT::Print("}\n");
+}
+
+std::vector<LocalMap::CameraKF> Solver::GetTotalKeyFrames()
+{
+        return m_internal->m_CsKF;
 }
 
 int Solver::GetKeyFrames() {

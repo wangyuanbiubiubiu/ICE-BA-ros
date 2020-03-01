@@ -58,6 +58,11 @@ void GlobalMap::LBA_DeleteKeyFrame(const int iFrm, const int iKF) {
   }
   MT_WRITE_LOCK_END(m_MT, iFrm, MT_TASK_GM_LBA_DeleteKeyFrame);
 }
+
+std::vector<GlobalMap::Camera> GlobalMap::Get_Total_KFs()
+{
+    return m_Cs;
+}
 //
 ubyte GlobalMap::LBA_Synchronize(const int iFrm/*最新的关键帧对应的普通帧的id*/, AlignedVector<Rigid3D> &Cs,/*关键帧左相机位姿*/
                                  AlignedVector<Rigid3D> &CsBkp/*关键帧左相机位姿备份*/, std::vector<ubyte> &ucs/*最新的共视关键帧中地图点是否有子轨迹生成*/

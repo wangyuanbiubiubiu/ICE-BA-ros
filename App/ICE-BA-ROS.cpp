@@ -30,19 +30,13 @@
 //ros相关
 #include <ros/ros.h>
 #include <std_msgs/Header.h>
-#include <std_msgs/Float32.h>
-#include <std_msgs/Bool.h>
 #include <sensor_msgs/Imu.h>
-#include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
-#include <nav_msgs/Path.h>
-#include <nav_msgs/Odometry.h>
-#include <geometry_msgs/PointStamped.h>
-#include <visualization_msgs/Marker.h>
-#include <tf/transform_broadcaster.h>
 
+#include <tf/transform_broadcaster.h>
+#include "../ros_visualization/visualization.h"
 #include <eigen3/Eigen/Dense>
 
 #include <thread>
@@ -61,6 +55,7 @@ using std::vector;
 using stereo_Img = std::pair<cv::Mat,cv::Mat>;
 using stereo_Img_info_d = std::pair<double,stereo_Img>;
 using stereo_Img_info_f = std::pair<float,stereo_Img>;
+DEFINE_bool(show_track_img,true,"output trackimg(ros msg)");
 DEFINE_string(config_file, "", "像vinsfuison,给总配置文件的路径");
 DEFINE_int32(grid_row_num, 1, "Number of rows of detection grids");
 DEFINE_int32(grid_col_num, 1, "Number of cols of detection grids");
@@ -98,6 +93,7 @@ std::mutex m_buf,m_syn_buf,m_solver_buf;
 std::condition_variable con;
 std::unique_ptr<XP::FeatureTrackDetector> feat_track_detector_ptr;
 std::unique_ptr<XP::ImgFeaturePropagator> slave_img_feat_propagator_ptr;
+std::vector<float> total_time;
 
 XP::DuoCalibParam duo_calib_param;
 //绘图器
@@ -106,6 +102,7 @@ XP::PoseViewer pose_viewer;
 IBA::Solver solver;
 //外参
 Eigen::Matrix4f T_Cl_Cr;
+Eigen::Matrix4d T_Cl_Cr_d;
 //用于LBA回调的绘图器
 Eigen::Vector3f last_position = Eigen::Vector3f::Zero();
 float travel_dist = 0.f;
@@ -119,102 +116,6 @@ float prev_img_time_stamp = 0.0f;
 // load previous image//左目之前的特征点和描述子
 std::vector<cv::KeyPoint> pre_image_key_points;
 cv::Mat pre_image_features;
-
-//输入数据集所在位置
-//输出左右相机各自的图片名称
-size_t load_image_data(const string& image_folder,
-                       std::vector<string> &limg_name,
-                       std::vector<string> &rimg_name) {
-  LOG(INFO) << "Loading " << image_folder;
-  //时间戳和图片的对应
-  std::string l_path = image_folder + "/mav0/cam0/data.csv";
-  std::string r_path = image_folder + "/mav0/cam1/data.csv";
-  //右相机图片所在位置
-  std::string r_img_prefix = image_folder + "/mav0/cam1/data/";
-  std::ifstream limg_file(l_path);
-  std::ifstream rimg_file(r_path);
-  if (!limg_file.is_open() || !rimg_file.is_open()) {
-    LOG(WARNING) << image_folder << " cannot be opened";
-    return 0;
-  }
-  std::string line;
-  std::string time;
-  while (getline(limg_file,line)) {
-    if (line[0] == '#')
-      continue;
-    std::istringstream is(line);
-    int i = 0;
-    while (getline(is, time, ',')){
-      bool is_exist = boost::filesystem::exists(r_img_prefix + time + ".png");
-      if (i == 0 && is_exist){
-        limg_name.push_back(time + ".png");
-        rimg_name.push_back(time + ".png");
-      }
-      i++;
-    }
-  }
-  limg_file.close();
-  rimg_file.close();
-  LOG(INFO)<< "loaded " << limg_name.size() << " images";
-  return limg_name.size();
-}
-
-//读取imu数据
-size_t load_imu_data(const string& imu_file_str,
-                     std::list<XP::ImuData>* imu_samples_ptr,
-                     uint64_t &offset_ts_ns) {
-  CHECK(imu_samples_ptr != NULL);
-  LOG(INFO) << "Loading " << imu_file_str;
-  std::ifstream imu_file(imu_file_str.c_str());
-  if (!imu_file.is_open()) {
-    LOG(WARNING) << imu_file_str << " cannot be opened";
-    return 0;
-  }
-  std::list<XP::ImuData>& imu_samples = *imu_samples_ptr;
-  imu_samples.clear();
-  // read imu data
-  std::string line;
-  std::string item;
-  double c[6];
-  uint64_t t;
-  bool set_offset_time = false;
-  while (getline(imu_file,line)) {
-    if (line[0] == '#')
-      continue;
-    std::istringstream is(line);
-    int i = 0;
-    while (getline(is, item, ',')) {
-      std::stringstream ss;
-      ss << item;
-      if (i == 0)
-        ss >> t;
-      else
-        ss >> c[i-1];
-      i++;
-    }
-    //设置一下第一个的时间
-    if (!set_offset_time) {
-      set_offset_time = true;
-      offset_ts_ns = t;
-    }
-    XP::ImuData imu_sample;
-    float _t_100us = (t - offset_ts_ns)/1e5;
-    imu_sample.time_stamp = _t_100us/1e4;
-    imu_sample.ang_v(0) = c[0];
-    imu_sample.ang_v(1) = c[1];
-    imu_sample.ang_v(2) = c[2];
-    imu_sample.accel(0) = c[3];
-    imu_sample.accel(1) = c[4];
-    imu_sample.accel(2) = c[5];
-
-    VLOG(3) << "accel " << imu_sample.accel.transpose()
-            << " gyro " << imu_sample.ang_v.transpose();
-    imu_samples.push_back(imu_sample);
-  }
-  imu_file.close();
-  LOG(INFO)<< "loaded " << imu_samples.size() << " imu samples";
-  return imu_samples.size();
-}
 
 void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_param)
 {
@@ -302,39 +203,6 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 }
 
 
-float get_timestamp_from_img_name(const string& img_name,
-                                  uint64_t offset_ns) {
-  string ts_ns_string = fs::path(img_name).stem().string();
-  int64_t offset_t = boost::lexical_cast<uint64_t>(ts_ns_string) - offset_ns;
-  int64_t t = offset_t/1e5;
-  return static_cast<float>(t)/1e4;
-}
-
-bool convert_to_asl_timestamp(const string& file_in,
-                              const string& file_out,
-                              uint64_t offset_ns) {
-  FILE *fp_in = fopen(file_in.c_str(), "r");
-  FILE *fp_out = fopen(file_out.c_str(), "w");
-  if (!fp_in || !fp_out) {
-    LOG(ERROR) << "convert to asl timestamp error";
-    return false;
-  }
-  float t;
-  float x, y, z;
-  float qx, qy, qz, qw;
-  while (fscanf(fp_in, "%f %f %f %f %f %f %f %f", &t, &x, &y, &z, &qx, &qy, &qz, &qw) == 8) {
-    double t_s = t + static_cast<double>(offset_ns*1e-9);
-    fprintf(fp_out, "%lf %f %f %f %f %f %f %f\n", t_s, x, y, z, qx, qy, qz, qw);
-  }
-
-
-//    while (fscanf(fp_in, "%f %f %f %f %f %f %f %f", &t, &x, &y, &z, &qx, &qy, &qz, &qw) == 8) {
-//    double t_s = t + static_cast<double>(offset_ns*1e-9);
-//    fprintf(fp_out, "%f %f %f\n", x, y, z);
-//  }
-  fclose(fp_in);
-  fclose(fp_out);
-}
 
 inline bool cmp_by_class_id(const cv::KeyPoint& lhs, const cv::KeyPoint& rhs)  {
   return lhs.class_id < rhs.class_id;
@@ -572,7 +440,6 @@ bool process_frontend()
             cv::Mat orb_feat_slave;
             if(init_first_track) //首次追踪
             {
-                init_first_track = false;
                 // first frame
                 //第一帧左相机提取特征点
                 //输入左相机图片,图像掩码,最大提取的特征点数量,金字塔层数,fast点阈值,特征点,描述子
@@ -687,19 +554,18 @@ bool process_frontend()
             if(KF.iFrm != -1)
                 KFs_buf.push(KF);
             m_solver_buf.unlock();
-//            //将当前帧以及关键帧(如果有的话)放进求解器
-//            std::cout<<"before"<<std::endl;
-//
-////            solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,但是这里是Hx=-b
-//            std::cout<<"after"<<std::endl;
-//            if (FLAGS_save_feature) {
-//                IBA::SaveCurrentFrame(iba_dat_file_paths[it_img], CF, KF);
-//            }
+
+            if(init_first_track)
+                init_first_track = false;
+            else
+            {
+                if(FLAGS_show_track_img)
+                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
+            }
+
             pre_image_key_points = key_pnts;
             pre_image_features = orb_feat.clone();
-//             show pose
-//            pose_viewer.displayTo("trajectory");
-//            cv::waitKey(1);
+
             prev_img_time_stamp = img_time_stamp;
         }
 
@@ -861,6 +727,13 @@ void process_backend()
         m_solver_buf.unlock();
         if(CF.iFrm != -1)
         {
+            if(total_time.size() > CF.iFrm)//先这么存一下吧,先不考虑上限的问题
+                total_time[CF.iFrm] = CF.t;
+            else
+            {
+                total_time.resize(total_time.size()+300);
+                total_time[CF.iFrm] = CF.t;
+            }
             //将当前帧以及关键帧(如果有的话)放进求解器
             solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,但是这里是Hx=-b
 //          show pose
@@ -883,6 +756,10 @@ int main(int argc, char** argv)
 
   ros::init(argc, argv, "ice_ba");
   ros::NodeHandle n("~");
+
+  registerPub(n);
+
+   total_time.resize(4000);
 
     //如果没有给image文件夹的话
     if (FLAGS_config_file.empty() )//
@@ -939,6 +816,12 @@ int main(int argc, char** argv)
 
     //双目外参
     T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
+    T_Cl_Cr_d = Eigen::Matrix4d::Identity();
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            T_Cl_Cr_d(i,j) = (double)T_Cl_Cr(i,j);
+        }
+    }
     //绘制前清除画布
     pose_viewer.set_clear_canvas_before_draw(true);
     if (FLAGS_save_feature) {
@@ -954,37 +837,73 @@ int main(int argc, char** argv)
                   257,
                   FLAGS_iba_param_path,//iba的配置文件
                   "" /* iba directory */);
+
+
+
+    //对LBA求解器设置回调函数m_callback,用来可视化
+    solver.SetCallbackGBA([&](const int iFrm,/*最新一帧的id*/ const float ts/*最新一帧的时间戳*/)
+    {
+        std::vector<std::pair<int,IBA::CameraPose>> total_kfs = solver.Get_Total_KFs();
+        std::vector<std::pair<double,Eigen::Matrix4d>> kf_poses;
+        kf_poses.resize(total_kfs.size());
+        for (int kf_id = 0; kf_id < total_kfs.size(); ++kf_id)
+        {
+            kf_poses[kf_id].first = (double)total_time[total_kfs[kf_id].first] + offset_ts;
+            kf_poses[kf_id].second = Eigen::Matrix4d::Identity();
+
+            for (int i = 0; i < 3; ++i) {
+                kf_poses[kf_id].second(i, 3) = (double)total_kfs[kf_id].second.p[i];
+                for (int j = 0; j < 3; ++j) {
+                    kf_poses[kf_id].second(i,j) = (double)total_kfs[kf_id].second.R[j][i];
+                }
+            }
+//            std::cout<< kf_poses[kf_id].second<<std::endl;
+        }
+        pubKFsPose(kf_poses);
+    });
+
+
+
     //对LBA求解器设置回调函数m_callback,用来可视化
     solver.SetCallbackLBA([&](const int iFrm,/*最新一帧的id*/ const float ts/*最新一帧的时间戳*/)
     {
-#ifndef __DUO_VIO_TRACKER_NO_DEBUG__
-      VLOG(1) << "===== start ibaCallback at ts = " << ts;
-#endif
+
       // as we may be able to send out information directly in the callback arguments
       IBA::SlidingWindow sliding_window;
       //获得LBA中的滑窗中更新了的普通帧以及更新了的关键帧还有更新了的地图点
       solver.GetSlidingWindow(&sliding_window);
       const IBA::CameraIMUState& X = sliding_window.CsLF.back();//最新的一帧
       const IBA::CameraPose& C = X.Cam_pose;
-      Eigen::Matrix4f W_vio_T_S = Eigen::Matrix4f::Identity();  // W_vio_T_S
+      Eigen::Matrix4f W_vio_T_S = Eigen::Matrix4f::Identity();  // Twc0最新的
+      Eigen::Matrix4d Twc0 = Eigen::Matrix4d::Identity();  // Twc0最新的
       for (int i = 0; i < 3; ++i) {
           W_vio_T_S(i, 3) = C.p[i];
+          Twc0(i, 3) = (double)C.p[i];
           for (int j = 0; j < 3; ++j) {
               W_vio_T_S(i, j) = C.R[j][i];  //因为存储的是C.R里是Rc0w,所以要转成Rwc0     Cam_state.R is actually R_SW
+              Twc0(i,j) = (double)C.R[j][i];
           }
       }
-
       Eigen::Matrix<float, 9, 1> speed_and_biases;
+      Eigen::Matrix<double , 9, 1> speed_and_biases_d;
       for (int i = 0; i < 3; ++i) {
           speed_and_biases(i) = X.v[i];
           speed_and_biases(i + 3) = X.ba[i];
           speed_and_biases(i + 6) = X.bw[i];
+
+          speed_and_biases_d(i) = (double)X.v[i];
+          speed_and_biases_d(i + 3) = (double)X.ba[i];
+          speed_and_biases_d(i + 6) = (double)X.bw[i];
       }
 
       Eigen::Vector3f cur_position = W_vio_T_S.topRightCorner(3, 1);
       travel_dist += (cur_position - last_position).norm();
       last_position = cur_position;
       pose_viewer.addPose(W_vio_T_S, speed_and_biases, travel_dist);
+
+      CHECK_EQ(sliding_window.iFrms.size(),sliding_window.CsLF.size());
+      //ROS pub
+      pubLatestCameraPose(Twc0,speed_and_biases_d.block<3,1>(0,0),(double)total_time[sliding_window.iFrms.back()] + offset_ts);
     });
 
 

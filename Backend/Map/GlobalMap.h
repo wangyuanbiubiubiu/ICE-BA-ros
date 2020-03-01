@@ -228,6 +228,8 @@ class GlobalMap {
   void LBA_Reset();
   void LBA_PushKeyFrame(const Camera &C);
   void LBA_DeleteKeyFrame(const int iFrm, const int iKF);
+  std::vector<GlobalMap::Camera> Get_Total_KFs();
+
   ubyte LBA_Synchronize(const int iFrm, AlignedVector<Rigid3D> &Cs, AlignedVector<Rigid3D> &CsBkp,
                         std::vector<ubyte> &ucs
 #ifdef CFG_HANDLE_SCALE_JUMP
