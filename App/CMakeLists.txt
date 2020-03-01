@@ -1,8 +1,48 @@
 cmake_minimum_required(VERSION 2.8.11)
 project(EuRoC_test)
+
+
 #set(CMAKE_BUILD_TYPE "Debug")
 #set(CMAKE_CXX_FLAGS "-std=c++11 -O0 -Wall -g -march=native")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../bin)
+
+set(USE_ROS true)   #true or false
+# =========================
+# ros
+# =========================
+if(USE_ROS)
+ find_package(catkin REQUIRED COMPONENTS
+         roscpp
+         std_msgs
+         geometry_msgs
+         nav_msgs
+         tf
+         cv_bridge
+         )
+ include_directories(
+         ${catkin_INCLUDE_DIRS}
+ )
+endif(USE_ROS)
+
+# =========================
+# run front-end + back-end with ROS
+# =========================
+if(USE_ROS)
+ add_executable(ice_ba_ros
+         ../App/ICE-BA-ROS.cpp
+         )
+ target_link_libraries(ice_ba_ros
+         IBA
+         OF
+         ${catkin_LIBRARIES}
+         )
+ if (CVD_FOUND)
+  target_link_libraries(ice_ba_ros
+          IBAVis
+          )
+ endif(CVD_FOUND)
+endif(USE_ROS)
+
 
 # =========================
 # run front-end + back-end with EuRoC dataset

@@ -60,8 +60,8 @@ if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 5.0)
 endif()
 
 # Debug / Release / RelWithDebInfo
-set(CMAKE_BUILD_TYPE Release)
-
+set(CMAKE_BUILD_TYPE "Release")
+#-DEIGEN_USE_MKL_ALL")
 # Thirdparty dependencies
 # If CFG_VIEW is turned on, need to install glut (freeglut3-dev) and glew (libglew-dev)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")

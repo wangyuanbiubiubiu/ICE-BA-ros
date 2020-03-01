@@ -139,6 +139,7 @@ size_t load_imu_data(const string& imu_file_str,
     XP::ImuData imu_sample;
     float _t_100us = (t - offset_ts_ns)/1e5;
     imu_sample.time_stamp = _t_100us/1e4;
+
     imu_sample.ang_v(0) = c[0];
     imu_sample.ang_v(1) = c[1];
     imu_sample.ang_v(2) = c[2];
@@ -480,7 +481,7 @@ int main(int argc, char** argv) {
   while (FLAGS_start_idx < FLAGS_end_idx && get_timestamp_from_img_name(img_file_paths[FLAGS_start_idx], offset_ts_ns) <= imu_samples.front().time_stamp)
     FLAGS_start_idx++;
 
-  //特征提取器
+  //初始化特征提取器
   XP::FeatureTrackDetector feat_track_detector(FLAGS_ft_len/*图像大小*/,
                                                FLAGS_ft_droprate/*图像大小*/,
                                                !FLAGS_not_use_fast/*是否用fast点*/,
@@ -590,7 +591,7 @@ int main(int argc, char** argv) {
     cv::Mat orb_feat_slave;
     std::vector<XP::ImuData> imu_meas;//两帧图像之间imu的原始测量数据
 
-    // Get the imu measurements within prev_time_stamp and time_stamp to compute old_R_new
+    // Get the imu measurements within prev_img_time_stamp and time_stamp to compute old_R_new
     //获取prev_time_stamp和time_stamp中的imu测量值，以计算old_R_new
     imu_meas.reserve(10);
     for (auto it_imu = imu_samples.begin(); it_imu != imu_samples.end(); )
@@ -729,6 +730,7 @@ int main(int argc, char** argv) {
     //输入左相机特征点,右相机特征点,imu测量,左目时间戳,当前帧,关键帧
     //进行点管理(新旧地图点的观测更新),以及关键帧判断以及生成
     create_iba_frame(key_pnts, key_pnts_slave, imu_meas, time_stamp, &CF, &KF);
+      std::cout<<"key_pnts:"<<key_pnts.size()<<" "<<"key_pnts_slave: "<<key_pnts_slave.size()<<std::endl;
     //将当前帧以及关键帧(如果有的话)放进求解器
     solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,
     // 但是它里面的表达是Hx=-b,所以我注释的时候b都是标的-b,反正就记住是反的就好了

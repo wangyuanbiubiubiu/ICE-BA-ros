@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package>
+  <name>ice_ba_ros</name>
+  <version>0.0.1</version>
+  <description>iba_ros</description>
+
+  <maintainer email="845108949@qq.com">YuAn Wang</maintainer>
+  <author>YuAn Wang</author>
+
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>roscpp</build_depend>
+  <run_depend>roscpp</run_depend>
+</package>

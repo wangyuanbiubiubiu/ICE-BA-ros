@@ -87,9 +87,6 @@ Solver::Solver() {
 }
 
 Solver::~Solver() {
-#ifdef CFG_DEBUG
-  UT_ASSERT(m_internal == NULL);
-#endif
 }
 //左右目的内外参,,是否要输出细节内容,是否输出debug信息,,参数所在位置
 void Solver::Create(const Calibration &K, const int serial, const int verbose, const int debug,

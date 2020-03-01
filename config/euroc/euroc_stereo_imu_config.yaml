@@ -1,0 +1,25 @@
+%YAML:1.0
+
+#common parameters
+#support: 1 imu 2 cam; iba开源的版本目前是不支持单目vio的
+imu: 1         
+num_of_cam: 2  
+
+imu_topic: "/imu0"
+image0_topic: "/cam0/image_raw"
+image1_topic: "/cam1/image_raw"
+output_path: "~/output/"
+
+cam0_calib: "cam0_pinhole.yaml"
+cam1_calib: "cam1_pinhole.yaml"
+resolution: [752, 480] #读取这里的图片size,而不是相机calib里的
+
+body_T_imu:
+  cols: 4
+  rows: 4
+  data: [1.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0,
+         0.0, 0.0, 0.0, 1.0]
+   
+
