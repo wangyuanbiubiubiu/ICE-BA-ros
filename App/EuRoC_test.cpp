@@ -744,7 +744,6 @@ int main(int argc, char** argv) {
     prev_time_stamp = time_stamp;
   }
     std::string temp_file = "/tmp/" + std::to_string(offset_ts_ns) + ".txt";
-    solver.GetMapPointIndexes()
     solver.SaveCamerasGBA(temp_file, false /* append */, true /* pose only */);
     solver.Stop();
     solver.Destroy();
