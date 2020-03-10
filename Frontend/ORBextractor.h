@@ -229,6 +229,10 @@ class ORBextractor {
 
   ~ORBextractor() {}
 
+    void detectgf_compute(const cv::Mat& image,
+                                        const cv::Mat& mask,
+                                        std::vector<cv::KeyPoint>* keypoints);
+
   // Compute the ORB features and descriptors on an image
   void detect(const cv::Mat& image,
               const cv::Mat& mask,

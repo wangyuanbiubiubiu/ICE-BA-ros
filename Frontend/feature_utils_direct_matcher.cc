@@ -22,12 +22,13 @@
 #include "cameras/PinholeCamera.hpp"
 #include "cameras/RadialTangentialDistortion8.hpp"
 #include "cameras/RadialTangentialDistortion.hpp"
+#include "cameras/EquidistantDistortion.hpp"
 
 #include <boost/lexical_cast.hpp>
 #ifndef __FEATURE_UTILS_NO_DEBUG__
 #include <opencv2/highgui.hpp>
 #endif
-
+#include <opencv2/core/eigen.hpp>
 // define this MACROS to enable profing and verifying align2D_NEON
 #undef _ALIGN2D_TIMING_AND_VERIFYING
 #ifdef _ALIGN2D_TIMING_AND_VERIFYING
@@ -73,6 +74,7 @@ bool depthFromTriangulation(const Matrix3f& R_cur_ref,
     *depth = 1000;  // acc very far point
     return false;
   }
+
   const Vector2f depth2 = - AtA.inverse() * A.transpose() * t_cur_ref;
   *depth = fabs(depth2[0]);//左目深度
   return true;
@@ -625,6 +627,7 @@ ImgFeaturePropagator::ImgFeaturePropagator(
         const Eigen::Matrix3f& left_camK,
         const cv::Mat_<float>& right_cv_dist_coeff,
         const cv::Mat_<float>& left_cv_dist_coeff,
+        const bool fisheye,
         const cv::Mat_<uchar>& right_mask,
         int feat_det_pyramid_level,
         float min_feature_distance_over_baseline_ratio,
@@ -637,8 +640,23 @@ ImgFeaturePropagator::ImgFeaturePropagator(
         CHECK_GT(mask_right_.rows, 0);
         CHECK_GT(mask_right_.cols, 0);
 
-        //初始化右相机的针孔投影、rantan畸变模型
-        if (right_cv_dist_coeff.rows == 8)
+        if(fisheye)
+        {
+            cam_right_.reset(new vio::cameras::PinholeCamera<
+                    vio::cameras::EquidistantDistortion>(
+                    mask_right_.cols,
+                    mask_right_.rows,
+                    right_camK(0, 0),  // focalLength[0],
+                    right_camK(1, 1),  // focalLength[1],
+                    right_camK(0, 2),  // principalPoint[0],
+                    right_camK(1, 2),  // principalPoint[1],
+                    vio::cameras::EquidistantDistortion(
+                            right_cv_dist_coeff(0),
+                            right_cv_dist_coeff(1),
+                            right_cv_dist_coeff(2),
+                            right_cv_dist_coeff(3))));
+        }
+        else if (right_cv_dist_coeff.rows == 8)//初始化右相机的针孔投影、rantan畸变模型
         {
             cam_right_.reset(new vio::cameras::PinholeCamera<
                     vio::cameras::RadialTangentialDistortion8>(
@@ -674,8 +692,26 @@ ImgFeaturePropagator::ImgFeaturePropagator(
         } else {
             LOG(FATAL) << "Dist model unsupported for cam_right_";
         }
+        cam_right_->setMask(right_mask);
+
         //初始化左相机的针孔投影、rantan畸变模型
-        if (left_cv_dist_coeff.rows == 8) {
+        if(fisheye)
+        {
+            cam_left_.reset(new vio::cameras::PinholeCamera<
+                    vio::cameras::EquidistantDistortion>(
+                    mask_right_.cols,
+                    mask_right_.rows,
+                    left_camK(0, 0),  // focalLength[0],
+                    left_camK(1, 1),  // focalLength[1],
+                    left_camK(0, 2),  // principalPoint[0],
+                    left_camK(1, 2),  // principalPoint[1],
+                    vio::cameras::EquidistantDistortion(
+                            left_cv_dist_coeff(0),
+                            left_cv_dist_coeff(1),
+                            left_cv_dist_coeff(2),
+                            left_cv_dist_coeff(3))));
+        }
+        else if (left_cv_dist_coeff.rows == 8) {
             cam_left_.reset(new vio::cameras::PinholeCamera<
                     vio::cameras::RadialTangentialDistortion8>(
                     mask_right_.cols,
@@ -710,6 +746,8 @@ ImgFeaturePropagator::ImgFeaturePropagator(
         } else {
             LOG(FATAL) << "Dist model unsupported for cam_left_";
         }
+
+        cam_left_->setMask(right_mask);
     }
 //输入右左目图片，左目提取的特征点,左右目外参,右目提取的特征点,描述子,是否要输出debug信息
 bool ImgFeaturePropagator::PropagateFeatures(
@@ -725,119 +763,246 @@ bool ImgFeaturePropagator::PropagateFeatures(
 
   //算一下SE3的逆,分成R，t存储
     R_r_l_ = T_l_r.topLeftCorner<3, 3>().transpose();
-    t_r_l_ = - R_r_l_ * T_l_r.topRightCorner<3, 1>();
+    t_r_l_ = - R_r_l_ * T_l_r.topRightCorner<3, 1>();//if(false)
+    if(cam_left_->distortionType() == "EquidistantDistortion" || cam_right_->distortionType() == "EquidistantDistortion")
+    {
+        std::vector<unsigned char> inlier_markers;
 
-  // TODO(mingyu): Make shared variables of DirectMatcher into member variables
-  //               instead of passing as input arguments
+        cv::Matx33f Rrcam_lcam_cv;
+        cv::Vec3f trcam_lcam_cv;
 
-  // Heuristically determine the d_max, d_min, and d_estimate based on the baseline,
-  // d_min = baseline x 3
-  // d_max = baseline x 3000
-  // inv_d_estimate is the average of inv_d_min and inv_d_max
-  const float baseline = t_r_l_.norm();//基线
-  const float d_min = baseline * min_feature_distance_over_baseline_ratio_;
-  const float d_max = baseline * max_feature_distance_over_baseline_ratio_;
-  const float d_estimate = 2.f / (1.f / d_min + 1.f / d_max);
+        cv::eigen2cv(R_r_l_,Rrcam_lcam_cv);//因为已经有了左右两目相机之间的外参
+        cv::eigen2cv(t_r_l_,trcam_lcam_cv);//因为已经有了左右两目相机之间的外参
 
-  // TODO(mingyu): feed the backend results back for d_estimate if available
-  // TODO(mingyu): feed the pyramids in directly
-  std::vector<cv::Mat> pyrs_right(feat_det_pyramid_level_);
-  std::vector<cv::Mat> pyrs_left(feat_det_pyramid_level_);
-  pyrs_right[0] = right_img;
-  pyrs_left[0] = left_img;
-  //降采样采样
-  for (int pyr_lv = 1; pyr_lv < feat_det_pyramid_level_; ++pyr_lv) {
-      pyrs_right[pyr_lv] = fast_pyra_down(pyrs_right[pyr_lv - 1]);
-      pyrs_left[pyr_lv] = fast_pyra_down(pyrs_left[pyr_lv - 1]);
-  }
+        std::vector<cv::Point2f> rcam_points_undistorted;
+        std::vector<cv::Point2f> pre_matched_lpoint;
+        std::vector<int> idxs;
+        std::vector<cv::Point2f> pre_matched_rpoint;
 
-  //遍历左相机提取的特征点
-  for (const cv::KeyPoint& left_kp : left_keypoints)
-  {
-    int level_right = 0;
-    float depth = -1.f;
-    Vector2f px_right, px_left(left_kp.pt.x, left_kp.pt.y);
-    Vector3f f_left;//左相机的归一化坐标
-    if (!cam_left_->backProject(px_left, &f_left)) {
-      continue;
-    }
-
-    // Visualization (re-draw for every keypoint)
-    //debug,
-    if (draw_debug) {
-      dbg_img_.create(mask_right_.rows * 2, mask_right_.cols, CV_8UC3);
-        dbg_left_ = dbg_img_(cv::Rect(0, 0, mask_right_.cols, mask_right_.rows));
-        dbg_right_ = dbg_img_(cv::Rect(0, mask_right_.rows, mask_right_.cols, mask_right_.rows));
-        dbg_right_ptr_ = &dbg_right_;
-      cv::cvtColor(left_img, dbg_left_, CV_GRAY2RGB);
-      cv::cvtColor(right_img, dbg_right_, CV_GRAY2RGB);
-      cv::circle(dbg_left_, left_kp.pt, 2, cv::Scalar(0, 255, 0));
-      cv::putText(dbg_left_, boost::lexical_cast<std::string>(left_kp.class_id),
-                  left_kp.pt, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-      for (int i = 0; i < mask_right_.rows; ++i) {
-        for (int j = 0; j < mask_right_.cols; ++j) {
-          if (mask_right_(i, j) == 0x00) {
-              dbg_right_.at<cv::Vec3b>(i, j)[0] = 0;
-              dbg_right_.at<cv::Vec3b>(i, j)[1] = 0;
-          }
+        for (int i = 0; i < left_keypoints.size(); ++i)
+        {
+            Vector2f px_right, px_left(left_keypoints[i].pt.x, left_keypoints[i].pt.y);
+            Vector3f f_left;//左相机的归一化坐标
+            if (!cam_left_->backProject(px_left, &f_left))
+            {
+                continue;
+            }
+            Eigen::Vector3f rightCam_bearing_vec = R_r_l_ * f_left;//利用旋转进行一个坐标对齐
+            Eigen::Vector2f right_cam_measure;
+            vio::cameras::CameraBase::ProjectionStatus result = cam_right_->project(rightCam_bearing_vec,&right_cam_measure);
+            if(result == vio::cameras::CameraBase::ProjectionStatus::Successful)
+            {
+                pre_matched_lpoint.push_back(left_keypoints[i].pt);
+                idxs.push_back(i);
+                pre_matched_rpoint.push_back(cv::Point2f(right_cam_measure[0],right_cam_measure[1]));
+            }
         }
-      }
-    }
+        cv::calcOpticalFlowPyrLK(left_img, right_img,
+                                 pre_matched_lpoint, pre_matched_rpoint,inlier_markers, cv::noArray(),
+                                 cv::Size(15, 15),3,cv::TermCriteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS,30,0.01),
+                                 cv::OPTFLOW_USE_INITIAL_FLOW);
+
+        for (int i = 0; i < pre_matched_rpoint.size(); ++i)
+        {
+            if (inlier_markers[i] == 0)
+                continue;
+
+            if (pre_matched_rpoint[i].y < 0 ||
+                pre_matched_rpoint[i].y > right_img.rows-1 || pre_matched_rpoint[i].x < 0 ||
+                pre_matched_rpoint[i].x > right_img.cols-1)
+            {
+                inlier_markers[i] = 0;
+            }
+
+        }
+        // Compute the essential matrix.
+        //用外参算出一个E矩阵
+        const cv::Matx33f t_rcam_lcam_hat(
+                0.0, -trcam_lcam_cv[2], trcam_lcam_cv[1],
+                trcam_lcam_cv[2], 0.0, -trcam_lcam_cv[0],
+                -trcam_lcam_cv[1], trcam_lcam_cv[0], 0.0);
+        const cv::Matx33f E = t_rcam_lcam_hat * Rrcam_lcam_cv;
+
+
+        Eigen::VectorXd lcam_intrinsics,rcam_intrinsics;
+        cam_left_->getIntrinsics(&lcam_intrinsics);
+        cam_right_->getIntrinsics(&rcam_intrinsics);
+        double norm_pixel_unit = 4.0 / (lcam_intrinsics[0] + lcam_intrinsics[1] + rcam_intrinsics[0] + rcam_intrinsics[1]);
+
+        CHECK_EQ(pre_matched_lpoint.size() , inlier_markers.size());
+        CHECK_EQ(pre_matched_lpoint.size() , pre_matched_rpoint.size());
+
+        for (int i = 0; i < pre_matched_lpoint.size(); ++i)
+        {
+            if (inlier_markers[i] == 0) continue;
+            Eigen::Vector2f left_cam_measure{pre_matched_lpoint[i].x,pre_matched_lpoint[i].y};
+            Eigen::Vector3f leftCam_bearing_vec;
+            if (!cam_left_->backProject(left_cam_measure, &leftCam_bearing_vec))
+            {
+                inlier_markers[i] = 0;
+                continue;
+            }
+
+            Eigen::Vector2f right_cam_measure{pre_matched_rpoint[i].x,pre_matched_rpoint[i].y};
+            Eigen::Vector3f rightCam_bearing_vec;
+            if (!cam_right_->backProject(right_cam_measure, &rightCam_bearing_vec))
+            {
+                inlier_markers[i] = 0;
+                continue;
+            }
+            cv::Vec3d pt_left(leftCam_bearing_vec[0],//左特征点的极线
+                              leftCam_bearing_vec[1], 1.0);
+            cv::Vec3d pt_right(rightCam_bearing_vec[0],
+                               rightCam_bearing_vec[1], 1.0);
+            cv::Vec3d epipolar_line = E * pt_left;
+            double error = fabs((pt_right.t() * epipolar_line)[0]) / sqrt(
+                    epipolar_line[0]*epipolar_line[0]+
+                    epipolar_line[1]*epipolar_line[1]);
+            double stereo_threshold = 5;
+            if (error > stereo_threshold*norm_pixel_unit)
+                inlier_markers[i] = 0;
+        }
+
+
+        //把不好的匹配都去掉
+        for (int j = 0; j < inlier_markers.size(); ++j)
+        {
+            if(inlier_markers[j])
+            {
+                const int orb_desc_margin = 20;
+                if (pre_matched_rpoint[j].x < orb_desc_margin || pre_matched_rpoint[j].x > mask_right_.cols - orb_desc_margin ||
+                    pre_matched_rpoint[j].y < orb_desc_margin || pre_matched_rpoint[j].y > mask_right_.rows - orb_desc_margin) {
+                    continue;
+                }
+
+                cv::KeyPoint cur_kp = left_keypoints[idxs[j]];//先保证一下class_id相同
+//                    cur_kp.octave = 0;
+                cur_kp.pt.x = pre_matched_rpoint[j].x;
+                cur_kp.pt.y = pre_matched_rpoint[j].y;
+                right_keypoints->push_back(cur_kp);
+
+            }
+        }
+
+    } else
+    {
+        // TODO(mingyu): Make shared variables of DirectMatcher into member variables
+        //               instead of passing as input arguments
+
+        // Heuristically determine the d_max, d_min, and d_estimate based on the baseline,
+        // d_min = baseline x 3
+        // d_max = baseline x 3000
+        // inv_d_estimate is the average of inv_d_min and inv_d_max
+        const float baseline = t_r_l_.norm();//基线
+        const float d_min = baseline * min_feature_distance_over_baseline_ratio_;
+        const float d_max = baseline * max_feature_distance_over_baseline_ratio_;
+        const float d_estimate = 2.f / (1.f / d_min + 1.f / d_max);
+
+        // TODO(mingyu): feed the backend results back for d_estimate if available
+        // TODO(mingyu): feed the pyramids in directly
+        std::vector<cv::Mat> pyrs_right(feat_det_pyramid_level_);
+        std::vector<cv::Mat> pyrs_left(feat_det_pyramid_level_);
+        pyrs_right[0] = right_img;
+        pyrs_left[0] = left_img;
+        //降采样采样
+        for (int pyr_lv = 1; pyr_lv < feat_det_pyramid_level_; ++pyr_lv) {
+            pyrs_right[pyr_lv] = fast_pyra_down(pyrs_right[pyr_lv - 1]);
+            pyrs_left[pyr_lv] = fast_pyra_down(pyrs_left[pyr_lv - 1]);
+        }
+
+        //遍历左相机提取的特征点
+        int totol_count = 0;
+        int valid_count = 0;
+
+        for (const cv::KeyPoint& left_kp : left_keypoints)
+        {
+            totol_count ++ ;
+            int level_right = 0;
+            float depth = -1.f;
+            Vector2f px_right, px_left(left_kp.pt.x, left_kp.pt.y);
+            Vector3f f_left;//左相机的归一化坐标
+            if (!cam_left_->backProject(px_left, &f_left)) {
+                continue;
+            }
+            valid_count ++ ;
+
+            // Visualization (re-draw for every keypoint)
+            //debug,
+            if (draw_debug) {
+                dbg_img_.create(mask_right_.rows * 2, mask_right_.cols, CV_8UC3);
+                dbg_left_ = dbg_img_(cv::Rect(0, 0, mask_right_.cols, mask_right_.rows));
+                dbg_right_ = dbg_img_(cv::Rect(0, mask_right_.rows, mask_right_.cols, mask_right_.rows));
+                dbg_right_ptr_ = &dbg_right_;
+                cv::cvtColor(left_img, dbg_left_, CV_GRAY2RGB);
+                cv::cvtColor(right_img, dbg_right_, CV_GRAY2RGB);
+                cv::circle(dbg_left_, left_kp.pt, 2, cv::Scalar(0, 255, 0));
+                cv::putText(dbg_left_, boost::lexical_cast<std::string>(left_kp.class_id),
+                            left_kp.pt, cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+                for (int i = 0; i < mask_right_.rows; ++i) {
+                    for (int j = 0; j < mask_right_.cols; ++j) {
+                        if (mask_right_(i, j) == 0x00) {
+                            dbg_right_.at<cv::Vec3b>(i, j)[0] = 0;
+                            dbg_right_.at<cv::Vec3b>(i, j)[1] = 0;
+                        }
+                    }
+                }
+            }
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-    VLOG(1) << "findEpipolarMatchDirect for of_id = " << left_kp.class_id;
+            VLOG(1) << "findEpipolarMatchDirect for of_id = " << left_kp.class_id;
 #endif
 //这里用的evo的代码,evo原来是用来做求得初始相对位姿后细化位姿用参考帧和当前帧的块匹配以得到更精准的特征点,现在立体相机左右外参已知，ref->left相机,cur->right相机
 //如果极线短就不用搜索,直接优化图片块和左目warp过来的图像的强度误差,如果需要搜索,就用ZMSSD评判出一个最相似的patch，然后再优化最终的右目特征点像素坐标
-    if (!direct_matcher_.findEpipolarMatchDirect(*cam_left_,//左相机类
-                                                 *cam_right_,//右相机类
-                                                 px_left,//左相机特征点2d坐标
-                                                 f_left,//左相机特征点的归一话坐标
-                                                 R_r_l_,//外参
-                                                 t_r_l_,//外参
-                                                 left_kp.octave,  // double check here左特征点所在的金字塔层
-                                                 d_estimate,//深度估计的初值
-                                                 d_min,//深度最小值
-                                                 d_max,//深度最大值
-                                                 pyrs_left,//左图像金字塔层所有的图片
-                                                 pyrs_right,//右图像金字塔层所有的图片
-                                                 mask_right_,//右相机掩码
-                                                 false, /*edgelet_feature, not supported yet*/
-                                                 &px_right,//右相机的特征点
-                                                 &depth,//左相机特征点深度
-                                                 &level_right,//右目中特征点所在的金字塔层
-                                                 dbg_right_ptr_)) {
+            if (!direct_matcher_.findEpipolarMatchDirect(*cam_left_,//左相机类
+                                                         *cam_right_,//右相机类
+                                                         px_left,//左相机特征点2d坐标
+                                                         f_left,//左相机特征点的归一话坐标
+                                                         R_r_l_,//外参
+                                                         t_r_l_,//外参
+                                                         left_kp.octave,  // double check here左特征点所在的金字塔层
+                                                         d_estimate,//深度估计的初值
+                                                         d_min,//深度最小值
+                                                         d_max,//深度最大值
+                                                         pyrs_left,//左图像金字塔层所有的图片
+                                                         pyrs_right,//右图像金字塔层所有的图片
+                                                         mask_right_,//右相机掩码
+                                                         false, /*edgelet_feature, not supported yet*/
+                                                         &px_right,//右相机的特征点
+                                                         &depth,//左相机特征点深度
+                                                         &level_right,//右目中特征点所在的金字塔层
+                                                         dbg_right_ptr_)) {
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-      if (draw_debug) {
+                if (draw_debug) {
         cv::imwrite("/tmp/per_feat_dbg/det_" + boost::lexical_cast<std::string>(left_kp.class_id)
                     + ".png", dbg_img_);
       }
       VLOG(1) << "findEpipolarMatchDirect fails for of_id: " << left_kp.class_id;
 #endif
-      continue;
-    }
+                continue;
+            }
 #ifndef __FEATURE_UTILS_NO_DEBUG__
-    if (draw_debug) {
+            if (draw_debug) {
       cv::imwrite("/tmp/per_feat_dbg/det_" + boost::lexical_cast<std::string>(left_kp.class_id)
                   + ".png", dbg_img_);
       VLOG(1) << "findEpipolarMatchDirect succeeds for of_id: " << left_kp.class_id;
     }
 #endif
 
-    // check boundary condition (set to 20 pixels for computing ORB features)
-    // [NOTE] Returned px_right should be within mask_right_ already
-    const int orb_desc_margin = 20;
-    if (px_right(0) < orb_desc_margin || px_right(0) > mask_right_.cols - orb_desc_margin ||
-        px_right(1) < orb_desc_margin || px_right(1) > mask_right_.rows - orb_desc_margin) {
-      continue;
+            // check boundary condition (set to 20 pixels for computing ORB features)
+            // [NOTE] Returned px_right should be within mask_right_ already
+            const int orb_desc_margin = 20;
+            if (px_right(0) < orb_desc_margin || px_right(0) > mask_right_.cols - orb_desc_margin ||
+                px_right(1) < orb_desc_margin || px_right(1) > mask_right_.rows - orb_desc_margin) {
+                continue;
+            }
+
+            cv::KeyPoint cur_kp = left_kp;//先保证一下class_id相同
+            cur_kp.octave = level_right;
+            cur_kp.pt.x = px_right(0);
+            cur_kp.pt.y = px_right(1);
+            right_keypoints->push_back(cur_kp);
+        }
     }
-
-    cv::KeyPoint cur_kp = left_kp;//先保证一下class_id相同
-    cur_kp.octave = level_right;
-    cur_kp.pt.x = px_right(0);
-    cur_kp.pt.y = px_right(1);
-    right_keypoints->push_back(cur_kp);
-  }
-
+//  std::cout<<valid_count<<" "<<totol_count<<std::endl;
   //计算右目特征点的描述子
   if (right_orb_features != nullptr && right_keypoints->size() > 0) {
     right_orb_features->create(right_keypoints->size(), 32, CV_8U);

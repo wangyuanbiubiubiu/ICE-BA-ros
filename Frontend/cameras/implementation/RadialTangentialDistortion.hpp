@@ -167,14 +167,23 @@ bool RadialTangentialDistortion::distort(const Eigen::Vector2f & pointUndistorte
                                          Eigen::Vector2f * pointDistorted,
                                          Eigen::Matrix2f * pointJacobian,
                                          Eigen::Matrix2Xf * parameterJacobian) const {
+    ////针对k1,k2,k3,p1,p2而言 r^2 = x^2 + y^2
+    ////残差2*1 归一化坐标的2维： min F(x,y) = 0.5*r(x,y)^2 约束： x^2+y^2 <=
+    ///      r.x = x*(1 + k1*r^2 + k2*r^4 ) + 2*p1*x*y + p2*(r^2 + 2*x^2) - x0
+    ////     r.y = y*(1 + k1*r^2 + k2*r^4 ) + 2*p2*x*y + p1*(r^2 + 2*y^2) - y0
+    ////迭代法求,这里用的狗腿。下面是雅克比矩阵J,代码里是先给J矩阵径向部分然后再给切向部分
+    ////J00 = div(r.x)/div(x) = (1 + k1*r^2 + k2*r^4 ) + (k1 + 2*k2*r^2 )*2*x^2 + 2*p1*y + 6*p2*x
+    ////J01 = div(r.x)/div(y) = (k1 + 2*k2*r^2)*x*y + 2*p1*x + 2*p2*y
+    ////J10 = div(r.y)/div(x) = (k1 + 2*k2*r^2)*x*y + 2*p1*x + 2*p2*y
+    ////J11 = div(r.y)/div(y) = (1 + k1*r^2 + k2*r^4) + (k1 + 2*k2*r^2)*2*y^2 + 6*p1*y + 2*p2*x
   // first compute the distorted point
   const float u0 = pointUndistorted[0];
   const float u1 = pointUndistorted[1];
-  const float mx_u = u0 * u0;
-  const float my_u = u1 * u1;
-  const float mxy_u = u0 * u1;
-  const float rho_u = mx_u + my_u;
-  const float rad_dist_u = k1_ * rho_u + k2_ * rho_u * rho_u;
+  const float mx_u = u0 * u0;//x^2
+  const float my_u = u1 * u1;//y^2
+  const float mxy_u = u0 * u1;//xy
+  const float rho_u = mx_u + my_u;//r^2
+  const float rad_dist_u = k1_ * rho_u + k2_ * rho_u * rho_u;//k1*r^2 + k2*r^4
   (*pointDistorted)[0] = u0 + u0 * rad_dist_u + 2.0 * p1_ * mxy_u
   + p2_ * (rho_u + 2.0 * mx_u);
   (*pointDistorted)[1] = u1 + u1 * rad_dist_u + 2.0 * p2_ * mxy_u

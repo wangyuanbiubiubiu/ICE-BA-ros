@@ -34,6 +34,7 @@ if(USE_ROS)
  target_link_libraries(ice_ba_ros
          IBA
          OF
+         LC
          ${catkin_LIBRARIES}
          )
  if (CVD_FOUND)
@@ -53,6 +54,7 @@ add_executable(ice_ba
 target_link_libraries(ice_ba
     IBA
     OF
+    LC
 )
 if (CVD_FOUND)
  target_link_libraries(ice_ba

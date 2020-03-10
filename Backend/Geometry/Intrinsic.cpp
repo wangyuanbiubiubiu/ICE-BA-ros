@@ -51,7 +51,8 @@ void Intrinsic::UndistortionMap::Set(const Intrinsic &K) {
       xn = xd * v;
     }
     if (!K.Undistort(xd, &xn, NULL, NULL, true)) {
-      exit(0);
+        continue;
+//      exit(0);
     }
     v = sqrtf(xn.SquaredLength() / xd.SquaredLength());//大概的一个畸变比例
 //#ifdef CFG_DEBUG
@@ -109,7 +110,8 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
 #ifdef FTR_UNDIST_DOG_LEG
   float dx2GN/*G-N解出的步长的欧式距离*/, dx2GD/*pU点的欧式距离*/, delta2/*信赖域半径*/, beta;
   LA::Vector2f dxGN/*G-N解出的增量*/, dxGD/*pU点*/;
-  bool update, converge;
+  bool update, converge ,success;
+    success = false;
 #endif
   if (UM) {//如果预先做了畸变表,然么就用这里的畸变作为初值
     if (UM->Empty()) {
@@ -135,7 +137,8 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
 #ifdef FTR_UNDIST_DOG_LEG
   delta2 = FTR_UNDIST_DL_RADIUS_INITIAL;//初始化一下信赖域半径
 #endif
-  for (int iIter = 0; iIter < FTR_UNDIST_MAX_ITERATIONS; ++iIter) {//最大迭代10次
+  for (int iIter = 0; iIter < FTR_UNDIST_MAX_ITERATIONS; ++iIter)
+  {//最大迭代10次
 #if 0
 //#if 1
     if (UT::Debugging()) {
@@ -152,41 +155,114 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
     ////J10 = div(r.y)/div(x) = (k1 + 2*k2*r^2 + 3*k3*r^4)*x*y + 2*p1*x + 2*p2*y
     ////J11 = div(r.y)/div(y) = (1 + k1*r^2 + k2*r^4 + k3*r^6) + (k1 + 2*k2*r^2 + 3*k3*r^4)*2*y^2 + 6*p1*y + 2*p2*x
     const float x = xn->x(), x2 = x * x, y = xn->y(), y2 = y * y, xy = x * y;
-    const float r2 = x2 + y2, r4 = r2 * r2, r6 = r2 * r4;
-    dr = ds[4] * r6 + ds[1] * r4 + ds[0] * r2 + 1.0f;// 1 + k1*r^2 + k2*r^4 + k3*r^6
-    j = jds[4] * r4 + jds[1] * r2 + ds[0];//k1 + 2*k2*r^2 + 3*k3*r^4
-    if (m_radial6)
+    if(!m_fishEye)
     {
-      const float dr2I = 1.0f / (ds[7] * r6 + ds[6] * r4 + ds[5] * r2 + 1.0f);
-      dr *= dr2I;
-      j = (j - (jds[7] * r4 + jds[6] * r2 + ds[5]) * dr) * dr2I;
-    }
-    //进行径向畸变
-    e.x() = dr * x;//x*(1 + k1*r^2 + k2*r^4 + k3*r^6)
-    e.y() = dr * y;//y*(1 + k1*r^2 + k2*r^4 + k3*r^6)
-    //先对径向畸变的雅克比进行赋值
-    J.m00() = j * (x2 + x2) + dr;//(1 + k1*r^2 + k2*r^4 + k3*r^6) + (k1 + 2*k2*r^2 + 3*k3*r^4)*2*x^2
-    J.m01() = j * (xy + xy);//(k1 + 2*k2*r^2 + 3*k3*r^4)*x*y
-    J.m11() = j * (y2 + y2) + dr;//(1 + k1*r^2 + k2*r^4 + k3*r^6) + (k1 + 2*k2*r^2 + 3*k3*r^4)*2*y^2
+        const float r2 = x2 + y2, r4 = r2 * r2, r6 = r2 * r4;
+        dr = ds[4] * r6 + ds[1] * r4 + ds[0] * r2 + 1.0f;// 1 + k1*r^2 + k2*r^4 + k3*r^6
+        j = jds[4] * r4 + jds[1] * r2 + ds[0];//k1 + 2*k2*r^2 + 3*k3*r^4
+        if (m_radial6)
+        {
+            const float dr2I = 1.0f / (ds[7] * r6 + ds[6] * r4 + ds[5] * r2 + 1.0f);
+            dr *= dr2I;
+            j = (j - (jds[7] * r4 + jds[6] * r2 + ds[5]) * dr) * dr2I;
+        }
+        //进行径向畸变
+        e.x() = dr * x;//x*(1 + k1*r^2 + k2*r^4 + k3*r^6)
+        e.y() = dr * y;//y*(1 + k1*r^2 + k2*r^4 + k3*r^6)
+        //先对径向畸变的雅克比进行赋值
+        J.m00() = j * (x2 + x2) + dr;//(1 + k1*r^2 + k2*r^4 + k3*r^6) + (k1 + 2*k2*r^2 + 3*k3*r^4)*2*x^2
+        J.m01() = j * (xy + xy);//(k1 + 2*k2*r^2 + 3*k3*r^4)*x*y
+        J.m11() = j * (y2 + y2) + dr;//(1 + k1*r^2 + k2*r^4 + k3*r^6) + (k1 + 2*k2*r^2 + 3*k3*r^4)*2*y^2
 //#ifdef CFG_DEBUG
 #if 0
-    J.m00() = 1 - 3 * x2 - y2;
+        J.m00() = 1 - 3 * x2 - y2;
     J.m01() = -2 * xy;
     J.m11() = 1 - x2 - 3 * y2;
 #endif
-    if (m_tangential) {
-        //切向畸变部分
-      const float dx = jds[2] * xy + ds[3] * (r2 + x2 + x2);//2*p1*x*y + p2*(r^2 + 2*x^2)
-      const float dy = jds[3] * xy + ds[2] * (r2 + y2 + y2);//2*p2*x*y + p1*(r^2 + 2*y^2)
-      e.x() = dx + e.x();//在径向畸变后进行切向畸变
-      e.y() = dy + e.y();
-      const float d2x = jds[2] * x, d2y = jds[2] * y;//
-      const float d3x = jds[3] * x, d3y = jds[3] * y;
-      J.m00() = d3x + d3x + d3x + d2y + J.m00();// 2*p1*y + 6*p2*x + 径向雅克比
-      J.m01() = d2x + d3y + J.m01();//2*p1*x + 2*p2*y + 径向雅克比
-      J.m11() = d3x + d2y + d2y + d2y + J.m11();//6*p1*y + 2*p2*x + 径向雅克比
+        if (m_tangential) {
+            //切向畸变部分
+            const float dx = jds[2] * xy + ds[3] * (r2 + x2 + x2);//2*p1*x*y + p2*(r^2 + 2*x^2)
+            const float dy = jds[3] * xy + ds[2] * (r2 + y2 + y2);//2*p2*x*y + p1*(r^2 + 2*y^2)
+            e.x() = dx + e.x();//在径向畸变后进行切向畸变
+            e.y() = dy + e.y();
+            const float d2x = jds[2] * x, d2y = jds[2] * y;//
+            const float d3x = jds[3] * x, d3y = jds[3] * y;
+            J.m00() = d3x + d3x + d3x + d2y + J.m00();// 2*p1*y + 6*p2*x + 径向雅克比
+            J.m01() = d2x + d3y + J.m01();//2*p1*x + 2*p2*y + 径向雅克比
+            J.m11() = d3x + d2y + d2y + d2y + J.m11();//6*p1*y + 2*p2*x + 径向雅克比
+        }
+        J.m10() = J.m01();
+    }else
+    {
+        ////针对k1,k2,k2,k3的等距投影模型, r^2 = x^2 + y^2
+        ////残差2*1 归一化坐标的2维： min F(x,y) = 0.5*r(x,y)^2 约束： x^2+y^2 <=
+        ///      r.x = x*(theta*(1 + k1*theta^2 + k2*theta^4 + k3 *theta^6 + k4*theta^8)/r) - x0
+        ////     r.x = y*(theta*(1 + k1*theta^2 + k2*theta^4 + k3 *theta^6 + k4*theta^8)/r) - y0
+        // distortion first:
+        const float u0 = x;//x
+        const float u1 = y;//y
+        const float r = sqrt(u0 * u0 + u1 * u1);//r = sqrt(x^2 + y^2)
+        const float theta = atan(r);
+        const float theta2 = theta * theta;
+        const float theta4 = theta2 * theta2;
+        const float theta6 = theta4 * theta2;
+        const float theta8 = theta4 * theta4;
+        const float thetad = theta * (1 + ds[0] * theta2 + ds[1] * theta4 + ds[2] * theta6 + ds[3] * theta8);
+
+        const float scaling = (r > 1e-8) ? thetad / r : 1.0;
+        e.x() = scaling * u0;
+        e.y() = scaling * u1;
+
+        if (r > 1e-8){
+            // mostly matlab generated...
+            float t2;//x^2
+            float t3;//y^2
+            float t4;//r^2 = x^2+y^2
+            float t6;//theta
+            float t7;//theta^2
+            float t8;// 1/r
+            float t9;//theta^4
+            float t11;// 1 / ((x^2+y^2) + 1.0);
+            float t17;// (((k1_ * theta^2 + k2_ * theta^4) + k3_ * t7 * t9) + k4_ * (t9 * t9)) + 1.0
+            float t18;
+            float t19;
+            float t20;
+            float t25;
+
+            t2 = u0 * u0;
+            t3 = u1 * u1;
+            t4 = t2 + t3;
+            t6 = atan(sqrt(t4));
+            t7 = t6 * t6;
+            t8 = 1.0 / sqrt(t4);
+            t9 = t7 * t7;
+            t11 = 1.0 / ((t2 + t3) + 1.0);
+            t17 = (((ds[0] * t7 + ds[1] * t9) + ds[2] * t7 * t9) + ds[3] * (t9 * t9)) + 1.0;
+            t18 = 1.0 / t4;
+            t19 = 1.0 / sqrt(t4 * t4 * t4);
+            t20 = t6 * t8 * t17;
+            t25 = ((ds[1] * t6 * t7 * t8 * t11 * u1 * 4.0
+                    + ds[2] * t6 * t8 * t9 * t11 * u1 * 6.0)
+                   + ds[3] * t6 * t7 * t8 * t9 * t11 * u1 * 8.0)
+                  + ds[0] * t6 * t8 * t11 * u1 * 2.0;
+            t4 = ((ds[1] * t6 * t7 * t8 * t11 * u0 * 4.0
+                   + ds[2] * t6 * t8 * t9 * t11 * u0 * 6.0)
+                  + ds[3] * t6 * t7 * t8 * t9 * t11 * u0 * 8.0)
+                 + ds[0] * t6 * t8 * t11 * u0 * 2.0;
+            t7 = t11 * t17 * t18 * u0 * u1;
+            J.m01() = (t7 + t6 * t8 * t25 * u0) - t6 * t17 * t19 * u0 * u1;
+            J.m11() = ((t20 - t3 * t6 * t17 * t19) + t3 * t11 * t17 * t18)
+                      + t6 * t8 * t25 * u1;
+            J.m00() = ((t20 - t2 * t6 * t17 * t19) + t2 * t11 * t17 * t18)
+                      + t6 * t8 * t4 * u0;
+            J.m10() = (t7 + t6 * t8 * t4 * u1) - t6 * t17 * t19 * u0 * u1;
+        } else {
+            J.m00() = 1;
+            J.m01() = 0;
+            J.m11() = 1;
+            J.m10() = 0;
+        }
     }
-    J.m10() = J.m01();
     e -= xd;//计算残差
     LA::SymmetricMatrix2x2f::AAT(J, A);//构造H矩阵
 //#ifdef CFG_DEBUG
@@ -204,7 +280,8 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
       dx.MakeMinus();//求出x
       dx2 = dx.SquaredLength();//x的欧式距离
 #ifdef FTR_UNDIST_DOG_LEG
-    if (!UM) {
+    if (!UM)
+    {
       dxGN = dx;//G-N法求出的增量
       dx2GN = dx2;//G-N法求出的增量的欧式距离
       dx2GD = 0.0f;//dogleg
@@ -272,17 +349,28 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
           }
         }
         update = true;//
+          const double chi2 = e.SquaredLength();;
+          if (chi2 < dx2Conv * 1e5) {
+              success = true;
+          }
         converge = dx2 < dx2Conv;//增量小于阈值,认为收敛
         break;
       }
       if (!update || converge) {
+          success = true;
         break;
       }
     } else
 #endif
     {
       *xn += dx;
+//      std::cout<<"iIter:"<<iIter<<" "<<"dx2:"<<dx2<<std::endl;
+          const double chi2 = e.SquaredLength();;
+          if (chi2 < dx2Conv * 1e5) {
+              success = true;
+          }
       if (dx2 < dx2Conv) {//收敛
+          success = true;
         break;
       }
     }

@@ -22,7 +22,9 @@
 #include "BoundingBox.h"
 #include "M-Estimator.h"
 #include "AlignedVector.h"
-
+#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
+#include <eigen3/Eigen/QR>
 namespace Depth {
 
 class InverseGaussian {
@@ -416,6 +418,7 @@ class Measurement {
   const LA::AlignedVector3f *m_t;//-tc0_c1
   LA::Vector3f m_Rx;//关键帧中左目的无畸变归一化坐标
   Point2D m_z;//关键帧中右目的无畸变归一化坐标左乘了Rc0c1以后进行了归一化
+
   LA::SymmetricMatrix2x2f m_W;//右目特征点的畸变部分协方差,用来做马氏距离归一化
 };
 
@@ -425,5 +428,15 @@ bool Triangulate(const float w, const LA::AlignedVector3f &t12, const Point2D &x
 bool Triangulate(const float w, const int N, const Measurement *zs, InverseGaussian *d,
                  AlignedVector<float> *work, const bool initialized = true,
                  float *eAvg = NULL);
+bool Triangulateinit(const float w, const int N, const Measurement *zs, InverseGaussian *d,
+                     AlignedVector<float> *work,const Rotation3D & Rclcr,const Point3D & tclcr_n, const bool initialized = true,
+                     float *eAvg = NULL);
+
+    bool linearTriangulateFromNViews(
+            const Eigen::Matrix3Xd & t_G_bv,//world系下的投影射线
+            const Eigen::Matrix3Xd &p_G_C,//world系下的pose
+            Eigen::Vector3d & p_G_P);//这点在左目坐标
+
+
 }
 #endif

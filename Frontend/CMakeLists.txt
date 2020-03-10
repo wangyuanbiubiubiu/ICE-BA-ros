@@ -22,11 +22,11 @@ set(HEADERS
         cameras/DistortionBase.hpp
         cameras/PinholeCamera.hpp
         cameras/RadialTangentialDistortion.hpp
-        cameras/RadialTangentialDistortion8.hpp
+        cameras/EquidistantDistortion.hpp
         cameras/implementation/CameraBase.hpp
         cameras/implementation/PinholeCamera.hpp
         cameras/implementation/RadialTangentialDistortion8.hpp
-        cameras/implementation/RadialTangentialDistortion.hpp
+        cameras/implementation/EquidistantDistortion.hpp
         basic_datatype.h
         feature_utils.h
         iba_helper.h

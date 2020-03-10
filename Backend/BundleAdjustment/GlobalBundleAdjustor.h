@@ -103,6 +103,7 @@ class GlobalBundleAdjustor : public MT::Thread {
   
  public:
 
+
   virtual void Initialize(IBA::Solver *solver, const int serial = 0, const int verbose = 0,
                           const int debug = 0, const int history = 0);
   virtual void Reset();
@@ -567,7 +568,13 @@ class GlobalBundleAdjustor : public MT::Thread {
     Rigid3D m_C;
   };
 
- protected:
+
+//add by wya
+   void GetGbaInfo(std::vector<int> & iFrms, std::vector<Rigid3D> & Cs , std::vector<ubyte> & ucs,
+           std::vector<std::vector<int>> & CovisibleKFs,std::vector<bool> &lastkf_stereoz);
+
+
+protected:
 
   virtual void SynchronizeData();
   virtual void UpdateData();
@@ -772,7 +779,7 @@ class GlobalBundleAdjustor : public MT::Thread {
   AlignedVector<Rigid3D> m_CsKFGT;
   AlignedVector<Camera> m_CsLMGT;
 #endif
-  std::vector<ubyte> m_ucs/*这个关键里地图点是否需要更新的flags*/,
+  std::vector<ubyte> m_ucs/*这个关键里关键帧pose是否需要更新的flags*/,
   m_ucmsLM/*运动更新的flag*/;
 #ifdef CFG_GROUND_TRUTH
   std::vector<ubyte> m_ucsGT;

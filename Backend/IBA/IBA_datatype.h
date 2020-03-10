@@ -60,8 +60,8 @@ struct Calibration {
 
 //相机的位姿
 struct CameraPose {
-  float R[3][3];  // rotation matrix, R[0][0] = FLT_MAX for unknown camera pose
-  float p[3];     // position
+  float R[3][3];  //Rc0(观测关键帧)c0(参考关键帧) rotation matrix, R[0][0] = FLT_MAX for unknown camera pose
+  float p[3];     //tc0(参考关键帧)c0(观测关键帧) position
 };                // for acc 3D point in world frame X, its coordinate in camera frame is obtained by R * (X - p)
 
 struct CameraPoseCovariance {
@@ -156,6 +156,16 @@ struct KeyFrame {
   std::vector<MapPoint> Xs;             // new map points 注意,这里的Xs只存储首次被这个关键帧看到的新的地图点,老的地图点它是不会存储的
   Depth d;                              // acc rough depth estimate
 };
+//GBA中更新了的地图点以及关键帧pose
+struct Global_Map
+{
+    std::vector<int> iFrmsKF;         //关键帧中的帧id frame indexes of those keyframes whose camera pose
+    std::vector<std::vector<int>>  CovisibleKFs;//更新的关键帧可能会有新的共视,所以这里也获取一下
+    // has been updated since last call
+    std::vector<CameraPose> CsKF;     //所有关键帧的pose camera poses corresponding to iFrmsKF
+    std::vector<Point3D> Xs;          //上一次call之后更新的地图点,世界坐标系下 updated 3D points since last call
+
+};
 
 struct SlidingWindow {
   std::vector<int> iFrms;           //滑窗中帧id frame indexes of those sliding window frames whose
@@ -171,8 +181,8 @@ struct SlidingWindow {
 };
 
 struct RelativeConstraint {
-  int iFrm1, iFrm2;
-  CameraPose T;       // X2 = T * X1 = R * (X1 - p)
+  int iFrm1, iFrm2;//参考关键帧id和观测关键帧id
+  CameraPose T;//Tc0(观测关键帧)c0(参考关键帧)       // X2 = T * X1 = R * (X1 - p)
   CameraPoseCovariance S;
 };
 

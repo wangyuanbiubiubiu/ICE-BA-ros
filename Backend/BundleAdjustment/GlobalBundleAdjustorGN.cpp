@@ -36,7 +36,12 @@
 //#define GBA_DEBUG_PCG_LOAD_RESULT
 #endif
 
-void GlobalBundleAdjustor::UpdateFactors() {
+int GBAdebug_count = -1;
+std::string gba_debug_file = "/home/wya/ICE-BA-Debug/ba/gba.txt";
+void GlobalBundleAdjustor::UpdateFactors()
+{
+
+    GBAdebug_count++;
 #ifdef CFG_VERBOSE
   if (m_verbose >= 3) {
     UT::PrintSeparator();
@@ -144,8 +149,15 @@ void GlobalBundleAdjustor::UpdateFactors() {
 //投影前pose x 投影前pose的H|-b更新在m_SAcus[_iKF].m_Acxx (m_Acxx是专门维护这个关键帧作为观测关键帧时的约束,m_Aczz是专门维护这个关键帧作为投影后关键帧时的约束)
 //投影后pose x 投影后pose的H|-b更新在m_SAcus[iKF].m_Aczz
 //投影前pose x 投影后pose的H更新在KF.m_SAcxzs[iZ] 即存储于投影后关键帧自己的数据结构里
-void GlobalBundleAdjustor::UpdateFactorsFeature() {
-//#ifdef CFG_DEBUG
+void GlobalBundleAdjustor::UpdateFactorsFeature()
+{
+
+    // write result to file
+//    std::ofstream foutC(gba_debug_file, std::ios::app);
+//    foutC.setf(std::ios::fixed, std::ios::floatfield);
+//    foutC << "UpdateFactorsFeature 第几次优化:"<<GBAdebug_count << "\n";
+
+    //#ifdef CFG_DEBUG
 #if 0
   UT::DebugStart();
   UT::DebugStop();
@@ -228,6 +240,13 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
           UT::Print("%f\n", A.m_Aczz.m_A.m00());
         }
 #endif
+//
+//          foutC.precision(0);
+//          foutC <<"遍历kf:"<<iKF<<",观测到kf:"<<iZ<<",点id:"<< ix<<",";
+//          foutC.precision(5);
+//          foutC << A.m_adx.m_add.m_a << ","<< A.m_adx.m_add.m_b << std::endl;
+
+
         if (ud) {//如果是新的因子.直接+= ,否则更新增量
           _KF.m_Axs[ix].m_Sadx += A.m_adx;//逆深度x逆深度的H|-b,投影前pose x 逆深度的H
         } else {
@@ -276,6 +295,8 @@ void GlobalBundleAdjustor::UpdateFactorsFeature() {
               SNZ, NZ, UT::Percentage(SNZ, NZ));
   }
 #endif
+
+//    foutC.close();
 }
 //更新LBA给GBA中各个关键帧之间的运动先验约束
 void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
@@ -336,10 +357,20 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraPose() {
         //m_ep = Rc0w(参考关键帧) * (twc0(观测到的关键帧) - twc0(参考关键帧)) - tc0(参考关键帧)c0(观测到的关键帧)(测量)
         //m_er = -ln(Rc0(参考关键帧)c0(观测到的关键帧)(测量) * Rc0w(观测到的关键帧) * Rc0w.t(参考关键帧))v
         Z.GetError(m_Cs/*GBA中所有关键帧的位姿*/, &A.m_Je.m_e, BA_ANGLE_EPSILON);
-      const float F = (Z.GetCost(1.0f, A.m_Je.m_e) - Z.m_xTb) / BA_WEIGHT_FEATURE;//没看懂这个操作,这咋求的这个cost
-      //const float F = (A.m_F / BA_WEIGHT_PRIOR_CAMERA_POSE - Z.m_xTb) / BA_WEIGHT_FEATURE;
-      const float w = BA_WEIGHT_PRIOR_CAMERA_POSE * ME::Weight<GBA_ME_FUNCTION>(F);
-      Z.GetFactor(w, m_Cs/*GBA中所有关键帧的位姿*/, &A, &U, BA_ANGLE_EPSILON);//不过这里H|-b的位置我不太清楚,没对上,就是这个g没懂怎么转换的
+        float F;
+        float w;
+        if(!Z.isloop)
+        {
+            F = (Z.GetCost(1.0f, A.m_Je.m_e) - Z.m_xTb) / BA_WEIGHT_FEATURE;
+            w = BA_WEIGHT_PRIOR_CAMERA_POSE * ME::Weight<GBA_ME_FUNCTION>(F);
+        }
+        else
+        {
+//            std::cout<<A.m_Je.m_e.m_ec[0].m_ep.x()<<" "<<A.m_Je.m_e.m_ec[0].m_ep.y()<<" "<<A.m_Je.m_e.m_ec[0].m_ep.z()<<std::endl;
+            w = LOOP_BA_WEIGHT_PRIOR_CAMERA_POSE;//针对闭环的情况
+        }
+
+        Z.GetFactor(w, m_Cs/*GBA中所有关键帧的位姿*/, &A, &U, BA_ANGLE_EPSILON);//不过这里H|-b的位置我不太清楚,没对上,就是这个g没懂怎么转换的
     } else {
       Z.GetFactor(BA_WEIGHT_PRIOR_CAMERA_POSE, m_Cs, &A, &U, BA_ANGLE_EPSILON);
     }
@@ -487,6 +518,11 @@ void GlobalBundleAdjustor::UpdateFactorsPriorCameraMotion() {
 //用来对所有路标点的逆深度进行约束,对于只有左目观测令每个路标点的逆深度在该 source KF 所管辖的所有路标点的平均逆深度附近
 //双目都观测到的话,就用外参来约束
 void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
+
+//    std::ofstream foutC(gba_debug_file, std::ios::app);
+//    foutC.setf(std::ios::fixed, std::ios::floatfield);
+//    foutC << "UpdateFactorsPriorDepth 第几次优化:"<<GBAdebug_count << "\n";
+
   FTR::Factor::DD dadd;//逆深度的先验因子
   //float dF;
 #ifdef CFG_STEREO
@@ -496,14 +532,26 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
   int SN = 0;
 #endif
   const int nKFs = int(m_KFs.size());//关键帧数量
-  for (int iKF = 0; iKF < nKFs; ++iKF) {//遍历所有的关键帧
-    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH)) {//是否需要更新深度?
+  for (int iKF = 0; iKF < nKFs; ++iKF)
+  {//遍历所有的关键帧
+    if (!(m_ucs[iKF] & GBA_FLAG_FRAME_UPDATE_DEPTH))
+    {//是否需要更新深度?
       continue;
     }
+
+    int totoal_count = 0;
+    int stereo_count = 0;
+
     const int id = m_iKF2d[iKF];//新地图点的开始id
     const Depth::InverseGaussian *ds = m_ds.data() + id;//对应的第一个新地图点的逆深度
     ubyte *uds = m_uds.data() + id;//地图点操作的flags
     KeyFrame &KF = m_KFs[iKF];//当前关键帧
+
+//      foutC.precision(0);
+//      foutC << "kf_id:"<<iKF;
+//      foutC.precision(5);
+//      foutC <<",平均深度:"<<KF.m_d.u()<<",不确定度:"<<KF.m_d.s2() << std::endl;
+
     const Depth::Prior zp(KF.m_d.u()/*平均深度*/, 1.0f / (BA_VARIANCE_PRIOR_FRAME_DEPTH + KF.m_d.s2())/*信息矩阵*/);
     const int Nx = int(KF.m_xs.size());
     for (int ix = 0; ix < Nx; ++ix) {//遍历所有地图点
@@ -516,6 +564,13 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
         //dF = acc.m_F;
         FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE/*权重*/, m_K.m_br/*-tc0_c1*/, ds[ix]/*地图点的观测*/, KF.m_xs[ix]/*地图点的观测*/, &A, &U);
         dadd = A.m_add;
+
+//          foutC.precision(0);
+//          foutC <<"双目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
+//          foutC.precision(5);
+//          foutC <<A.m_F<<","<< A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
+          totoal_count++;
+          stereo_count++;
       } else
 #endif
       {
@@ -523,6 +578,11 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
         //dF = acc.m_F;
         zp.GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_PRIOR_DEPTH/*先验深度的权重*/, ds[ix].u()/*这个点的深度,无双目观测的情况下是用场景平均深度给的先验*/, A/*关于地图点深度先验的因子*/);
         dadd = A;
+//          foutC.precision(0);
+//          foutC <<"单目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
+//          foutC.precision(5);
+//          foutC << A.m_F<< ","<<A.m_a<< ","<< A.m_b << std::endl;
+          totoal_count++;
       }
       KF.m_Axs[ix].m_Sadx.m_add += dadd;//这个因子是存在关键帧的因子中
       //dF = acc.m_F - dF;
@@ -535,6 +595,8 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
       }
 #endif
     }
+
+//      foutC<<"KF:"<<iKF<<",单:"<<totoal_count - stereo_count<<",双:"<<stereo_count<<",双的比例:"<<double(stereo_count)/totoal_count<<"\n";
   }
 #ifdef CFG_VERBOSE
   if (m_verbose >= 3) {
@@ -542,6 +604,7 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
     UT::Print("  Prior Depth  = %d / %d = %.2f%%\n", SN, N, UT::Percentage(SN, N));
   }
 #endif
+//  foutC.close();
 }
 
 //更新imu约束所带来的因子

@@ -222,6 +222,7 @@ inline bool refine_kp_in_larger_img(const cv::Mat& img_in_smooth,
 // 输出单目mask和视场角
 bool generate_cam_mask(const cv::Matx33f& K,
                        const cv::Mat_<float>& dist_coeffs,
+                       const bool fisheye,
                        const cv::Size& mask_size,
                        cv::Mat_<uchar>* cam_mask,
                        float* fov_deg)
@@ -246,7 +247,17 @@ bool generate_cam_mask(const cv::Matx33f& K,
             std::vector<cv::Vec3f> ray(1);
             std::vector<cv::Point2f> dist_pt;
             ray[0] = cv::Vec3f(a, -b, 1);
-            cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+            if(!fisheye)
+                cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+            else
+            {
+                cv::Vec4f distortion_coeffs;
+                for (int i = 0; i < distortion_coeffs.rows; ++i)
+                    distortion_coeffs[i] = (dist_coeffs)(i);
+
+                cv::fisheye::projectPoints(ray, dist_pt, cv::Vec3f(), cv::Vec3f(),K, distortion_coeffs);
+            }
+
             if (dist_pt[0].x > 0 &&
                 dist_pt[0].y > 0 &&
                 dist_pt[0].x < mask_size.width &&
@@ -274,7 +285,15 @@ bool generate_cam_mask(const cv::Matx33f& K,
     std::vector<cv::Vec3f> ray(1);
     std::vector<cv::Point2f> dist_pt;
     ray[0] = cv::Vec3f(d, 0, 1);//计算XOZ面的最大的半径,投影到像素平面上以后减去原点的x,就是半径的距离，以此作为mask的半径
-    cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+    if(!fisheye)
+        cv::projectPoints(ray, cv::Vec3f(), cv::Vec3f(), K, dist_coeffs, dist_pt);
+    else
+    {
+        cv::Vec4f distortion_coeffs;
+        for (int i = 0; i < distortion_coeffs.rows; ++i)
+            distortion_coeffs[i] = (dist_coeffs)(i);
+        cv::fisheye::projectPoints(ray, dist_pt, cv::Vec3f(), cv::Vec3f(),K, distortion_coeffs);
+    }
     cam_mask->create(mask_size);
     cam_mask->setTo(0xff);
     const int r = static_cast<int>(dist_pt[0].x - K(0, 2));
@@ -300,6 +319,8 @@ struct {
 } kp_compare;
 }  // namespace internal
 //
+
+
 
 //step1在第1层金字塔上提取fast点,算Harris响应
 //step2对提取的点进行过滤,让特征点enforce_uniformity_radius范围点无其他点
@@ -411,6 +432,9 @@ bool detect_orb_features(const cv::Mat& img_in_smooth,//相机图片
         kp_in_pyramids[det_pyra_level].reserve(points.size());
         for (const auto& pnt_and_score : points) {
             cv::KeyPoint kp;
+            if(pnt_and_score.x <= 16 || pnt_and_score.x >= (img_pyramids[det_pyra_level].cols - 16)
+            || pnt_and_score.y <= 16 || pnt_and_score.y >= (img_pyramids[det_pyra_level].rows - 16))
+                continue;
             kp.pt.x = pnt_and_score.x;
             kp.pt.y = pnt_and_score.y;
             kp.response = pnt_and_score.score;  // brisk score here
@@ -578,6 +602,8 @@ bool detect_orb_features(const cv::Mat& img_in_smooth,//相机图片
     }
     return true;
 }
+
+
 
 bool detect_harris_features(
     const cv::Mat& img_in_smooth,

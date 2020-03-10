@@ -21,5 +21,20 @@ body_T_imu:
          0.0, 1.0, 0.0, 0.0,
          0.0, 0.0, 1.0, 0.0,
          0.0, 0.0, 0.0, 1.0]
-   
 
+#imu parameters   continuous-time    
+acc_n: 0.01           # accelerometer measurement noise continuous-time. 0.01
+acc_w: 0.001         # accelerometer bias random work noise continuous-time.  0.001
+gyr_n: 0.00017453          # gyroscope measurement noise continuous-time.    0.01*pi/180 
+gyr_w: 0.00017453       # gyroscope bias random work noise continuous-time.   0.01*pi/180   
+g_norm: 9.81007     # gravity magnitude
+
+
+#loop
+loop_closure: 1                    # start loop closure
+dbow3_voc_path: "/home/wya/ICE-BA_ws/src/ICE-BA/vocab/orbvoc.dbow3" 
+
+#ground truth
+show_GT: 1
+GT_path: "/home/wya/dataset/EuRoC/MH_05_difficult/mav0/state_groundtruth_estimate0/data.csv"
+GT_SKIP: 200 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点

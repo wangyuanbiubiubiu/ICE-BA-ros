@@ -524,7 +524,8 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
   for (int ic = 0, im = Nm - Nc; ic < Nc; ++ic, ++im) {//遍历每个关键帧的pose增量,如果大于阈值,则认为需要更新增量,更新到p,r上
     Rigid3D &C = m_Cs[ic];//关键帧的位姿 //pose部分的更新
     const bool ur = m_xr2s[ic] >= BA_UPDATE_ROTATION, up = m_xp2s[ic] >= BA_UPDATE_POSITION;//r,p是否需要更新
-    if (ur || up) {
+    if (ur || up)
+    {
       xcsDL[ic].Get(dp, dr);
       //dp.z() = 0.0f;
       dR.SetRodrigues(dr, BA_ANGLE_EPSILON);
@@ -629,7 +630,8 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
 #endif
   m_axds.Resize(0);
   m_dsBkp.resize(m_xds.Size());//就是m_ds的一个备份
-  for (int iKF = 0; iKF < Nc; ++iKF) {//遍历所有的关键帧里的新地图点
+  for (int iKF = 0; iKF < Nc; ++iKF)
+  {//遍历所有的关键帧里的新地图点
     const int id = m_iKF2d[iKF];
     ubyte *uds = m_uds.data() + id;//
     const KeyFrame &KF = m_KFs[iKF];
@@ -665,6 +667,10 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
       if (axd < BA_UPDATE_DEPTH) {//逆深度的增量太小的话也不用更新
         continue;
       }
+//      if ((ds[ix].u() + xds[ix]) <= 0.01f)//深度为负了明显不对
+//      {
+//          continue;
+//      }
       Depth::InverseGaussian &d = ds[ix];//原始逆深度
       d.u() = xds[ix] + d.u();//更新逆深度以及协方差
       d.s2() = DEPTH_VARIANCE_EPSILON + KF.m_Mxs1[ix].m_mdx.m_add.m_a * BA_WEIGHT_FEATURE;
@@ -672,16 +678,16 @@ bool GlobalBundleAdjustor::UpdateStatesPropose() {
       //  d = dsBkp[ix];
       //  continue;
       //}
-      //d.u() = UT_CLAMP(d.u(), DEPTH_MIN, DEPTH_MAX);
-      //d.u() = UT_CLAMP(d.u(), DEPTH_EPSILON, DEPTH_MAX);
-      //if (d.u() < DEPTH_EPSILON) {
-      //  d.u() = DEPTH_EPSILON;
-      //} else if (d.u() > DEPTH_MAX) {
-      //  d.u() = KF.m_d.u();
-      //}
-      //if (!d.Valid()) {
-      //  d.u() = KF.m_d.u();
-      //}
+//      d.u() = UT_CLAMP(d.u(), DEPTH_MIN, DEPTH_MAX);
+//      d.u() = UT_CLAMP(d.u(), DEPTH_EPSILON, DEPTH_MAX);
+//      if (d.u() < DEPTH_EPSILON) {//深度优化成了负数的话应该怎么办呢
+//        d.u() = DEPTH_EPSILON;
+//      } else if (d.u() > DEPTH_MAX) {
+//        d.u() = KF.m_d.u();
+//      }
+//      if (!d.Valid()) {
+//        d.u() = KF.m_d.u();
+//      }
       m_axds.Push(axd);//保存一下逆深度增量的绝对值
       m_ucs[iKF] |= GBA_FLAG_FRAME_UPDATE_DEPTH;//需要更新深度
       uds[ix] |= GBA_FLAG_TRACK_UPDATE_DEPTH;

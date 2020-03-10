@@ -741,14 +741,19 @@ class Intrinsic {
   inline void Distort(const Point2D &xn, Point2D *xd) const {
     const float *ds = m_k.m_ds, *jds = m_k.m_jds;
     const float x = xn.x(), x2 = x * x, y = xn.y(), y2 = y * y, r2 = x2 + y2;
-    if (m_fishEye) {
+    if (m_fishEye)
+    {
       const float r = sqrtf(r2), t1 = UT_ATANF(r), t2 = t1 * t1;
       const float t4 = t2 * t2, t6 = t2 * t4, t8 = t4 * t4;
       const float s = t1 * (ds[3] * t8 + ds[2] * t6
         + ds[1] * t4 + ds[0] * t2 + 1.0f) / r;
       xd->x() = s * x;
       xd->y() = s * y;
-    } else {
+    } else
+    {
+        //radtan
+        //r.x = x*(1 + k1*r^2 + k2*r^4 + k3*r^6) + 2*p1*x*y + p2*(r^2 + 2*x^2) - x0
+        //r.y = y*(1 + k1*r^2 + k2*r^4 + k3*r^6) + 2*p2*x*y + p1*(r^2 + 2*y^2) - y0
       const float r4 = r2 * r2, r6 = r2 * r4;
       float dr = ds[4] * r6 + ds[1] * r4 + ds[0] * r2 + 1.0f;
       if (m_radial6)

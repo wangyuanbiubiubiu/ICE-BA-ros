@@ -1681,6 +1681,34 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF)
   m_SAcmsLM.InsertZero(Nm1);
 }
 
+void GlobalBundleAdjustor::GetGbaInfo(std::vector<int> & iFrms, std::vector<Rigid3D> & Cs ,
+        std::vector<ubyte> & ucs,std::vector<std::vector<int>> & CovisibleKFs,std::vector<bool> &lastkf_stereoz)
+{
+
+    iFrms  = m_iFrms;
+    for (int i = 0; i < m_Cs.Size(); ++i)
+    {
+        Cs.push_back(m_Cs[i]);
+        std::vector<int> cur_CovisibleKFs;
+        for (int j = 0; j < m_KFs[i].m_iKFsMatch.size(); ++j) //这个关键帧的共视帧,我只要iFrm的id
+            cur_CovisibleKFs.push_back(m_iFrms[m_KFs[i].m_iKFsMatch[j]]);
+        CovisibleKFs.push_back(cur_CovisibleKFs);
+    }
+
+    if(!(m_KFs.size() == 1))
+    {
+        const int Nx = int(m_KFs[m_KFs.size()-2].m_xs.size());
+        lastkf_stereoz.resize(Nx,false);
+        for (int ix = 0; ix < Nx; ++ix)
+        {
+            if(m_KFs[m_KFs.size()-2].m_xs[ix].m_xr.Valid())
+                lastkf_stereoz[ix] = true;
+        }
+    }
+
+    ucs = m_ucs;
+}
+
 void GlobalBundleAdjustor::DeleteKeyFrame(const int iKF) {
   //Timer timer;
   //timer.Start();
@@ -2189,6 +2217,8 @@ void GlobalBundleAdjustor::UpdateCameras(const std::vector<GlobalMap::InputCamer
 //step2:上次滑窗的参考关键帧,观测关键帧,最老帧所对应的关键帧,这之中的每个关键帧都将他之前的这里面的关键帧push进自己的先验约束中,并构建索引
 void GlobalBundleAdjustor::PushCameraPriorPose(const CameraPrior::Pose &Zp) {
   const int iZp = static_cast<int>(m_Zps.size());
+
+
   m_Zps.push_back(Zp);
   const int N = static_cast<int>(Zp.m_iKFs.size());//这次运动先验所涉及的观测关键帧(如果最老帧是关键帧时merge给的位姿约束的话,就还有最老帧的KF的id)的个数
   m_Aps.resize(iZp + 1);

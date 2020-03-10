@@ -706,7 +706,7 @@ bool RadialTangentialDistortion8::undistort_GN(float u_dist,
   // this is expensive: we solve with Gauss-Newton
   const Eigen::Vector2f uv_dist_in(u_dist, v_dist);
   Eigen::Vector2f x_bar = uv_dist_in;  // initialise at distorted point
-  const int n = 7;  // just 5 iterations max.
+  const int n = 10;  // just 5 iterations max.
   Eigen::Matrix2f E = Eigen::Matrix2f::Zero();  // error Jacobian
   bool success = false;
   for (int i = 0; i < n; i++) {

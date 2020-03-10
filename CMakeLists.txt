@@ -79,6 +79,8 @@ if (CVD_FOUND)
  endif()
 endif()
 
+
+
 # =========================
 # Frontend
 # =========================
@@ -93,3 +95,8 @@ add_subdirectory(Backend)
 # App
 # =========================
 add_subdirectory(App)
+
+# =========================
+# Loopclosure
+# =========================
+add_subdirectory(Loopclosure)

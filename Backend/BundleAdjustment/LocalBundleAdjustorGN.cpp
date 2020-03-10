@@ -37,8 +37,11 @@
 #define LBA_ME_FUNCTION ME::FUNCTION_NONE
 #endif
 #endif
-
-void LocalBundleAdjustor::UpdateFactors() {
+int LBAdebug_count = -1;
+std::string lba_debug_file = "/home/wya/ICE-BA-Debug/ba/lba.txt";
+void LocalBundleAdjustor::UpdateFactors()
+{
+    LBAdebug_count++;
 #ifdef CFG_VERBOSE
   if (m_verbose >= 3) {
     UT::PrintSeparator();
@@ -191,6 +194,10 @@ void LocalBundleAdjustor::UpdateFactorsFeaturePriorDepth() {
 //同时一个地图点可能有多条子轨迹,KF.m_AxsST[iST].m_Sadd里就是每个点的每条轨迹的总的逆深度X逆深度,逆深度的-b,这里是实际的1/轨迹条数
 //m_SAcusLF[iLF]就是滑窗中每一个普通帧poseX普通帧pose的H以及普通帧pose对应的-b,也进行更新这个因子的更新
 void LocalBundleAdjustor::UpdateFactorsFeatureLF() {
+
+//    std::ofstream foutC(lba_debug_file, std::ios::app);
+//    foutC.setf(std::ios::fixed, std::ios::floatfield);
+//    foutC << "UpdateFactorsFeatureLF 第几次优化:"<<LBAdebug_count << "\n";
   Rigid3D Tr[2];
   FTR::Factor::DD dadd, daddST;//就是一些中间状态，因子已存在但需要更新,所以要保存一些这个老的因子
   Camera::Factor::Unitary::CC dAczz;
@@ -273,6 +280,10 @@ void LocalBundleAdjustor::UpdateFactorsFeatureLF() {
                                         , m_K.m_br/*-tc0_c1*/
 #endif
                                         );
+//            foutC.precision(0);
+//            foutC <<"遍历lf:"<<iLF<<",观测到kf:"<<iZ<<",点id:"<< ix<<",";
+//            foutC.precision(5);
+//            foutC << A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
           AST.Set(A.m_add/*逆深度和逆深度的H,逆深度的-b*/, LF.m_Azs1[iz].m_adczA/*这个地图点的逆深度和普通帧pose的H*/);//拷贝一下副本
           if (Nst >= 1)
           {
@@ -425,10 +436,14 @@ void LocalBundleAdjustor::UpdateFactorsFeatureLF() {
 #endif
     }
   }
+//  foutC.close();
 }
 
 void LocalBundleAdjustor::UpdateFactorsFeatureKF()
 {
+//    std::ofstream foutC(lba_debug_file, std::ios::app);
+//    foutC.setf(std::ios::fixed, std::ios::floatfield);
+//    foutC << "UpdateFactorsFeatureKF 第几次优化:"<<LBAdebug_count << "\n";
   Rigid3D Tr[2];
   FTR::Factor::DD dadd;
   FTR::Factor::Depth::U U;
@@ -485,6 +500,11 @@ void LocalBundleAdjustor::UpdateFactorsFeatureKF()
                                       , m_K.m_br/*-tc0_c1*/
 #endif
                                       );
+//          foutC.precision(0);
+//          foutC <<"遍历kf:"<<iKF<<",观测到kf:"<<iZ<<",点id:"<< ix<<",";
+//          foutC.precision(5);
+//          foutC << A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
+
         if (ud)//是一个新的观测,所以直接+=就可以
         {
 //#ifdef CFG_DEBUG
@@ -528,10 +548,15 @@ void LocalBundleAdjustor::UpdateFactorsFeatureKF()
 #endif
     }
   }
+//  foutC.close();
 }
 
 void LocalBundleAdjustor::UpdateFactorsPriorDepth()
 {
+
+//    std::ofstream foutC(lba_debug_file, std::ios::app);
+//    foutC.setf(std::ios::fixed, std::ios::floatfield);
+//    foutC << "UpdateFactorsPriorDepth 第几次优化:"<<LBAdebug_count << "\n";
   FTR::Factor::DD dadd, daddST;
   //float dF;
 #ifdef CFG_STEREO
@@ -557,6 +582,12 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
     const Depth::InverseGaussian *ds = m_ds.data() + id;
     ubyte *uds = m_uds.data() + id;
     KeyFrame &KF = m_KFs[iKF];//当前这个关键帧
+
+//      foutC.precision(0);
+//      foutC << "kf_id:"<<iKF;
+//      foutC.precision(5);
+//      foutC <<",平均深度:"<<KF.m_d.u()<<",不确定度:"<<KF.m_d.s2() << std::endl;
+
     const Depth::Prior zp(KF.m_d.u(), 1.0f / (BA_VARIANCE_PRIOR_FRAME_DEPTH + KF.m_d.s2()));//地图点平均深度初始化一下先验因子
     const int Nx = static_cast<int>(KF.m_xs.size());//这个关键帧的新地图点
     for (int ix = 0; ix < Nx; ++ix)
@@ -578,6 +609,12 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
           //dF = acc.m_F;
           FTR::GetFactor<LBA_ME_FUNCTION>(BA_WEIGHT_FEATURE_KEY_FRAME, m_K.m_br/*-tc0_c1*/, ds[ix], KF.m_xs[ix], &A, &U);
           dadd = A.m_add;
+
+//            foutC.precision(0);
+//            foutC <<"双目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
+//            foutC.precision(5);
+//            foutC <<A.m_F<<","<< A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
+
         } else
 #endif
         {
@@ -585,6 +622,11 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
           //dF = acc.m_F;
           zp.GetFactor<LBA_ME_FUNCTION>(BA_WEIGHT_PRIOR_DEPTH, ds[ix].u()/*逆深度*/, A);
           dadd = A;
+
+//            foutC.precision(0);
+//            foutC <<"单目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
+//            foutC.precision(5);
+//            foutC << A.m_F<< ","<<A.m_a<< ","<< A.m_b << std::endl;
         }
         KF.m_Axps[ix].m_Sadd += dadd;//将左右目约束以及左目和平均场景的约束加入H|-b
         KF.m_Axs[ix].m_Sadd += dadd;
@@ -717,6 +759,7 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
       }
     }
   }
+//  foutC.close();
 }
 
 void LocalBundleAdjustor::UpdateFactorsPriorCameraMotion()

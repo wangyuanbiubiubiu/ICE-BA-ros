@@ -228,42 +228,44 @@ void filter_outlier_flows(const std::vector<cv::Point2f>& small_img_pt_init,
   }
 }
 
-// [NOTE] We keep this NON-pyramid general interface to support slave_det_mode = OF
-// This function is acc wrapper of the pyramid version.
-void propagate_with_optical_flow(const cv::Mat& img_in_smooth,
-                                 const cv::Mat_<uchar>& mask,
-                                 const cv::Mat& pre_image,
-                                 const cv::Mat& pre_image_orb_feature,
-                                 const std::vector<cv::KeyPoint>& pre_image_keypoints,
-                                 FeatureTrackDetector* feat_track_detector,
-                                 std::vector<cv::KeyPoint>* key_pnts_ptr,
-                                 cv::Mat_<uchar>* mask_with_of_out_ptr,
-                                 cv::Mat* orb_feat_OF_ptr,
-                                 const cv::Vec2f& init_pixel_shift,
-                                 const cv::Matx33f* K_ptr,
-                                 const cv::Mat_<float>* dist_ptr,
-                                 const cv::Matx33f* old_R_new_ptr,
-                                 const bool absolute_static) {
-  // Construct image pyramids first
-  std::vector<cv::Mat> img_in_smooth_pyramids, pre_image_pyramids;
-  build_pyramids(img_in_smooth, FeatureTrackDetector::kMaxPyraLevelOF, &img_in_smooth_pyramids);
-  build_pyramids(pre_image, FeatureTrackDetector::kMaxPyraLevelOF, &pre_image_pyramids);
-
-  propagate_with_optical_flow(img_in_smooth_pyramids,
-                              mask,
-                              pre_image_pyramids,
-                              pre_image_orb_feature,
-                              pre_image_keypoints,
-                              feat_track_detector,
-                              key_pnts_ptr,
-                              mask_with_of_out_ptr,
-                              orb_feat_OF_ptr,
-                              init_pixel_shift,
-                              K_ptr,
-                              dist_ptr,
-                              old_R_new_ptr,
-                              absolute_static);
-}
+//// [NOTE] We keep this NON-pyramid general interface to support slave_det_mode = OF
+//// This function is acc wrapper of the pyramid version.
+//void propagate_with_optical_flow(const cv::Mat& img_in_smooth,
+//                                 const cv::Mat_<uchar>& mask,
+//                                 const cv::Mat& pre_image,
+//                                 const cv::Mat& pre_image_orb_feature,
+//                                 const std::vector<cv::KeyPoint>& pre_image_keypoints,
+//                                 FeatureTrackDetector* feat_track_detector,
+//                                 std::vector<cv::KeyPoint>* key_pnts_ptr,
+//                                 cv::Mat_<uchar>* mask_with_of_out_ptr,
+//                                 cv::Mat* orb_feat_OF_ptr,
+//                                 const cv::Vec2f& init_pixel_shift,
+//                                 const cv::Matx33f* K_ptr,
+//                                 const cv::Mat_<float>* dist_ptr,
+//                                 const cv::Matx33f* old_R_new_ptr,
+//                                 const bool absolute_static) {
+//  // Construct image pyramids first
+//  std::vector<cv::Mat> img_in_smooth_pyramids, pre_image_pyramids;
+//  build_pyramids(img_in_smooth, FeatureTrackDetector::kMaxPyraLevelOF, &img_in_smooth_pyramids);
+//  build_pyramids(pre_image, FeatureTrackDetector::kMaxPyraLevelOF, &pre_image_pyramids);
+//
+//  bool fisheye = false;
+//  propagate_with_optical_flow(img_in_smooth_pyramids,
+//                              mask,
+//                              pre_image_pyramids,
+//                              pre_image_orb_feature,
+//                              pre_image_keypoints,
+//                              feat_track_detector,
+//                              key_pnts_ptr,
+//                              mask_with_of_out_ptr,
+//                              orb_feat_OF_ptr,
+//                              fisheye,
+//                              init_pixel_shift,
+//                              K_ptr,
+//                              dist_ptr,
+//                              old_R_new_ptr,
+//                              absolute_static);
+//}
 //先过滤响应弱的前一帧的特征点,然后imu预测的特征点作为初值进行光流追踪,如果追踪效果不好,调整图像亮度再进行一次光流,最后极大值抑制,并且更新观测到的地图点的轨迹长度和坐标
 void propagate_with_optical_flow(const std::vector<cv::Mat>& img_in_smooth_pyramids/*当前帧的所有金字塔图片*/,
                                  const cv::Mat_<uchar>& mask/*左相机掩码*/,
@@ -274,6 +276,7 @@ void propagate_with_optical_flow(const std::vector<cv::Mat>& img_in_smooth_pyram
                                  std::vector<cv::KeyPoint>* key_pnts_ptr/*左相机当前帧提取到的特征点*/,
                                  cv::Mat_<uchar>* mask_with_of_out_ptr,
                                  cv::Mat* orb_feat_OF_ptr/*左相机当前帧提取到的特征点对应的描述子*/,
+                                 const bool fisheye,
                                  const cv::Vec2f& init_pixel_shift,
                                  const cv::Matx33f* K_ptr/*cv形式的左右相机内参*/,
                                  const cv::Mat_<float>* dist_ptr/*左右相机的畸变参数*/,
@@ -334,23 +337,56 @@ void propagate_with_optical_flow(const std::vector<cv::Mat>& img_in_smooth_pyram
             const cv::Matx33f& old_R_new = *old_R_new_ptr;//Rcl(pre)_cl(cur)
             std::vector<cv::Point2f> pre_feat_undistorted;//去完畸变后的特征点的归一化坐标//TODO equi wya
             // TODO(mingyu): use vio undistort with NEON
-            cv::undistortPoints(pre_feat_distorted,//去畸变
-                                pre_feat_undistorted,
-                                K, *dist_ptr);
-            std::vector<cv::Point3f> feat_new_rays(pre_feat_undistorted.size());//经过旋转预测的当前帧的特征点的归一化坐标
-            for (size_t i = 0; i < pre_feat_undistorted.size(); i++) {
-                cv::Vec3f pre_ray(pre_feat_undistorted[i].x, pre_feat_undistorted[i].y, 1);//前一帧下这个特征点的归一话坐标
-                cv::Vec3f predicted_ray = old_R_new.t() * pre_ray;// Pcur = Rcl(cur)_cl(pre) * Ppre //用旋转预测当前特征点的归一化坐标
-                feat_new_rays[i].x = predicted_ray[0] / predicted_ray[2];
-                feat_new_rays[i].y = predicted_ray[1] / predicted_ray[2];
-                feat_new_rays[i].z = 1;
+            // wya:fisheye
+            if(fisheye)
+            {
+                cv::Vec4f distortion_coeffs;
+                for (int i = 0; i < distortion_coeffs.rows; ++i)
+                    distortion_coeffs[i] = (*dist_ptr)(i);
+                cv::fisheye::undistortPoints(pre_feat_distorted,//去畸变
+                                             pre_feat_undistorted,
+                                             K, distortion_coeffs);
+
+
+                std::vector<cv::Point3f> feat_new_rays(pre_feat_undistorted.size());//经过旋转预测的当前帧的特征点的归一化坐标
+                // reset kp position//pre_image_pt_rotated经过旋转预测后的前一帧的特征点在当前帧的像素坐标
+                for (size_t i = 0; i < pre_feat_undistorted.size(); i++) {
+                    cv::Vec3f pre_ray(pre_feat_undistorted[i].x, pre_feat_undistorted[i].y, 1);//前一帧下这个特征点的归一话坐标
+                    cv::Vec3f predicted_ray = old_R_new.t() * pre_ray;// Pcur = Rcl(cur)_cl(pre) * Ppre //用旋转预测当前特征点的归一化坐标
+                    feat_new_rays[i].x = predicted_ray[0] / predicted_ray[2];
+                    feat_new_rays[i].y = predicted_ray[1] / predicted_ray[2];
+                    feat_new_rays[i].z = 1;
+                }
+
+                cv::fisheye::projectPoints(feat_new_rays,pre_image_pt_rotated,
+                                  cv::Matx31d::zeros(),
+                                  cv::Matx31d::zeros(),
+                                  K, distortion_coeffs);
             }
-            // reset kp position//pre_image_pt_rotated经过旋转预测后的前一帧的特征点在当前帧的像素坐标
-            cv::projectPoints(feat_new_rays,
-                              cv::Matx31d::zeros(),
-                              cv::Matx31d::zeros(),
-                              K, *dist_ptr,
-                              pre_image_pt_rotated);
+            else
+            {
+                cv::undistortPoints(pre_feat_distorted,//去畸变
+                                    pre_feat_undistorted,
+                                    K, *dist_ptr);
+
+                std::vector<cv::Point3f> feat_new_rays(pre_feat_undistorted.size());//经过旋转预测的当前帧的特征点的归一化坐标
+                for (size_t i = 0; i < pre_feat_undistorted.size(); i++) {
+                    cv::Vec3f pre_ray(pre_feat_undistorted[i].x, pre_feat_undistorted[i].y, 1);//前一帧下这个特征点的归一话坐标
+                    cv::Vec3f predicted_ray = old_R_new.t() * pre_ray;// Pcur = Rcl(cur)_cl(pre) * Ppre //用旋转预测当前特征点的归一化坐标
+                    feat_new_rays[i].x = predicted_ray[0] / predicted_ray[2];
+                    feat_new_rays[i].y = predicted_ray[1] / predicted_ray[2];
+                    feat_new_rays[i].z = 1;
+                }
+                // reset kp position//pre_image_pt_rotated经过旋转预测后的前一帧的特征点在当前帧的像素坐标
+
+                cv::projectPoints(feat_new_rays,
+                                  cv::Matx31d::zeros(),
+                                  cv::Matx31d::zeros(),
+                                  K, *dist_ptr,
+                                  pre_image_pt_rotated);
+            }
+
+
             CHECK_EQ(pre_image_keypoints_small.size(), pre_image_pt_rotated.size());
         } else {
             pre_image_pt_rotated = pre_feat_distorted;
@@ -785,6 +821,22 @@ void FeatureTrackDetector::flush_feature_tracks(const std::vector<cv::KeyPoint>&
     id_generator_.reset(max_feat_id);
   }
 }
+
+void FeatureTrackDetector::ComputeDescriptors(const cv::Mat& img_in_smooth,//相机图片
+                            std::vector<cv::KeyPoint>* key_pnts_ptr,cv::Mat* orb_feat_ptr)
+    {
+        if (orb_feat_ptr != nullptr) {
+            // detect orb at pyra 0
+            // since orb radius is 15, which is alraedy pretty big
+#ifdef __ARM_NEON__
+            ORBextractor::computeDescriptorsN512(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
+#else
+            ORBextractor::computeDescriptors(img_in_smooth, *key_pnts_ptr, orb_feat_ptr);
+#endif
+        }
+    }
+
+
 //输入左相机图片,图像掩码,最大提取的特征点数量,金字塔层数,fast点阈值,特征点,描述子
 //step1在第1层金字塔上提取fast点,算Harris响应
 //step2对提取的点进行过滤,让特征点enforce_uniformity_radius范围点无其他点
@@ -810,6 +862,42 @@ bool FeatureTrackDetector::detect(const cv::Mat& img_in_smooth,
                                  1e-7 /*refine_harris_threshold*/);
 }
 
+    bool FeatureTrackDetector::detect_for_loop(const cv::Mat& img_in_smooth,
+                                      const cv::Mat_<uchar>& mask,
+                                      int request_feat_num,
+                                      int pyra_level,  // Total pyramid levels, including the base image
+                                      int fast_thresh,
+                                      std::vector<cv::KeyPoint>* key_pnts_ptr,
+                                      cv::Mat* orb_feat_ptr)
+{
+
+//                      ORBextractor orb(request_feat_num , 2, 1,
+//                                       ORBextractor::HARRIS_SCORE,
+//                                       fast_thresh,
+//                                       true);
+//                      //提取fast(但是是用harris响应值),但没有计算256位的描述子,注意,这里只在det_pyra_level这层提取了特征点
+//                      orb.detectgf_compute(img_in_smooth,
+//                                           mask,
+//                                  key_pnts_ptr);
+//    ComputeDescriptors(img_in_smooth,key_pnts_ptr,orb_feat_ptr);
+//    return true;
+//一致的话表现比较好
+        return XP::detect_orb_features(img_in_smooth,//相机图片
+                                       mask,//图像掩码
+                                       request_feat_num,//最大提取的特征数目
+                                       pyra_level,//金字塔层数
+                                       fast_thresh,//fast角点提取阈值
+                                       use_fast_,//是否是提取fast
+                                       10,//点多少像素范围内不要有其他点
+                                       key_pnts_ptr,//特征点
+                                       orb_feat_ptr,//orb描述子
+                                       nullptr,
+                                       1e-9 /*refine_harris_threshold*/);
+
+
+
+ }
+
 // TODO(mingyu): store pre_image_orb_feature, pre_image_keypoints in
 // FeatureTrackDetector member variables
     //step1:先过滤响应弱的前一帧的特征点,然后imu预测的特征点作为初值进行光流追踪,如果追踪效果不好,
@@ -824,6 +912,7 @@ bool FeatureTrackDetector::optical_flow_and_detect(const cv::Mat_<uchar>& mask/*
                                                    int fast_thresh/*fast阈值*/,
                                                    std::vector<cv::KeyPoint>* key_pnts_ptr/*左相机当前帧提取到的特征点*/,
                                                    cv::Mat* orb_feat_ptr/*左相机当前帧提取到的特征点对应的描述子*/,
+                                                   const bool fisheye,
                                                    const cv::Vec2f& init_pixel_shift,
                                                    const cv::Matx33f* K_ptr/*cv形式的左右相机内参*/,
                                                    const cv::Mat_<float>* dist_ptr/*左右相机的畸变参数*/,
@@ -831,11 +920,11 @@ bool FeatureTrackDetector::optical_flow_and_detect(const cv::Mat_<uchar>& mask/*
                                                    const bool absolute_static) {
   // Mark all feature tracks dead first!
   //feature_tracks_map_存储的是上一帧左目看到的地图点,应该是和上一帧看到的左目的特征点是一致的
-  if (prev_img_kpts.size() != this->feature_tracks_number()) {
-    LOG(ERROR) << "Inconsistent prev keypoints (" << prev_img_kpts.size()
-               << ") vs feature_tracks_map ("
-               << this->feature_tracks_number() << ")";
-  }
+//  if (prev_img_kpts.size() != this->feature_tracks_number()) {
+//    LOG(ERROR) << "Inconsistent prev keypoints (" << prev_img_kpts.size()
+//               << ") vs feature_tracks_map ("
+//               << this->feature_tracks_number() << ")";
+//  }
   //将所有的上一帧观测到的地图点状态设成不能看到的,真能看到的话就把active设成false
   this->mark_all_feature_tracks_dead();//将所有的
   const cv::Mat& img_in_smooth = curr_img_pyramids_.at(0);//原始图片
@@ -851,6 +940,7 @@ bool FeatureTrackDetector::optical_flow_and_detect(const cv::Mat_<uchar>& mask/*
                                   key_pnts_ptr/*左相机当前帧提取到的特征点*/,
                                   &mask_with_of_out_/*非极大值以后的掩码,原始mask加点的mask*/,
                                   (orb_feat_ptr ? &orb_feat_OF : nullptr)/*左相机当前帧提取到的特征点对应的描述子*/,
+                                  fisheye,
                                   init_pixel_shift,
                                   K_ptr/*cv形式的左右相机内参*/,
                                   dist_ptr/*左右相机的畸变参数*/,
@@ -921,7 +1011,9 @@ bool FeatureTrackDetector::optical_flow_and_detect(const cv::Mat_<uchar>& mask/*
     int request_new_feat_num = (request_feat_num > propagated_feat_num) ?//需要检测的特征点的数量
                                request_feat_num - propagated_feat_num : 10;
     std::vector<cv::KeyPoint> key_pnts_new;//新提取到的特征点
-    //检测新的特征点,在detect中会对新点做点管理,存在feature_tracks_map_中
+
+
+//    检测新的特征点,在detect中会对新点做点管理,存在feature_tracks_map_中
     this->detect(img_in_smooth,//一样还是orb的代码检测过程
                  mask_with_of_out_/*只在没有mask的地方生成新点*/,
                  request_new_feat_num,

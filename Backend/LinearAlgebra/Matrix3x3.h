@@ -762,12 +762,24 @@ class AlignedMatrix3x3f {
                                                  AlignedVector3f &ATb) {
     ATb.v012r() = A.m_00_01_02_r0() * b.v0() + A.m_10_11_12_r1() * b.v1() + A.m_20_21_22_r2();
   }
+
+   static inline void ATb(const AlignedMatrix3x3f &A, const LA::AlignedVector3f &b,
+                                                   AlignedVector3f &ATb) {
+        ATb.v012r() = A.m_00_01_02_r0() * b.v0() + A.m_10_11_12_r1() * b.v1() + A.m_20_21_22_r2()* b.v2();
+    }
   template<typename TYPE> static inline LA::AlignedVector3f GetATb(const AlignedMatrix3x3f &A,
                                                                    const Vector2<TYPE> &b) {
     AlignedVector3f _ATb;
     ATb(A, b, _ATb);
     return _ATb;
   }
+
+    static inline LA::AlignedVector3f GetATb(const AlignedMatrix3x3f &A,
+                                                                     const LA::AlignedVector3f &b) {
+        AlignedVector3f _ATb;
+        ATb(A, b, _ATb);
+        return _ATb;
+    }
 
  protected:
   xp128f m_data[3];
@@ -1118,6 +1130,14 @@ template<typename TYPE> class SymmetricMatrix3x3 {
     aaT.m11() = a0.v1() * a0.v1();  aaT.m12() = a0.v1() * a1;
     aaT.m22() = a1 * a1;
   }
+  static inline void Ab(const SymmetricMatrix3x3<TYPE> &A, const AlignedVector3f &b,
+                          AlignedVector3f &Ab) {
+        Ab.v0() = A.m00() * b.v0() + A.m01() * b.v1() + A.m02() * b.v2();
+        Ab.v1() = A.m10() * b.v0() + A.m11() * b.v1() + A.m12() * b.v2();
+        Ab.v2() = A.m20() * b.v0() + A.m21() * b.v1() + A.m22() * b.v2();
+   }
+
+
   static inline void Ab(const SymmetricMatrix2x2<TYPE> &A0, const TYPE A1, const AlignedVector3f &b,
                         AlignedVector3f &Ab) {
     Ab.v0() = A0.m00() * b.v0() + A0.m01() * b.v1();

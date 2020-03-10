@@ -75,7 +75,7 @@ bool CameraBase::hasMask() const {
 const cv::Mat & CameraBase::mask() const {
   return mask_;
 }
-
+//这里的mask在eth原本的代码里应该是要求的中间是黑色,鱼眼外的是白色,但是现在是反的
 bool CameraBase::isMasked(const Eigen::Vector2d& imagePoint) const {
   if (!isInImage(imagePoint)) {
     return true;
@@ -83,7 +83,7 @@ bool CameraBase::isMasked(const Eigen::Vector2d& imagePoint) const {
   if (!hasMask()) {
     return false;
   }
-  return mask_.at<uchar>(static_cast<int>(imagePoint[1]), static_cast<int>(imagePoint[0]));
+  return !(mask_.at<uchar>(static_cast<int>(imagePoint[1]), static_cast<int>(imagePoint[0])));//这里mask的颜色相反的
 }
 bool CameraBase::isMasked(const Eigen::Vector2f& imagePoint) const {
   if (!isInImage(imagePoint)) {
@@ -92,7 +92,7 @@ bool CameraBase::isMasked(const Eigen::Vector2f& imagePoint) const {
   if (!hasMask()) {
     return false;
   }
-  return mask_.at<uchar>(static_cast<int>(imagePoint[1]), static_cast<int>(imagePoint[0]));
+  return !(mask_.at<uchar>(static_cast<int>(imagePoint[1]), static_cast<int>(imagePoint[0])));//这里mask的颜色相反的
 }
 
 // Check if the keypoint is in the image.

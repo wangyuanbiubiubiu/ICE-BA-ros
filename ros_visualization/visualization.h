@@ -29,8 +29,18 @@
 #include <glog/logging.h>
 #include <gflags/gflags.h>
 
+#include "../Backend/IBA/IBA_datatype.h"
 
 void registerPub(ros::NodeHandle &n);
+
+void pubUpdatePointClouds(const std::vector<IBA::Point3D> & UpdatePointClouds,double t);
+
+void pubLoopCamPose(const Eigen::Matrix4d &Twc0);
+
+void pubGTCamPose(const Eigen::Matrix4d &Twc0,double t);
+
+void pubTF(const Eigen::Matrix4d & Twc0, double t);
+
 
 void pubTrackImage(const cv::Mat &cur_l_img, const cv::Mat &cur_r_img ,std::vector<cv::KeyPoint> &pre_l_kp,
                    std::vector<cv::KeyPoint> &cur_l_kp, std::vector<cv::KeyPoint> &cur_r_kp,double t);

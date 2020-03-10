@@ -38,6 +38,8 @@
 #include <boost/filesystem.hpp>
 #endif
 #include <glog/logging.h>
+
+
 namespace IBA {
 
 static inline void ConvertCamera(const CameraIMUState &Ci, Camera *Co) {
@@ -207,6 +209,56 @@ void Solver::Stop() {
   m_internal->m_GBA.Stop();
 }
 
+void Solver::PushCurrentFrame(const std::vector<IBA::RelativeConstraint> & loop_Relative_priors,const CurrentFrame &CF,
+        const KeyFrame *KF , const bool serial) {
+//#ifdef CFG_DEBUG
+#if 0
+        if (KF && KF->iFrm == 0 && CF.iFrm != 0) {
+    KF = NULL;
+  }
+#endif
+        //UT::Print("[%d]\n", CF.iFrm);
+        //如果是关键帧的话
+        if (KF) {
+            //UT::Print("[%d]\n", KF->iFrm);
+            //UT::Print("%f\n", KF->Cam_state.R[0][0]);
+            if (KF->iFrm == CF.iFrm) {
+                m_internal->PushCurrentFrame(CF);//构造输入当前帧, 向m_ILF中存储imu测量
+                //输入关键帧,相机位姿状态,同时构造m_IKF,
+                m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_Cam_state);
+                //向局部地图中m_CsLF中push局部帧
+                m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state/**/, CF.iFrm/*当前帧的帧id*/));
+                //向局部地图中m_CsKF增加相机关键帧状态,以及m_iKF2d地图点历史数量的更新等
+                m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
+                //向LBA输入普通帧和关键帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
+                m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
+                m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
+            } else {
+                m_internal->PushKeyFrame(*KF);
+                m_internal->PushCurrentFrame(CF);
+                m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
+                m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));
+                m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
+                m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
+            }
+        } else
+        {
+            m_internal->PushCurrentFrame(CF);//输入当前帧, 向m_ILF中存储imu测量
+            m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));//向局部地图中m_CsLF中push局部帧
+            m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF/*当前输入关键帧*/);//向LBA输入普通帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
+        }
+
+    for (int i = 0; i < loop_Relative_priors.size(); ++i)
+    {
+        PushRelativeConstraint(loop_Relative_priors[i]);
+    }
+
+        m_internal->m_LBA.WakeUp(serial);//唤醒LBA如果有关键帧还会唤醒GBA
+        if (m_internal->m_debug) {
+            m_internal->AssertConsistency();
+        }
+    }
+
 void Solver::PushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF, const bool serial) {
 //#ifdef CFG_DEBUG
 #if 0
@@ -260,7 +312,8 @@ void Solver::PushKeyFrame(const KeyFrame &KF, const bool serial) {
   }
 }
 //用来做闭环
-bool Solver::PushRelativeConstraint(const RelativeConstraint &Z) {
+bool Solver::PushRelativeConstraint(const RelativeConstraint &Z)
+{
   if (Z.iFrm1 == -1 || Z.iFrm2 == -1) {
     return false;
   }
@@ -279,16 +332,16 @@ bool Solver::PushRelativeConstraint(const RelativeConstraint &Z) {
     return false;
   }
   Rigid3D T;
-  LA::AlignedVector3f p;
-  T.Rotation3D::Set(Z.T.R);
+  LA::AlignedVector3f p;//tc0(参考关键帧)c0(观测关键帧)
+  T.Rotation3D::Set(Z.T.R);//Rc0(观测关键帧)c0(参考关键帧)
   p.Set(Z.T.p);
-  T.SetPosition(p);
+  T.SetPosition(p);//Tc0(观测关键帧)c0(参考关键帧)
   LA::AlignedMatrix6x6f S;
   S.Set(Z.S.S);
   CameraPrior::Pose _Z;
   if (!_Z.Initialize(BA_WEIGHT_PRIOR_CAMERA_RELATIVE_CONSTRAINT,
                      static_cast<int>(i1 - CsKF.begin()),
-                     static_cast<int>(i2 - CsKF.begin()), T, S)) {
+                     static_cast<int>(i2 - CsKF.begin()), T, S,true)) {
     return false;
   }
   //////////////////////////////////////////////////////////////////////////
@@ -296,11 +349,14 @@ bool Solver::PushRelativeConstraint(const RelativeConstraint &Z) {
   //m_internal->m_GBA.m_verbose = 2;
   //////////////////////////////////////////////////////////////////////////
   m_internal->m_GBA.PushCameraPriorPose(Z.iFrm2, _Z);
-  m_internal->m_GBA.WakeUp();
   //////////////////////////////////////////////////////////////////////////
   //m_internal->m_GBA.m_verbose = verboseBkp;
   //////////////////////////////////////////////////////////////////////////
   return true;
+}
+void Solver::Wakeup_GBA()
+{
+        m_internal->m_GBA.WakeUp();
 }
 
 #ifdef CFG_GROUND_TRUTH
@@ -730,6 +786,9 @@ void Solver::SetCallbackGBA(const IbaCallback& iba_callback) {
 
 std::vector<std::pair<int,CameraPose>> Solver::Get_Total_KFs()
 {
+
+    //和LBA中数据同步,用来获得LBA中的滑窗中的相机状态,关键帧的相机状态以及所有的地图点
+
     std::vector<GlobalMap::Camera> GM_KFs= m_internal->m_GM.Get_Total_KFs();
     std::vector<std::pair<int,CameraPose>> KF_poses;
     KF_poses.resize(GM_KFs.size());
@@ -744,8 +803,119 @@ std::vector<std::pair<int,CameraPose>> Solver::Get_Total_KFs()
 
     return KF_poses;
 }
+//用来更新信息给闭环
+bool Solver::GetUpdateGba(Global_Map * GM)
+{
+
+    GM->iFrmsKF.resize(0);
+    GM->CsKF.resize(0);
+
+    std::vector<int> iFrms;
+    std::vector<Rigid3D>  Cs;
+    std::vector<ubyte> ucs;
+    std::vector<bool> lastkf_stereoz;//最新一个关键帧的地图点的双目观测全都获取一下,给闭环一个初值
+    m_internal->m_GBA.GetGbaInfo(iFrms,Cs,ucs,GM->CovisibleKFs,lastkf_stereoz);
+    CHECK_EQ(iFrms.size(),Cs.size());
+    CHECK_EQ(ucs.size(),Cs.size());
+    //取出GBA中所有更新的关键帧pose
+    {
+
+        const int nKFs = static_cast<int>(Cs.size());
+        for (int iKF = 0; iKF < nKFs; ++iKF)//遍历所有的关键帧
+        {
+            ::Point3D p;
+            Rigid3D C1;
+            CameraPose C2 = CameraPose();
+            C1 = Cs[iKF];
+            if (!(ucs[iKF] & GBA_FLAG_FRAME_UPDATE_CAMERA))//没更新的就跳过
+            {
+                if(iKF != nKFs-1)//(最新的关键帧不管更不更新我都要一个位姿)
+                    continue;
+            }
+
+//            std::cout<<"C1"<<C1.m00()<<" "<<C1.m01()<<" "<<C1.m02()<<" "<<C1.tx()<<"\n"
+//                    <<C1.m10()<<" "<<C1.m11()<<" "<<C1.m12()<<" "<<C1.ty()<<"\n"
+//                    <<C1.m20()<<" "<<C1.m21()<<" "<<C1.m22()<<" "<<C1.tz()<<"\n"
+//                    <<"0 0 0 1"<<"\n";
+            C1.LA::AlignedMatrix3x3f::Get(C2.R);
+            C1.GetPosition(p);
+            p.Get(C2.p);
+            GM->iFrmsKF.push_back(iFrms[iKF]);
+            GM->CsKF.push_back(C2);
+//            std::cout<<"C2"<<C2.R[0][0]<<" "<<C2.R[0][1]<<" "<<C2.R[0][2]<<" "<<C2.p[0]<<"\n"
+//                    <<C2.R[1][0]<<" "<<C2.R[1][1]<<" "<<C2.R[1][2]<<" "<<C2.p[1]<<"\n"
+//                    <<C2.R[2][0]<<" "<<C2.R[2][1]<<" "<<C2.R[2][2]<<" "<<C2.p[2]<<"\n"
+//                     <<"0 0 0 1"<<"\n";
+        }
+    }
+
+    GM->Xs.resize(0);
+    const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
+
+    {
+        Rigid3D C;
+        ::Point3D X1;
+        Point3D X2{};
+        const std::vector<LocalMap::CameraKF> &CsKF = m_internal->m_CsKF;
+        assert(lastkf_stereoz.size() == m_internal->m_iKF2d[CsKF.size()-1] - m_internal->m_iKF2d[CsKF.size()-2]);
+        const int nKFs = static_cast<int>(CsKF.size());
+        for (int iKF = 0; iKF < nKFs; ++iKF)
+        {
+            const LocalMap::CameraKF &_C = CsKF[iKF];
+            //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
+            if (!(_C.m_uc & ucFlag))
+            {
+                if(iKF != nKFs-2)//(第二新的关键帧不跳过)
+                    continue;
+            }
+            const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
+            const int id1 = m_internal->m_iKF2d[iKF], id2 = m_internal->m_iKF2d[iKF + 1];
+            const ::Point2D *xs = m_internal->m_xs.data() + id1;
+
+            const ::Depth::InverseGaussian *ds = m_internal->m_ds.data() + id1;
+            const ubyte *uds = m_internal->m_uds.data() + id1;
+            const int *idxs = m_internal->m_id2idx.data() + id1;
+            const int Nx = id2 - id1;
+//            C = _C.m_Cam_pose;
+            C =  Cs[iKF];//我这里关键帧的pose用到是GBA里而不是LBA里的,但是点的深度采用的是LBA的
+            for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
+            {
+                //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
+                if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
+                {
+                    if((iKF == nKFs-2) &&(lastkf_stereoz[ix]))
+                    {
+                        //(第二新的关键帧的双目观测不跳过)
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                }
+                X2.idx = idxs[ix];//idx是全局的前端的全局id
+                if (X2.idx == -1)
+                {
+                    continue;
+                }
+                //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
+//                std::cout<<"d:"<< ds[ix].u()<<std::endl;
+                if(ds[ix].u() < DEPTH_MIN || ds[ix].u() > DEPTH_MAX)//明显不好的地图点不要
+                    continue;
+                C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
+                X1.Get(X2.X);
+                GM->Xs.push_back(X2);
+//                std::cout<<"d:"<< X2.X[0]<<" "<<X2.X[1]<<" "<<X2.X[2]<<std::endl;
+            }
+        }
+
+    }
+
+}
+
 //获得LBA中的滑窗中更新了的普通帧以及更新了的关键帧还有更新了的地图点
-bool Solver::GetSlidingWindow(SlidingWindow *SW) {
+bool Solver::GetSlidingWindow(SlidingWindow *SW)
+{
     //和LBA中数据同步,用来获得LBA中的滑窗中的相机状态,关键帧的相机状态以及所有的地图点
   const ubyte Uc = m_internal->m_LM.IBA_Synchronize(m_internal->m_nFrms,/*LBA中已经输入的帧数,也就是当前是第几帧*/
                                                     m_internal->m_CsLF/*lf的位姿*/, m_internal->m_CsKF/*kf的位姿*/,
@@ -805,50 +975,54 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW) {
 #endif
     }
   }
-  SW->Xs.resize(0);
-  const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
-  //if (Uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
-  if (Uc & ucFlag)
-  {
-    Rigid3D C;
-    ::Point3D X1;
-    Point3D X2;
-    const int nKFs = static_cast<int>(CsKF.size());
-    for (int iKF = 0; iKF < nKFs; ++iKF)
-    {
-      const LocalMap::CameraKF &_C = CsKF[iKF];
-      //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
-      if (!(_C.m_uc & ucFlag))
-      {
-        continue;
-      }
-      const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
-      const int id1 = m_internal->m_iKF2d[iKF], id2 = m_internal->m_iKF2d[iKF + 1];
-      const ::Point2D *xs = m_internal->m_xs.data() + id1;
-      const ::Depth::InverseGaussian *ds = m_internal->m_ds.data() + id1;
-      const ubyte *uds = m_internal->m_uds.data() + id1;
-      const int *idxs = m_internal->m_id2idx.data() + id1;
-      const int Nx = id2 - id1;
-      C = _C.m_Cam_pose;
-      for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
-      {
-        //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
-        if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
-        {
-          continue;
-        }
-        X2.idx = idxs[ix];//idx是全局的前端的全局id
-        if (X2.idx == -1)
-        {
-          continue;
-        }
-        //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
-        C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
-        X1.Get(X2.X);
-        SW->Xs.push_back(X2);
-      }
-    }
-  }
+
+//    SW->Xs.resize(0);
+//    const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
+//    //if (Uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
+//    if (Uc & ucFlag)
+//    {
+//        Rigid3D C;
+//        ::Point3D X1;
+//        Point3D X2;
+//        const int nKFs = static_cast<int>(CsKF.size());
+//        for (int iKF = 0; iKF < nKFs; ++iKF)
+//        {
+//            const LocalMap::CameraKF &_C = CsKF[iKF];
+//            //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
+//            if (!(_C.m_uc & ucFlag))
+//            {
+//                continue;
+//            }
+//            const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
+//            const int id1 = m_internal->m_iKF2d[iKF], id2 = m_internal->m_iKF2d[iKF + 1];
+//            const ::Point2D *xs = m_internal->m_xs.data() + id1;
+//            const ::Depth::InverseGaussian *ds = m_internal->m_ds.data() + id1;
+//            const ubyte *uds = m_internal->m_uds.data() + id1;
+//            const int *idxs = m_internal->m_id2idx.data() + id1;
+//            const int Nx = id2 - id1;
+//            C = _C.m_Cam_pose;
+//            for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
+//            {
+//                //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
+//                if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
+//                {
+//                    continue;
+//                }
+//                X2.idx = idxs[ix];//idx是全局的前端的全局id
+//                if (X2.idx == -1)
+//                {
+//                    continue;
+//                }
+//                //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
+//                C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
+//                X1.Get(X2.X);
+//                SW->Xs.push_back(X2);
+//            }
+//        }
+//
+//    }
+
+
 //#ifdef CFG_DEBUG
 #if 0
   m_internal->m_LBA.Synchronize();

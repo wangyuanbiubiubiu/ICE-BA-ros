@@ -56,7 +56,8 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
 
   std::vector<int> seeds;
   const int seed = cfgor.GetArgument("random_seed", 0);
-  if (seed != 0) {
+  if (seed != 0)
+  {
     srand(seed);
     seeds.resize(nFrms);
     for (int iFrm = 0; iFrm < nFrms; ++iFrm) {
@@ -155,7 +156,8 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
   //               cfgor.GetArgument("print_file"), ".", IS.m_dir)));
   UT::PrintStart(UT::FileNameReplaceDirectory(cfgor.GetArgument("print_file"),
                  ".", IS.m_dir));
-  for (int iFrm = iFrmStart + 1, iFrmLast = -1; iFrm < nFrms; ++iFrm) {
+  for (int iFrm = iFrmStart + 1, iFrmLast = -1; iFrm < nFrms; ++iFrm)
+  {
     const double t1 = Timer::GetTime();
     if (!seeds.empty()) {
       srand(seeds[iFrm]);
@@ -183,7 +185,8 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
     solver.SaveFeatures(IS.m_dir + "l_det/" + fileName + ".yml",
                         IS.m_dir + "r_det/" + fileName + ".yml", CF, KF);
 #endif
-    if (IS.LoadRelativeConstraint(iFrm, &Z)) {
+    if (IS.LoadRelativeConstraint(iFrm, &Z))
+    {
 #ifdef CFG_GROUND_TRUTH
       if ((zGT || eGT) && !CsGT.Empty())
       {
@@ -286,7 +289,8 @@ bool RunSolver(const Configurator &cfgor, const InputSequence &IS, const std::st
     if (!CsGT.Empty()) {
       if (loopRatio > 0.0f && KF.iFrm != -1) {
         const int nKFs = solver.GetKeyFrames();
-        if (nKFs >= 2 && (loopRatio < 0.0f || UT::Random<float>() < loopRatio)) {
+        if (nKFs >= 2 && (loopRatio < 0.0f || UT::Random<float>() < loopRatio))
+        {
           const int iKF2 = nKFs - 1;
           while (1) {
             //Z.iFrm2 = UT::Random<int>(iFrm + 1);

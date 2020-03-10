@@ -1719,7 +1719,7 @@ void LocalBundleAdjustor::SynchronizeData()
       ILF->m_Cam_state.m_bw = C.m_bw;
     }
   }
-  const bool newKF = !m_IKFs2.empty()/*是否有新关键帧?*/, delKF = !m_IDKFs2.empty(), updCams = !m_IUCs2.empty();
+  const bool newKF = !m_IKFs2.empty()/*是否有新关键帧?*/, delKF = !m_IDKFs2.empty(), updCams = !m_IUCs2.empty() ;
   bool serialGBA = false;
   if (newKF)
   {//如果有关键帧的话
@@ -1886,8 +1886,8 @@ void LocalBundleAdjustor::SynchronizeData()
           float eAvg;
           const int Nzd = static_cast<int>(m_zds.size());//左右两目观测都有时这里的size就是1
             //三角化对X.m_d的逆深度和斜方差进行更新,通过r(Uc0) = 归一化(Pnc0 - Uc0 * tc0c1) - 归一化(Rc0c1 *Pnc1),min F(Uc0) = 0.5*||r(Uc0)||^2（马氏距离下）求解左目特征点的深度
-            if (!Depth::Triangulate(w, Nzd, m_zds.data()/*观测*/, &X.m_d/*逆深度以及协方差*/, &m_work/*雅克比*/, X.m_d.Valid(), &eAvg) ||
-              m_K.m_K.fx() * eAvg > DEPTH_TRI_MAX_ERROR)
+            if (!Depth::Triangulateinit(w, Nzd, m_zds.data()/*观测*/, &X.m_d/*逆深度以及协方差*/, &m_work/*雅克比*/,m_K.m_Rr,m_K.m_br, X.m_d.Valid(), &eAvg) ||
+              m_K.m_K.fx() * eAvg > DEPTH_TRI_MAX_ERROR)//,m_K.m_Rr,m_K.m_br
             {//如果无法三角化或者误差过大
             //X.m_d.Invalidate();
             //X.m_d = m_KFs[iKF].m_d;

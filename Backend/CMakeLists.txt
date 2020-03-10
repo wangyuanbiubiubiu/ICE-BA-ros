@@ -61,6 +61,7 @@ endif()
 
 # Debug / Release / RelWithDebInfo
 set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CXX_FLAGS "-std=c++11 -O3 ")
 #set(CMAKE_BUILD_TYPE Debug)
 #set(CMAKE_CXX_FLAGS "-std=c++11 -O0 -Wall -g -march=native")
 # Thirdparty dependencies

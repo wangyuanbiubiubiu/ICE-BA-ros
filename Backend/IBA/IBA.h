@@ -52,6 +52,10 @@ class Solver {
    */
   void PushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF = NULL,
                         const bool serial = false);
+
+    void PushCurrentFrame(const std::vector<IBA::RelativeConstraint> & loop_Relative_priors,const CurrentFrame &CF,
+              const KeyFrame *KF = NULL   , const bool serial = false);
+
   void PushKeyFrame(const KeyFrame &KF, const bool serial = false);
 
   /*
@@ -59,6 +63,8 @@ class Solver {
    * @param[in] Z relative constraint
    */
   bool PushRelativeConstraint(const RelativeConstraint &Z);
+
+    void Wakeup_GBA();
 
 #ifdef CFG_GROUND_TRUTH
   void PushIMUMeasurementsGT(const CurrentFrame &CF);
@@ -75,6 +81,9 @@ class Solver {
   void SetCallbackGBA(const IbaCallback& iba_callback);
 
   std::vector<std::pair<int,CameraPose>> Get_Total_KFs();
+
+  bool GetUpdateGba(Global_Map * GM);
+
 
   /*
    * @brief Call for each current frame to synchronize the optimization results

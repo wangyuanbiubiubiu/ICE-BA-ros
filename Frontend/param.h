@@ -122,6 +122,7 @@ class DuoCalibParam : public ParamBase {
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> undist_D_T_C_lr;//立体矫正后的双目到设备坐标系的变换,一样是设备坐标系固连在左相机上
     cv::Matx44f Q;  // //视差深度映射矩阵4x4 convert disparity to depth. See cv::reprojectImageTo3D
     cv::Size img_size;//图像大小
+    bool fishEye = false; //是否是鱼眼相机 by wya
   } Camera;
 
   Eigen::Matrix3f C_R_B;

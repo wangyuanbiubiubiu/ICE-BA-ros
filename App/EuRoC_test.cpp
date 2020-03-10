@@ -32,6 +32,10 @@
 #include <fstream>
 #include <vector>
 
+#include "LoopClosing.h"
+
+
+
 namespace fs = boost::filesystem;
 using std::string;
 using std::vector;
@@ -58,6 +62,10 @@ DEFINE_string(iba_param_path, "", "iba parameters path");
 DEFINE_string(gba_camera_save_path, "", "Save the camera states to when finished");
 DEFINE_bool(stereo, false, "monocular or stereo mode");
 DEFINE_bool(save_feature, false, "Save features to .dat file");
+
+std::unique_ptr<LC::LoopClosing> LoopCloser_ptr;
+std::queue<IBA::RelativeConstraint> loop_info;
+std::mutex m_loop_buf;
 
 //输入数据集所在位置
 //输出左右相机各自的图片名称
@@ -117,7 +125,8 @@ size_t load_imu_data(const string& imu_file_str,
   double c[6];
   uint64_t t;
   bool set_offset_time = false;
-  while (getline(imu_file,line)) {
+  while (getline(imu_file,line))
+  {
     if (line[0] == '#')
       continue;
     std::istringstream is(line);
@@ -226,7 +235,7 @@ void load_asl_calib(const std::string &asl_path,
   calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
 
   //进行双目立体矫正,事先设置好左右目的remap
-  calib_param.initUndistortMap(calib_param.Camera.img_size);
+//  calib_param.initUndistortMap(calib_param.Camera.img_size);
 }
 
 float get_timestamp_from_img_name(const string& img_name,
@@ -336,7 +345,8 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
   //需要一个新关键帧的条件:2个
   // 1: std::distance(kp_it_l, kps_l.end()) >= 20说明的是没观测到的新的地图点比较多,大于20个
   // 2: CF.feat_measures.size() < 20说明的是当前帧观测到的地图点数量太少了，不足20个
-  bool need_new_kf = std::distance(kp_it_l, kps_l.end()) >= 20 || CF.feat_measures.size() < 20;
+//  std::cout<<"asd"<<std::distance(kp_it_l, kps_l.end())<<" afsa:"<<CF.feat_measures.size()<<std::endl;
+  bool need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
   if (std::distance(kp_it_l, kps_l.end()) == 0)
     need_new_kf = false;
   if (!need_new_kf) KF.iFrm = -1;//如果不需要关键帧
@@ -405,6 +415,9 @@ int main(int argc, char** argv) {
   vector<string> slave_img_file_paths;//右相机的图片全局路径
   vector<string> iba_dat_file_paths;//？dat文件的保存文件名称
 
+
+
+
   constexpr int reserve_num = 5000;
   img_file_paths.reserve(reserve_num);
   slave_img_file_paths.reserve(reserve_num);
@@ -450,14 +463,23 @@ int main(int argc, char** argv) {
   for (int lr = 0; lr < 2; ++lr) {
     float fov;
     //输出每一目的mask和视场角
-    if (XP::generate_cam_mask(duo_calib_param.Camera.cv_camK_lr[lr],
-                              duo_calib_param.Camera.cv_dist_coeff_lr[lr],
-                              duo_calib_param.Camera.img_size,
-                              &masks[lr],
-                              &fov)) {
-      std::cout << "camera " << lr << " fov: " << fov << " deg\n";
-    }
+      if (XP::generate_cam_mask(duo_calib_param.Camera.cv_camK_lr[lr],
+                                duo_calib_param.Camera.cv_dist_coeff_lr[lr],
+                                duo_calib_param.Camera.fishEye,
+                                duo_calib_param.Camera.img_size,
+                                &masks[lr],
+                                &fov)) {
+          std::cout << "camera " << lr << " fov: " << fov << " deg\n";
+      }
   }
+
+    LoopCloser_ptr.reset(new LC::LoopClosing("/home/wya/ICE-BA_ws/src/ICE-BA/vocab/orbvoc.dbow3",
+                                             duo_calib_param.Camera.cameraK_lr[0],  // ref_camK 左相机内参
+                                             duo_calib_param.Camera.cv_dist_coeff_lr[0],  // ref_dist_coeff 左相机畸变
+                                             duo_calib_param.Camera.fishEye,
+                                             masks[0]));
+
+
 
   // Load IMU samples to predict OF point locations
   std::list<XP::ImuData> imu_samples;
@@ -494,10 +516,14 @@ int main(int argc, char** argv) {
       duo_calib_param.Camera.cameraK_lr[0],  // ref_camK 左相机内参
       duo_calib_param.Camera.cv_dist_coeff_lr[1],  // cur_dist_coeff 右相机畸变
       duo_calib_param.Camera.cv_dist_coeff_lr[0],  // ref_dist_coeff 左相机畸变
+      duo_calib_param.Camera.fishEye,
       masks[1],//右相机的掩码
       FLAGS_pyra_level,//所有金字塔层数
       FLAGS_min_feature_distance_over_baseline_ratio,//特征点最小深度比例,用于极线搜索
       FLAGS_max_feature_distance_over_baseline_ratio);//特征点最大深度比例,用于极线搜索
+
+
+
 
   //双目外参
   const Eigen::Matrix4f T_Cl_Cr =
@@ -524,6 +550,52 @@ int main(int argc, char** argv) {
                 257,
                 FLAGS_iba_param_path,//iba的配置文件
                 "" /* iba directory */);
+
+    //对LBA求解器设置回调函数m_callback,用来可视化
+    solver.SetCallbackGBA([&](const int iFrm,/*最新一帧的id*/ const float ts/*最新一帧的时间戳*/)
+      {
+          IBA::Global_Map GM;
+          solver.GetUpdateGba(&GM);
+          LoopCloser_ptr->UpdateKfInfo(GM);
+      });
+
+
+    LoopCloser_ptr->SetCallback([&](const vector<Eigen::Matrix4f> & rKFpose/*参考关键帧Twc*/,
+                                    const Eigen::Matrix4f & lKFpose,vector<int> riFrm,int liFrm)
+    {
+        for (int k = 0; k < rKFpose.size(); ++k)
+        {
+//            std::cout<<rKFpose[k]<<std::endl;
+            LA::AlignedMatrix6x6f S;
+            IBA::RelativeConstraint Z;
+            Eigen::Matrix4f Tlr = lKFpose.inverse() * rKFpose[k];////Tc0(观测关键帧)c0(参考关键帧)
+            float pose_f[3][4];
+            for (int i = 0; i < 3; ++i)
+            {
+                for (int j = 0; j < 4; ++j)
+                {
+                    pose_f[i][j] = Tlr(i,j);
+                }
+
+            }
+            Rigid3D T;
+            T.Set(pose_f);////Tc0(观测关键帧)c0(参考关键帧)
+
+            Z.iFrm1 = riFrm[k];
+            Z.iFrm2 = liFrm;
+            T.Rotation3D::Get(Z.T.R);
+            T.GetPosition().Get(Z.T.p);
+            S.MakeDiagonal(LOOP_S2P, LOOP_S2R);//固定一下参考关键帧
+            S.Get(Z.S.S);
+            m_loop_buf.lock();
+            loop_info.push(Z);
+            m_loop_buf.unlock();
+        }
+
+
+    });
+
+
   //对LBA求解器设置回调函数m_callback,用来可视化
   solver.SetCallbackLBA([&](const int iFrm,/*最新一帧的id*/ const float ts/*最新一帧的时间戳*/)
   {
@@ -667,7 +739,8 @@ int main(int argc, char** argv) {
                                                     FLAGS_pyra_level/*金字塔层*/,
                                                     FLAGS_fast_thresh/*fast阈值*/,
                                                     &key_pnts/*左相机当前帧提取到的特征点*/,
-                                                    &orb_feat/*左相机当前帧提取到的特征点对应的描述子*/,
+                                                    nullptr/*左相机当前帧提取到的特征点对应的描述子*/,
+                                                    duo_calib_param.Camera.fishEye,
                                                     cv::Vec2f(0, 0),  // shift init pixels
                                                     &duo_calib_param.Camera.cv_camK_lr[0]/*cv形式的左右相机内参*/,
                                                     &duo_calib_param.Camera.cv_dist_coeff_lr[0]/*左右相机的畸变参数*/,
@@ -680,7 +753,7 @@ int main(int argc, char** argv) {
                                                     FLAGS_pyra_level,
                                                     FLAGS_fast_thresh,
                                                     &key_pnts,
-                                                    &orb_feat);
+                                                    nullptr);
       }
       feat_track_detector.update_img_pyramids();//更新金字塔buffer
       VLOG(1) << "after OF key_pnts.size(): " << key_pnts.size() << " requested # "
@@ -697,7 +770,7 @@ int main(int argc, char** argv) {
                                  FLAGS_pyra_level,
                                  FLAGS_fast_thresh,
                                  &key_pnts,
-                                 &orb_feat);
+                                 nullptr);
       feat_track_detector.build_img_pyramids(img_in_smooth,//构建图像金字塔,存到前一帧缓存器中
                                              XP::FeatureTrackDetector::BUILD_TO_PREV);
     }
@@ -714,7 +787,7 @@ int main(int argc, char** argv) {
                                                   key_pnts, //左目提取的特征点
                                                   T_Cl_Cr,  // T_ref_cur //左右目外参
                                                   &key_pnts_slave,
-                                                  &orb_feat_slave,
+                                                  nullptr,
                                                   false);  // draw_debug
       VLOG(1) << "detect slave key_pnts.size(): " << key_pnts_slave.size() << " takes "
               << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -724,6 +797,8 @@ int main(int argc, char** argv) {
     //根据class_id(与地图点id一致)进行排序,不过本来就是这个顺序吧
     std::sort(key_pnts.begin(), key_pnts.end(), cmp_by_class_id);
     std::sort(key_pnts_slave.begin(), key_pnts_slave.end(), cmp_by_class_id);
+
+
     // push to IBA
     IBA::CurrentFrame CF;
     IBA::KeyFrame KF;
@@ -731,8 +806,50 @@ int main(int argc, char** argv) {
     //进行点管理(新旧地图点的观测更新),以及关键帧判断以及生成
     create_iba_frame(key_pnts, key_pnts_slave, imu_meas, time_stamp, &CF, &KF);
     //将当前帧以及关键帧(如果有的话)放进求解器
+    if(KF.iFrm != -1)
+    {
+
+//        std::vector<cv::KeyPoint> loop_key_pnts;//左目提取到的特征点
+//        cv::Mat loop_orb_feat;//左目orb描述子
+//
+//        feat_track_detector.detect_for_loop(img_in_smooth,
+//                                        masks[0],
+//                                        1000,
+//                                        FLAGS_pyra_level,
+//                                        FLAGS_fast_thresh,
+//                                        &loop_key_pnts,
+//                                        &loop_orb_feat);
+//
+//
+        cv::Mat cur_orb_feat;
+        feat_track_detector.ComputeDescriptors(img_in_smooth,&key_pnts,&cur_orb_feat);
+
+//        std::shared_ptr<LC::KeyFrame> (new LC::KeyFrame(KF.iFrm,key_pnts,cur_orb_feat,loop_key_pnts,loop_orb_feat,img_in_smooth));
+        LoopCloser_ptr ->InsertKeyFrame(std::shared_ptr<LC::KeyFrame> (new LC::KeyFrame(KF.iFrm,key_pnts,cur_orb_feat,key_pnts,cur_orb_feat)));
+    }
     solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,
-    // 但是它里面的表达是Hx=-b,所以我注释的时候b都是标的-b,反正就记住是反的就好了
+
+      std::vector<IBA::RelativeConstraint> loop_Relative_priors;
+      m_loop_buf.lock();
+      while(!loop_info.empty())
+      {
+          loop_Relative_priors.push_back(loop_info.front());
+          loop_info.pop();
+      }
+      m_loop_buf.unlock();
+      //将当前帧以及关键帧(如果有的话)放进求解器
+      if(!loop_Relative_priors.empty())
+      {
+          for (int i = 0; i < loop_Relative_priors.size(); ++i)
+          {
+              solver.PushRelativeConstraint(loop_Relative_priors[i]);
+          }
+          solver.Wakeup_GBA();
+      }
+
+
+
+      // 但是它里面的表达是Hx=-b,所以我注释的时候b都是标的-b,反正就记住是反的就好了
     if (FLAGS_save_feature) {
       IBA::SaveCurrentFrame(iba_dat_file_paths[it_img], CF, KF);
     }

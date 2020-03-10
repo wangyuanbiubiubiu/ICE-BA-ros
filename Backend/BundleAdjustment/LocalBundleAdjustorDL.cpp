@@ -659,6 +659,11 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
       if (axd < BA_UPDATE_DEPTH) {//逆深度的增量太小的话也不用更新
         continue;
       }
+//        if ((ds[ix].u() + xds[ix]) <= 0.01f)//深度为负了明显不对
+//        {
+//            continue;
+//        }
+
       Depth::InverseGaussian &d = ds[ix];
       d.u() += xds[ix];//更新这点的逆深度和协方差
       d.s2() = DEPTH_VARIANCE_EPSILON + KF.m_Mxs[ix].m_mdd.m_a /*Huu^-1等同于协方差*/* BA_WEIGHT_FEATURE;
@@ -668,14 +673,14 @@ bool LocalBundleAdjustor::UpdateStatesPropose() {
       //}
       //d.u() = UT_CLAMP(d.u(), DEPTH_MIN, DEPTH_MAX);
       //d.u() = UT_CLAMP(d.u(), DEPTH_EPSILON, DEPTH_MAX);
-      //if (d.u() < DEPTH_EPSILON) {
-      //  d.u() = DEPTH_EPSILON;
-      //} else if (d.u() > DEPTH_MAX) {
-      //  d.u() = KF.m_d.u();
-      //}
-      //if (!d.Valid()) {
-      //  d.u() = KF.m_d.u();
-      //}
+//      if (d.u() < DEPTH_EPSILON) {
+//        d.u() = DEPTH_EPSILON;
+//      } else if (d.u() > DEPTH_MAX) {
+//        d.u() = KF.m_d.u();
+//      }
+//      if (!d.Valid()) {
+//        d.u() = KF.m_d.u();
+//      }
       m_axds.Push(axd);
       m_ucsKF[iKF] |= LBA_FLAG_FRAME_UPDATE_DEPTH;//将需要更新深度的地图点所在的关键帧flags中深度更新设成true
       uds[ix] |= LBA_FLAG_TRACK_UPDATE_DEPTH;//将需要更新深度的地图点所在的flags中深度更新设成true

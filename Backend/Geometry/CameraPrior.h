@@ -1248,6 +1248,7 @@ class Pose {
     m_br = Z.m_br;
     m_bc.Set(Z.m_bc);
     m_xTb = Z.m_xTb;
+    isloop = Z.isloop;
   }
   inline bool operator < (const int iKFr) const { return m_iKFr < iKFr; }
 
@@ -1263,10 +1264,14 @@ class Pose {
     m_br.Invalidate();
     m_bc.Resize(0);
   }
+
+
+
 ///m_Zps里存的是Rwc0
   inline void Initialize(const float w, const int iKFr/*参考关键帧*/, const Rigid3D &Tr/*参考关键帧对应Tc0w(kf)*/, const float s2r,
                          const bool newKF/*是否是新的关键帧*/, const Rigid3D *T0 = NULL,
-                         const float s2cp = 0.0f, const float s2cr = 0.0f) {
+                         const float s2cp = 0.0f, const float s2cr = 0.0f)
+   {
     m_iKFr = iKFr;/*参考关键帧id*/
     //Rr.GetTranspose(m_RrT);
     const float arr = UT::Inverse(s2r, w);
@@ -1291,20 +1296,25 @@ class Pose {
     }
     Tr.Rotation3D::GetTranspose(m_Zps.Push());//m_Zps里存的是Rwc0
   }
-  inline bool Initialize(const float w, const int iKF1, const int iKF2, const Rigid3D &T,
-                         const LA::AlignedMatrix6x6f &S) {
+  inline bool Initialize(const float w, const int iKF1, const int iKF2, const Rigid3D &T,//Tc0(观测关键帧)c0(参考关键帧)
+                         const LA::AlignedMatrix6x6f &S,bool isloop_  = false) {
     m_Acc.Resize(1, 1, true);
     Element::CC &A = m_Acc[0][0];
     if (!S.GetInverseLDL(A, NULL)) {
       return false;
     }
+
+    if(isloop_)
+        isloop = true;
     A *= w;
-    m_iKFr = iKF1;
+      LA::Vector6f aa;
+      A.GetDiagonal(aa);
+    m_iKFr = iKF1; //iKF1是参考关键帧
     //m_RrT.Invalidate();
     m_iKFs.resize(1);
     m_iKFs[0] = iKF2;
-    m_Zps.Resize(1);
-    T.GetInverse(m_Zps[0]);
+    m_Zps.Resize(1);//iKF2是观测关键帧
+    T.GetInverse(m_Zps[0]);//Tc0(参考关键帧)c0(观测到的关键帧)
     m_Arr.Invalidate();
     m_Arc.Resize(0);
     m_br.Invalidate();
@@ -1890,6 +1900,7 @@ class Pose {
   Element::R m_br;//b中g对应的部分
   Vector::C m_bc;//参考关键帧对应的b
   float m_xTb;//x.t*-b 这个是啥
+  bool isloop = false;
 
 #ifdef CFG_DEBUG_EIGEN
  public:

@@ -23,6 +23,9 @@ extern int KF_MIN_FRAME_STEP;
 extern int KF_MIN_FEATURE_SROUCES;
 extern int KF_MIN_FEATURE_MEASUREMENTS;
 
+extern float LOOP_S2P;
+extern float LOOP_S2R;
+extern float LOOP_BA_WEIGHT_PRIOR_CAMERA_POSE;
 extern float FTR_VARIANCE;
 extern float FTR_VARIANCE_EPSILON;
 
@@ -64,7 +67,7 @@ extern float DEPTH_VARIANCE_WALK;//地图点深度随时间变化的不确定性
 extern float DEPTH_VARIANCE_CONVERGE;
 extern float DEPTH_VARIANCE_EPSILON;
 extern float DEPTH_MIN_INLIER_RATIO;
-//extern float DEPTH_EPSILON;
+extern float DEPTH_EPSILON;
 extern float DEPTH_PROJECTION_MIN;
 extern float DEPTH_PROJECTION_MAX;
 

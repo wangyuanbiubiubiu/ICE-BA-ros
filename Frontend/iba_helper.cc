@@ -44,7 +44,7 @@ IBA::Calibration to_iba_calibration(const DuoCalibParam& calib)
   //相机size
   iba_calib.w = calib.Camera.img_size.width;
   iba_calib.h = calib.Camera.img_size.height;
-  iba_calib.fishEye = false;//是否是鱼眼
+  iba_calib.fishEye = calib.Camera.fishEye;//是否是鱼眼
   Eigen::Matrix4f Cl_T_I = calib.Camera.D_T_C_lr[0].inverse() * calib.Imu.D_T_I;
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 4; ++j) {

@@ -1,0 +1,39 @@
+%YAML:1.0
+
+#common parameters
+#support: 1 imu 2 cam; iba开源的版本目前是不支持单目vio的
+imu: 1         
+num_of_cam: 2  
+
+imu_topic: "/mynteye/imu/data_raw"
+image0_topic: "/mynteye/left/image_raw"
+image1_topic: "/mynteye/right/image_raw"
+output_path: "~/output/"
+
+cam0_calib: "cam0_pinhole.yaml"
+cam1_calib: "cam1_pinhole.yaml"
+resolution: [752, 480] #读取这里的图片size,而不是相机calib里的
+
+body_T_imu:
+  cols: 4
+  rows: 4
+  data: [1.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0,
+         0.0, 0.0, 0.0, 1.0]
+
+#imu parameters   continuous-time    
+acc_n: 0.0107814354144           # accelerometer measurement noise continuous-time. 
+acc_w: 0.000226346802673         # accelerometer bias random work noise continuous-time.
+gyr_n: 0.0088823282967         # gyroscope measurement noise continuous-time.       
+gyr_w: 0.0003795657829       # gyroscope bias random work noise continuous-time.     
+g_norm: 9.81007     # gravity magnitude
+
+loop_closure: 1                    # start loop closure
+dbow3_voc_path: "/home/wya/ICE-BA_ws/src/ICE-BA/vocab/orbvoc.dbow3" 
+
+#ground truth
+show_GT: 0
+GT_path: ""
+GT_SKIP: 150 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点
+

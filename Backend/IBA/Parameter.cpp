@@ -25,12 +25,17 @@ int KF_MIN_FEATURE_SROUCES       = 20;
 //int KF_MIN_FEATURE_SROUCES     = 50;
 int KF_MIN_FEATURE_MEASUREMENTS  = 20;
 
+float LOOP_S2P = 9*1.0e-4f; // 0.001^2 1.0e-6f
+float LOOP_S2R = 4 *3.046174198662e-4f; // (0.01*pi/180)^2 3.046174198662e-8f
+float LOOP_BA_WEIGHT_PRIOR_CAMERA_POSE = 1.0f;
+
+
 float FTR_VARIANCE                              = 1.0f;      // 1.0^2
 //float FTR_VARIANCE                            = 9.0f;      // 3.0^2
 float FTR_VARIANCE_EPSILON                      = 0.01f;     // 0.1^2
 
-  int FTR_UNDIST_MAX_ITERATIONS                 = 10;
-float FTR_UNDIST_CONVERGE                       = 0.01f;     // 0.1^2
+  int FTR_UNDIST_MAX_ITERATIONS                 = 10; //10
+float FTR_UNDIST_CONVERGE                       = 1.0e-10f;     // 0.1^2
   int FTR_UNDIST_LUT_SIZE                       = 11;
   int FTR_UNDIST_DL_MAX_ITERATIONS              = 10;
 float FTR_UNDIST_DL_RADIUS_INITIAL              = 1.0f;      // 1.0^2
@@ -69,7 +74,7 @@ float DEPTH_VARIANCE_WALK         = 1.0e-2f;  // 0.1^2
 float DEPTH_VARIANCE_CONVERGE     = 1.0e-6f;  // 0.001^2
 float DEPTH_VARIANCE_EPSILON      = 1.0e-6f;  // 0.001^2
 float DEPTH_MIN_INLIER_RATIO      = 0.4f;
-//float DEPTH_EPSILON             = 1.0e-3f;  // 1/1000
+float DEPTH_EPSILON             = 1.0e-3f;  // 1/1000
 float DEPTH_PROJECTION_MIN        = 1.0e-3f;  // 1/1000
 float DEPTH_PROJECTION_MAX        = 1.0e3f;   // 1/0.001
 //float DEPTH_PROJECTION_MAX      = FLT_MAX;
@@ -88,11 +93,11 @@ float DEPTH_TRI_DL_GAIN_RATIO_MIN          = 0.25f;
 float DEPTH_TRI_DL_GAIN_RATIO_MAX          = 0.75f;
 
   int BA_MAX_ITERATIONS                               = 10;
-float BA_WEIGHT_FEATURE                               = 1.0e-5f;
-float BA_WEIGHT_FEATURE_KEY_FRAME                     = 1.0e-3f;
+float BA_WEIGHT_FEATURE                               = 1.0e-5f;//1.0e-5f;
+float BA_WEIGHT_FEATURE_KEY_FRAME                     = 1.0e-3f;//1.0e-3f
 float BA_WEIGHT_PRIOR_CAMERA_INITIAL                  = 1.0e-5f;
 //float BA_WEIGHT_PRIOR_CAMERA_RELATIVE_CONSTRAINT    = 1.0e-5f;
-float BA_WEIGHT_PRIOR_CAMERA_RELATIVE_CONSTRAINT      = 1.0f;
+float BA_WEIGHT_PRIOR_CAMERA_RELATIVE_CONSTRAINT      = 1.0e-5f;
 //float BA_WEIGHT_PRIOR_CAMERA_POSE                   = 1.0f;
 float BA_WEIGHT_PRIOR_CAMERA_POSE                     = 1.0e1f;
 //float BA_WEIGHT_PRIOR_CAMERA_MOTION                 = 0.0f;
@@ -107,7 +112,7 @@ float BA_VARIANCE_FIX_ORIGIN_ROTATION_X               = 0.0f;                 //
 float BA_VARIANCE_FIX_ORIGIN_ROTATION_Y               = 0.0f;                 // 0.0^2
 float BA_VARIANCE_FIX_ORIGIN_ROTATION_Z               = 3.046174198662e-8f;   // (0.01*pi/180)^2
 float BA_VARIANCE_FIX_ORIGIN_POSITION                 = 1.0e-6f;              // 0.001^2
-float BA_VARIANCE_FIX_POSITION_Z                      = 0.0f;                 // 0.0^2
+float BA_VARIANCE_FIX_POSITION_Z                      = 0;                 // 0.01^2
 float BA_VARIANCE_FIX_VELOCITY                        = 0.0f;                 // 0.0^2
 float BA_VARIANCE_FIX_VELOCITY_INITIAL                = 0.0f;                 // 0.0^2
 float BA_VARIANCE_FIX_VELOCITY_INVALID                = 1.0e-2f;              // 0.1^2
@@ -259,7 +264,11 @@ double VW_WINDOW_DEPTH                        = 0.00001;
 
 int TIME_AVERAGING_COUNT = 10;
 
-void LoadParameters(const Configurator &cfgor) {
+void LoadParameters(const Configurator &cfgor)
+{
+    LOOP_S2P = cfgor.GetArgumentSquared("loop_variance_position", LOOP_S2P);
+    LOOP_S2R = cfgor.GetArgumentRadianSquared("loop_variance_rotation", LOOP_S2R);
+    LOOP_BA_WEIGHT_PRIOR_CAMERA_POSE = cfgor.GetArgument("param_ba_weight_prior_camera_pose",LOOP_BA_WEIGHT_PRIOR_CAMERA_POSE);
   KF_FIRST_LOCAL_FRAMES =
     cfgor.GetArgument(
     "param_kf_first_local_frames",
