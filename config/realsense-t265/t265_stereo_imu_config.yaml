@@ -1,7 +1,7 @@
 %YAML:1.0
 
 #common parameters
-#support: 1 imu 2 cam; iba开源的版本目前是不支持单目vio的
+#support: 1 imu 2 cam,1 imu 1 cam;
 imu: 1         
 num_of_cam: 2  
 

@@ -226,15 +226,20 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 
 
     FLAGS_stereo = config_yaml["num_of_cam"].as<int>() == 2;
-    if(FLAGS_stereo == false)//暂时只有双目版本开源,开源的虽然有单目脚本,但是单目用起来是飞,得做一下初始化以及三角化点的深度
-        LOG(FATAL) << "unsupported mono-vio";
     //话题
     FLAGS_image0_topic = config_yaml["image0_topic"].as<string>();
-    FLAGS_image1_topic = config_yaml["image1_topic"].as<string>();
+    if(FLAGS_stereo)
+        FLAGS_image1_topic = config_yaml["image1_topic"].as<string>();
     FLAGS_imu_topic = config_yaml["imu_topic"].as<string>();
     std::cout<<"image0_topic: "<<FLAGS_image0_topic<<std::endl
              <<"image1_topic: "<<FLAGS_image1_topic<<std::endl
              <<"imu_topic: "<<FLAGS_imu_topic<<std::endl;
+
+    if(FLAGS_stereo)
+        FLAGS_iba_param_path = "../config/config_of_stereo.txt";
+    else
+        FLAGS_iba_param_path = "../config/config_of_mono.txt";
+
 
     FLAGS_LoopClosure = config_yaml["loop_closure"].as<int>() == 1;
     FLAGS_dbow3_voc_path = config_yaml["dbow3_voc_path"].as<string>();
@@ -401,7 +406,12 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
     //需要一个新关键帧的条件:2个
     // 1: std::distance(kp_it_l, kps_l.end()) >= 20说明的是没观测到的新的地图点比较多,大于20个
     // 2: CF.feat_measures.size() < 20说明的是当前帧观测到的地图点数量太少了，不足20个
-    bool need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
+    bool need_new_kf;
+    if(FLAGS_stereo)
+        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
+    else
+        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/2) || CF.feat_measures.size() < (kps_l.size()/3);
+
     if (std::distance(kp_it_l, kps_l.end()) == 0)
         need_new_kf = false;
     if (!need_new_kf) KF.iFrm = -1;//如果不需要关键帧
@@ -510,12 +520,12 @@ bool process_frontend()
         con.wait(lk, [&] {
             return (measurements = getMeasurements()).size() != 0;//将目前所有的测量取出来
         });
-        if (measurements.size() > 1) {
-            std::cout << "1 getMeasurements size: " << measurements.size()
-                      << " imu sizes: " << measurements[0].first.size()
-                      << " stereo_buf size: " << stereo_buf.size()
-                      << " imu_buf size: " << imu_buf.size() << std::endl;
-        }
+//        if (measurements.size() > 1) {
+////            std::cout << "1 getMeasurements size: " << measurements.size()
+////                      << " imu sizes: " << measurements[0].first.size()
+////                      << " stereo_buf size: " << stereo_buf.size()
+////                      << " imu_buf size: " << imu_buf.size() << std::endl;
+//        }
         lk.unlock();
 
         //处理多组观测
@@ -674,7 +684,13 @@ bool process_frontend()
             //进行点管理(新旧地图点的观测更新),以及关键帧判断以及生成
             create_iba_frame(key_pnts, key_pnts_slave, imu_meas, img_time_stamp, &CF, &KF);
 
-
+            if(init_first_track)
+                init_first_track = false;
+            else
+            {
+                if(FLAGS_show_track_img)
+                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
+            }
             if(FLAGS_LoopClosure)
             {
                 if(KF.iFrm != -1)
@@ -703,13 +719,6 @@ bool process_frontend()
                 KFs_buf.push(KF);
             m_solver_buf.unlock();
 
-            if(init_first_track)
-                init_first_track = false;
-            else
-            {
-                if(FLAGS_show_track_img)
-                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
-            }
 
             pre_image_key_points = key_pnts;
             pre_image_features = orb_feat.clone();
@@ -803,7 +812,26 @@ void sync_stereo()
         }
         else
         {
-            //暂时不支持单目
+            cv::Mat image0;
+            std_msgs::Header header;
+            double time = 0;
+            m_buf.lock();
+            if (!img0_buf.empty())
+            {
+                double time0 = img0_buf.front()->header.stamp.toSec();
+
+                time = img0_buf.front()->header.stamp.toSec();
+                image0 = getImageFromMsg(img0_buf.front());
+                img0_buf.pop();
+            }
+
+            m_buf.unlock();
+            m_syn_buf.lock();
+            stereo_buf.push(std::make_pair(time,std::make_pair(image0,image0)));//单目就都塞一张图吧
+            m_syn_buf.unlock();
+            con.notify_one();
+
+
         }
         std::chrono::milliseconds dura(2);
         std::this_thread::sleep_for(dura);
@@ -995,24 +1023,28 @@ int main(int argc, char** argv)
                                                                !FLAGS_not_use_fast/*是否用fast点*/,
                                                                FLAGS_uniform_radius/*图像大小*/,
                                                                duo_calib_param.Camera.img_size/*图像大小*/));
-    //配置左右相机的投影和畸变模型,目前只支持针孔+radtan
-    slave_img_feat_propagator_ptr.reset(new XP::ImgFeaturePropagator(
-            duo_calib_param.Camera.cameraK_lr[1],  // cur_camK 右相机内参
-            duo_calib_param.Camera.cameraK_lr[0],  // ref_camK 左相机内参
-            duo_calib_param.Camera.cv_dist_coeff_lr[1],  // cur_dist_coeff 右相机畸变
-            duo_calib_param.Camera.cv_dist_coeff_lr[0],  // ref_dist_coeff 左相机畸变
-            duo_calib_param.Camera.fishEye,
-            masks[1],//右相机的掩码
-            FLAGS_pyra_level,//所有金字塔层数
-            FLAGS_min_feature_distance_over_baseline_ratio,//特征点最小深度比例,用于极线搜索
-            FLAGS_max_feature_distance_over_baseline_ratio));//特征点最大深度比例,用于极线搜索)
 
-    //双目外参
-    T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
-    T_Cl_Cr_d = Eigen::Matrix4d::Identity();
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            T_Cl_Cr_d(i,j) = (double)T_Cl_Cr(i,j);
+    if(FLAGS_stereo)
+    {
+        //配置左右相机的投影和畸变模型,目前只支持针孔+radtan
+        slave_img_feat_propagator_ptr.reset(new XP::ImgFeaturePropagator(
+                duo_calib_param.Camera.cameraK_lr[1],  // cur_camK 右相机内参
+                duo_calib_param.Camera.cameraK_lr[0],  // ref_camK 左相机内参
+                duo_calib_param.Camera.cv_dist_coeff_lr[1],  // cur_dist_coeff 右相机畸变
+                duo_calib_param.Camera.cv_dist_coeff_lr[0],  // ref_dist_coeff 左相机畸变
+                duo_calib_param.Camera.fishEye,
+                masks[1],//右相机的掩码
+                FLAGS_pyra_level,//所有金字塔层数
+                FLAGS_min_feature_distance_over_baseline_ratio,//特征点最小深度比例,用于极线搜索
+                FLAGS_max_feature_distance_over_baseline_ratio));//特征点最大深度比例,用于极线搜索)
+
+        //双目外参
+        T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
+        T_Cl_Cr_d = Eigen::Matrix4d::Identity();
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                T_Cl_Cr_d(i,j) = (double)T_Cl_Cr(i,j);
+            }
         }
     }
     //绘制前清除画布

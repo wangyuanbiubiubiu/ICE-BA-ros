@@ -3,15 +3,13 @@
 #common parameters
 #support: 1 imu 2 cam;1 imu 2 cam;
 imu: 1         
-num_of_cam: 2  
+num_of_cam: 1  
 
 imu_topic: "/mynteye/imu/data_raw"
 image0_topic: "/mynteye/left/image_raw"
-image1_topic: "/mynteye/right/image_raw"
 output_path: "~/output/"
 
 cam0_calib: "cam0_pinhole.yaml"
-cam1_calib: "cam1_pinhole.yaml"
 resolution: [752, 480] #读取这里的图片size,而不是相机calib里的
 
 body_T_imu:
