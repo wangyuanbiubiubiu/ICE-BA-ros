@@ -230,15 +230,6 @@ namespace LC
                         }
                     }
             }
-//            if(!success)
-//            {
-//                DBoW3::EntryId id = kfDB->add(mCurrentKF->mBowVec, mCurrentKF->mFeatVec);
-//                mCurrentKF->mloop_Descriptors.release();
-//                mCurrentKF->mloop_KPs.clear();
-//                mCurrentKF->mloop_FeatVec.clear();
-//                maxKFId = id;
-//                checkedKFs[id] = mCurrentKF;
-//            }
 
             usleep(5000);
         }
