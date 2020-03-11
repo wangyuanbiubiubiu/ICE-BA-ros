@@ -5,6 +5,7 @@
 #include "visualization.h"
 
 DECLARE_bool(stereo);
+DECLARE_string(gba_result_path);
 extern Eigen::Matrix4d T_Cl_Cr_d,Tbc0;;
 nav_msgs::Path lba_path,GT_path;
 ros::Publisher pub_lba_path,pub_gba_path,pub_GT_path,pub_camera_pose,pub_camera_pose_visual,pub_imu_pose,
@@ -93,40 +94,49 @@ void pubTrackImage(const cv::Mat &cur_l_img, const cv::Mat &cur_r_img ,std::vect
 {
 
     cv::Mat imTrack;
-    int cols = cur_l_img.cols;
-    cv::hconcat(cur_l_img, cur_r_img, imTrack);//左右图拼接到一起
-    cv::cvtColor(imTrack, imTrack, CV_GRAY2RGB);
-
-    std::vector<std::pair<cv::Point2f,cv::Point2f>> stereo_matches;
-
-    std::vector<cv::KeyPoint>::iterator leftPt_iter = cur_l_kp.begin();
-    std::vector<cv::KeyPoint>::iterator rightPt_iter = cur_r_kp.begin();
-    while(leftPt_iter != cur_l_kp.end() && rightPt_iter != cur_r_kp.end())
+    if(FLAGS_stereo)
     {
-        if(leftPt_iter->class_id == rightPt_iter->class_id)
+        int cols = cur_l_img.cols;
+        cv::hconcat(cur_l_img, cur_r_img, imTrack);//左右图拼接到一起
+        cv::cvtColor(imTrack, imTrack, CV_GRAY2RGB);
+
+        std::vector<std::pair<cv::Point2f,cv::Point2f>> stereo_matches;
+
+        std::vector<cv::KeyPoint>::iterator leftPt_iter = cur_l_kp.begin();
+        std::vector<cv::KeyPoint>::iterator rightPt_iter = cur_r_kp.begin();
+        while(leftPt_iter != cur_l_kp.end() && rightPt_iter != cur_r_kp.end())
         {
-            stereo_matches.push_back(std::make_pair(leftPt_iter->pt,rightPt_iter->pt));
-            leftPt_iter++;rightPt_iter++;
+            if(leftPt_iter->class_id == rightPt_iter->class_id)
+            {
+                stereo_matches.push_back(std::make_pair(leftPt_iter->pt,rightPt_iter->pt));
+                leftPt_iter++;rightPt_iter++;
+            }
+            else if(leftPt_iter->class_id < rightPt_iter->class_id)
+                leftPt_iter++;
+            else
+                rightPt_iter++;
         }
-        else if(leftPt_iter->class_id < rightPt_iter->class_id)
-            leftPt_iter++;
-        else
-            rightPt_iter++;
+
+
+        for (size_t j = 0; j < stereo_matches.size(); j++)
+        {
+            //左图画出特征点
+            cv::Point2f leftPt = stereo_matches[j].first;
+
+            cv::circle(imTrack, leftPt, 2, cv::Scalar(0, 0, 255 ), 2);
+            //右图画出特征点
+            cv::Point2f rightPt = stereo_matches[j].second;
+            rightPt.x += cols;//因为拼接到一起所以右图特征点x坐标应该加上左图长度
+            cv::circle(imTrack, rightPt, 2, cv::Scalar(0, 255, 0), 2);
+
+        }
     }
-
-
-    for (size_t j = 0; j < stereo_matches.size(); j++)
+    else
     {
-        //左图画出特征点
-        cv::Point2f leftPt = stereo_matches[j].first;
-
-        cv::circle(imTrack, leftPt, 2, cv::Scalar(0, 0, 255 ), 2);
-        //右图画出特征点
-        cv::Point2f rightPt = stereo_matches[j].second;
-        rightPt.x += cols;//因为拼接到一起所以右图特征点x坐标应该加上左图长度
-        cv::circle(imTrack, rightPt, 2, cv::Scalar(0, 255, 0), 2);
-
+        imTrack = cur_l_img.clone();
+        cv::cvtColor(imTrack, imTrack, CV_GRAY2RGB);
     }
+
 
     std::vector<std::pair<cv::Point2f,cv::Point2f>> LK_matches;
     std::vector<cv::KeyPoint>::iterator prePt_iter = pre_l_kp.begin();
@@ -306,6 +316,33 @@ void pubLatestCameraPose(const Eigen::Matrix4d & Twc0, const Eigen::Vector3d &V,
 
 void pubKFsPose(const std::vector<std::pair<double,Eigen::Matrix4d>> & kf_poses)
 {
+    if(!FLAGS_gba_result_path.empty())
+    {
+        std::ofstream cleanfoutC(FLAGS_gba_result_path, std::ios::out);
+        cleanfoutC.close();
+        std::ofstream foutC(FLAGS_gba_result_path, std::ios::app);
+        foutC.setf(std::ios::fixed, std::ios::floatfield);
+        for (int i = 0; i < kf_poses.size(); ++i)
+        {
+            Eigen::Matrix3d Rwc0 = kf_poses[i].second.block<3,3>(0,0);
+            Eigen::Vector3d twc0 = kf_poses[i].second.block<3,1>(0,3);
+            Eigen::Quaterniond qwc0(Rwc0);
+            foutC.precision(0);
+            foutC << kf_poses[i].first * 1e9 << " ";
+            foutC.precision(6);
+            foutC << twc0.x() << " "
+                  << twc0.y() << " "
+                  << twc0.z() << " "
+                  << qwc0.x() << " "
+                  << qwc0.y() << " "
+                  << qwc0.z() << " "
+                  << qwc0.w() << std::endl;
+            
+        }
+        foutC.close();
+    }
+
+
     nav_msgs::Path gba_path;
     for (int i = 0; i < kf_poses.size(); ++i)
     {
