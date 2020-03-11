@@ -39,6 +39,8 @@ extern std::mutex m_buf,m_syn_buf;
 extern std::condition_variable con;
 extern double offset_ts;
 bool set_offset_time = false;
+int MIN_PARALLAX = 20;
+
 DECLARE_bool(stereo);
 DECLARE_bool(UseIMU);
 DECLARE_bool(LoopClosure);
@@ -286,9 +288,9 @@ struct Data
                    &ax, &ay, &az) != EOF)
         {
             t /= 1e9;
-            px += -7.48903e-02;//euroc的真值是TRM,TMb是的R是单位阵,所以我在这里直接加了t
-            py += 1.84772e-02;
-            pz += 1.20209e-01;
+//            px += -7.48903e-02;//euroc的真值是TRM,TMb是的R是单位阵,所以我在这里直接加了t
+//            py += 1.84772e-02;
+//            pz += 1.20209e-01;
 
         }
     }
@@ -347,6 +349,115 @@ void odom_callback(const nav_msgs::OdometryConstPtr &odom_msg)
 }
 
 
+float compensatedParallax2(const std::vector<cv::Point2f> & pre_bearing_vec, const std::vector<cv::Point2f> & cur_bearing_vec)
+{
+    float Parallax = 0;
+    float Parallax_num = 0;
+
+    for(int i = 0; i < pre_bearing_vec.size(); ++i)
+    {
+        float ans = 0;
+        Eigen::Vector3f p_j{cur_bearing_vec[i].x,cur_bearing_vec[i].y,1.0f};
+
+        float u_j = p_j(0);
+        float v_j = p_j(1);
+
+        Eigen::Vector3f p_i{pre_bearing_vec[i].x,pre_bearing_vec[i].y,1.0f};
+        Eigen::Vector3f p_i_comp;
+
+
+        p_i_comp = p_i;
+        float dep_i = p_i(2);
+        float u_i = p_i(0) / dep_i;
+        float v_i = p_i(1) / dep_i;
+        float du = u_i - u_j, dv = v_i - v_j;
+
+        float dep_i_comp = p_i_comp(2);
+        float u_i_comp = p_i_comp(0) / dep_i_comp;
+        float v_i_comp = p_i_comp(1) / dep_i_comp;
+        float du_comp = u_i_comp - u_j, dv_comp = v_i_comp - v_j;
+
+        ans = std::max(ans, std::sqrt(std::min(du * du + dv * dv, du_comp * du_comp + dv_comp * dv_comp)));
+        Parallax += ans;
+        Parallax_num++;
+    }
+
+    return Parallax / float(Parallax_num);
+}
+
+
+void mono_begin_compute(std::vector<cv::KeyPoint> pre_key_pnts,std::vector<cv::KeyPoint> cur_key_pnts,
+                        const cv::Matx33f& K,
+                        const cv::Mat_<float>* dist_coeffs_ptr,
+                        const bool fisheye,
+                        const cv::Mat_<uchar> &  cam_mask,int *init_count)
+{
+    std::vector<cv::Point2f> pre_uv;
+    std::vector<cv::Point2f> cur_uv;
+    std::vector<cv::KeyPoint>::iterator prePt_iter = pre_key_pnts.begin();
+    std::vector<cv::KeyPoint>::iterator curPt_iter = cur_key_pnts.begin();
+
+    while(prePt_iter != pre_key_pnts.end() && curPt_iter != cur_key_pnts.end())
+    {
+        if(prePt_iter->class_id == curPt_iter->class_id)
+        {
+            pre_uv.push_back(prePt_iter->pt);
+            cur_uv.push_back(curPt_iter->pt);
+            prePt_iter++;curPt_iter++;
+        }
+        else if(prePt_iter->class_id < curPt_iter->class_id)
+            prePt_iter++;
+        else
+            curPt_iter++;
+    }
+
+    assert(cur_uv.size() == pre_uv.size());
+    double track_ratio = (double)cur_uv.size() / (double)pre_key_pnts.size();
+
+    bool valid_track = track_ratio < 0.95 && track_ratio > 0.2;//也不能全追踪上
+
+    std::vector<cv::Point2f> pre_feat_undistorted;
+    std::vector<cv::Point2f> cur_feat_undistorted;
+    if(pre_uv.empty())
+    {
+        (*init_count) = 0;
+    } else
+    {
+        if(fisheye)
+        {
+            cv::Vec4f distortion_coeffs;
+            for (int i = 0; i < distortion_coeffs.rows; ++i)
+                distortion_coeffs[i] = (*dist_coeffs_ptr)(i);
+            cv::fisheye::undistortPoints(pre_uv,//去畸变
+                                         pre_feat_undistorted,
+                                         K, distortion_coeffs);
+
+            cv::fisheye::undistortPoints(cur_uv,//去畸变
+                                         cur_feat_undistorted,
+                                         K, distortion_coeffs);
+        }
+        else
+        {
+            cv::undistortPoints(pre_uv,//去畸变
+                                pre_feat_undistorted,
+                                K, *dist_coeffs_ptr);
+
+            cv::undistortPoints(cur_uv,//去畸变
+                                cur_feat_undistorted,
+                                K, *dist_coeffs_ptr);
+        }
+
+        float focal_len = (K(0,0) + K(1,1)) / 2.0f;
+        float aver_Parallax = compensatedParallax2(pre_feat_undistorted,cur_feat_undistorted) * focal_len;
+//        std::cout<<aver_Parallax<<" "<<track_ratio<<std::endl;
+        if(aver_Parallax > MIN_PARALLAX && valid_track)
+            (*init_count) ++;
+        else
+        if((*init_count) > 0)
+            (*init_count) --;
+    }
+
+}
 
 inline bool cmp_by_class_id(const cv::KeyPoint& lhs, const cv::KeyPoint& rhs)  {
     return lhs.class_id < rhs.class_id;

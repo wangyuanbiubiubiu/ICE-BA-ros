@@ -89,13 +89,13 @@ DEFINE_bool(GetGT, true, "GTdata");
 DEFINE_bool(UseIMU,true, "use imu data?");
 DEFINE_string(GT_path, "", "");
 DEFINE_string(dbow3_voc_path, "", "dbow3_voc_path,must set!");
+DEFINE_int32(mono_init_th,3,"大于3次认为ok");
 
 
 std::queue<IBA::RelativeConstraint> loop_info;
 
 std::queue<IBA::CurrentFrame> CFs_buf;
 std::queue<IBA::KeyFrame> KFs_buf;
-//std::queue<stereo_Img_info_d> stereo_buf;
 std::mutex m_buf,m_syn_buf,m_solver_buf,m_loop_buf;
 std::condition_variable con;
 std::unique_ptr<XP::FeatureTrackDetector> feat_track_detector_ptr;
@@ -128,7 +128,8 @@ float prev_img_time_stamp = 0.0f;
 // load previous image//左目之前的特征点和描述子
 std::vector<cv::KeyPoint> pre_image_key_points;
 cv::Mat pre_image_features;
-
+int mono_init_count = 0;
+bool need_mono_init = true;
 std::shared_ptr<vio::cameras::NCameraSystem> Ncamera_ptr;
 
 bool process_frontend()
@@ -294,7 +295,32 @@ bool process_frontend()
             std::sort(key_pnts.begin(), key_pnts.end(), cmp_by_class_id);
             std::sort(key_pnts_slave.begin(), key_pnts_slave.end(), cmp_by_class_id);
 
+            if(init_first_track)
+                init_first_track = false;
+            else
+            {
+                if(FLAGS_show_track_img)
+                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
+            }
+            if(!FLAGS_stereo)//单目简单的判断一下第一次需要开始吧
+            {//算一下运动
+                mono_begin_compute(pre_image_key_points,key_pnts,duo_calib_param.Camera.cv_camK_lr[0],
+                                   &duo_calib_param.Camera.cv_dist_coeff_lr[0],
+                                   duo_calib_param.Camera.fishEye,
+                                   masks[0],&mono_init_count);
+                if(need_mono_init && mono_init_count >= FLAGS_mono_init_th )//大于5次就认为在激励,开始追踪吧
+                {
+                    need_mono_init = false;
+                }
+                else if(need_mono_init)
+                {
+                    pre_image_key_points = key_pnts;
+                    pre_image_features = orb_feat.clone();
 
+                    prev_img_time_stamp = img_time_stamp;
+                    continue;
+                }
+            }
 
             // push to IBA
             IBA::CurrentFrame CF;
@@ -323,13 +349,6 @@ bool process_frontend()
                     feat_track_detector_ptr->ComputeDescriptors(img_in_smooth,&key_pnts,&cur_orb_feat);
                     LoopCloser_ptr ->InsertKeyFrame(std::shared_ptr<LC::KeyFrame> (new LC::KeyFrame(KF.iFrm,key_pnts,cur_orb_feat,loop_key_pnts,loop_orb_feat,img_in_smooth)));
                 }
-            }
-            if(init_first_track)
-                init_first_track = false;
-            else
-            {
-                if(FLAGS_show_track_img)
-                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
             }
 
             m_solver_buf.lock();
