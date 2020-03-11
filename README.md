@@ -3,7 +3,7 @@
 If you want to use the ros version, set(USE_ROS true)   #true or false  
 stereo-vio:   
 ![rviz](https://github.com/wangyuanbiubiubiu/ICE-BA-ros/blob/master/config/ice-ba.png)  
-mono-vio: (note: If you want to use a mono-vio, you need to move the camera as soon as the code runs, because the code doesn't do the mono initialization, and if the camera doesn't move, the track will drift)   
+mono-vio: (note: If you want to use a mono-vio, you need to give the camera enough movement to get started ,see`mono_begin_compute`)   
 ![rviz](https://github.com/wangyuanbiubiubiu/ICE-BA-ros/blob/master/config/iceba-mono.png)
 ## How to build
     export ROS_VERSION=kinetic
