@@ -23,10 +23,12 @@ set(HEADERS
         cameras/PinholeCamera.hpp
         cameras/RadialTangentialDistortion.hpp
         cameras/EquidistantDistortion.hpp
+        cameras/NCameraSystem.hpp
         cameras/implementation/CameraBase.hpp
         cameras/implementation/PinholeCamera.hpp
         cameras/implementation/RadialTangentialDistortion8.hpp
         cameras/implementation/EquidistantDistortion.hpp
+        cameras/implementation/NCameraSystem.hpp
         basic_datatype.h
         feature_utils.h
         iba_helper.h
@@ -41,6 +43,7 @@ set(HEADERS
         image_utils.h
         timer.h
         xp_quaternion.h
+        ParamsInit.h
         )
 
 set(SOURCES

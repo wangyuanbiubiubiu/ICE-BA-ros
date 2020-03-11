@@ -202,6 +202,17 @@ namespace LC
                     continue;
                 }
 
+                while(KFqueue.size() > 1)//只闭环最新的,不过也可以注释掉,改成闭环最老的
+                {
+                    mCurrentKF = KFqueue.front();
+                    DBoW3::EntryId id = kfDB->add(mCurrentKF->mBowVec, mCurrentKF->mFeatVec);
+                    mCurrentKF->mloop_Descriptors.release();
+                    mCurrentKF->mloop_KPs.clear();
+                    mCurrentKF->mloop_FeatVec.clear();
+                    maxKFId = id;
+                    checkedKFs[id] = mCurrentKF;
+                    KFqueue.pop_front();
+                }
                 mCurrentKF = KFqueue.front();
                 KFqueue.pop_front();
 
@@ -210,11 +221,11 @@ namespace LC
 
             }
 
-            bool success = false;
             if (DetectLoop(mCurrentKF))
             {
                 Eigen::Matrix4f PnP_Twc;
                 if(CorrectLoop(PnP_Twc))
+                {
                     if(ComputeOptimizedPose(PnP_Twc))
                     {
                         vector<Eigen::Matrix4f> r_poses;
@@ -224,11 +235,11 @@ namespace LC
                             r_poses.push_back(All_KF_Info[iFrm_2_idx.find(candidate_co_KFs[i]->iFrm)->second]->Twc);
                             r_iFrms.push_back(candidate_co_KFs[i]->iFrm);
                         }
-                        success = true;
                         if (m_callback) {
                             m_callback(r_poses,PnP_Twc,r_iFrms,mCurrentKF->iFrm);
                         }
                     }
+                }
             }
 
             usleep(5000);

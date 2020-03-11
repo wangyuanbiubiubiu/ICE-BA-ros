@@ -52,12 +52,10 @@
 
 //闭环
 #include "LoopClosing.h"
-namespace fs = boost::filesystem;
-using std::string;
-using std::vector;
-using stereo_Img = std::pair<cv::Mat,cv::Mat>;
-using stereo_Img_info_d = std::pair<double,stereo_Img>;
-using stereo_Img_info_f = std::pair<float,stereo_Img>;
+#include "CameraBase.hpp"
+#include "NCameraSystem.hpp"
+#include "ParamsInit.h"
+
 DEFINE_bool(show_track_img,true,"output trackimg(ros msg)");
 DEFINE_string(config_file, "", "像vinsfuison,给总配置文件的路径");
 DEFINE_int32(grid_row_num, 1, "Number of rows of detection grids");
@@ -79,6 +77,7 @@ DEFINE_double(min_feature_distance_over_baseline_ratio,
 DEFINE_double(max_feature_distance_over_baseline_ratio,
               3000, "Used for slave image feature detection");
 DEFINE_string(iba_param_path, "", "iba parameters path");
+DEFINE_string(gba_result_path, "", "Save the gab_result");
 DEFINE_string(result_folder, "", "Save the result");
 DEFINE_bool(stereo, false, "monocular or stereo mode");
 DEFINE_bool(save_feature, false, "Save features to .dat file");
@@ -87,18 +86,16 @@ DEFINE_string(image1_topic, "", "右目话题");
 DEFINE_string(imu_topic, "", "imu话题");
 DEFINE_bool(LoopClosure, true, "use LoopClosure?");
 DEFINE_bool(GetGT, true, "GTdata");
+DEFINE_bool(UseIMU,true, "use imu data?");
 DEFINE_string(GT_path, "", "");
 DEFINE_string(dbow3_voc_path, "", "dbow3_voc_path,must set!");
 
 
 std::queue<IBA::RelativeConstraint> loop_info;
-std::queue<sensor_msgs::ImuConstPtr> imu_buf;
-std::queue<sensor_msgs::ImageConstPtr> img0_buf;
-std::queue<sensor_msgs::ImageConstPtr> img1_buf;
 
 std::queue<IBA::CurrentFrame> CFs_buf;
 std::queue<IBA::KeyFrame> KFs_buf;
-std::queue<stereo_Img_info_d> stereo_buf;
+//std::queue<stereo_Img_info_d> stereo_buf;
 std::mutex m_buf,m_syn_buf,m_solver_buf,m_loop_buf;
 std::condition_variable con;
 std::unique_ptr<XP::FeatureTrackDetector> feat_track_detector_ptr;
@@ -120,7 +117,6 @@ Eigen::Matrix4d Tbc0;
 Eigen::Vector3f last_position = Eigen::Vector3f::Zero();
 float travel_dist = 0.f;
 double offset_ts = 0;
-bool set_offset_time = false;
 bool set_relative_pose = false;
 bool init_first_track = true;
 
@@ -133,382 +129,7 @@ float prev_img_time_stamp = 0.0f;
 std::vector<cv::KeyPoint> pre_image_key_points;
 cv::Mat pre_image_features;
 
-int idx = 1;
-struct Data;
-vector<Data> benchmark;
-int GT_skip = 0;//等稳定了
-int init = 0;
-Eigen::Quaterniond baseRgt;
-Eigen::Vector3d baseTgt;
-tf::Transform trans;
-
-
-struct Data
-{
-    Data(FILE *f)
-    {
-        if (fscanf(f, " %lf,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", &t,
-                   &px, &py, &pz,
-                   &qw, &qx, &qy, &qz,
-                   &vx, &vy, &vz,
-                   &wx, &wy, &wz,
-                   &ax, &ay, &az) != EOF)
-        {
-            t /= 1e9;
-            px += -7.48903e-02;//euroc的真值是TRM,TMb是的R是单位阵,所以我在这里直接加了t
-            py += 1.84772e-02;
-            pz += 1.20209e-01;
-
-        }
-    }
-    double t;
-    float px, py, pz;
-    float qw, qx, qy, qz;
-    float vx, vy, vz;
-    float wx, wy, wz;
-    float ax, ay, az;
-};
-
-void odom_callback(const nav_msgs::OdometryConstPtr &odom_msg)
-{
-    if(!FLAGS_GetGT)
-        return;
-
-    if (odom_msg->header.stamp.toSec() > benchmark.back().t)
-        return;
-
-    for (; idx < static_cast<int>(benchmark.size()) && benchmark[idx].t <= odom_msg->header.stamp.toSec(); idx++)
-        ;
-
-    if (init++ < GT_skip)
-    {
-        baseRgt = Eigen::Quaterniond(odom_msg->pose.pose.orientation.w,
-                              odom_msg->pose.pose.orientation.x,
-                              odom_msg->pose.pose.orientation.y,
-                              odom_msg->pose.pose.orientation.z) *
-                Eigen::Quaterniond(benchmark[idx - 1].qw,
-                              benchmark[idx - 1].qx,
-                              benchmark[idx - 1].qy,
-                              benchmark[idx - 1].qz).inverse();
-        baseTgt = Eigen::Vector3d{odom_msg->pose.pose.position.x,
-                           odom_msg->pose.pose.position.y,
-                           odom_msg->pose.pose.position.z} -
-                  baseRgt * Eigen::Vector3d{benchmark[idx - 1].px, benchmark[idx - 1].py , benchmark[idx - 1].pz};
-        return;
-    }
-
-    nav_msgs::Odometry odometry;
-    Eigen::Vector3d tmp_T = baseTgt + baseRgt * Eigen::Vector3d{benchmark[idx - 1].px, benchmark[idx - 1].py, benchmark[idx - 1].pz};
-    Eigen::Quaterniond tmp_R = baseRgt * Eigen::Quaterniond{benchmark[idx - 1].qw,
-                                              benchmark[idx - 1].qx,
-                                              benchmark[idx - 1].qy,
-                                              benchmark[idx - 1].qz};
-
-    Eigen::Vector3d tmp_V = baseRgt * Eigen::Vector3d{benchmark[idx - 1].vx,
-                                        benchmark[idx - 1].vy,
-                                        benchmark[idx - 1].vz};
-
-    Eigen::Matrix4d GT_Twb = Eigen::Matrix4d::Identity();
-    GT_Twb.block<3,3>(0,0) = tmp_R.toRotationMatrix();
-    GT_Twb.block<3,1>(0,3) = tmp_T;
-    Eigen::Matrix4d GT_Twc0 = GT_Twb * Tbc0;
-    pubGTCamPose(GT_Twc0,benchmark[idx - 1].t);
-}
-
-void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_param)
-{
-    int pn = config_path.find_last_of('/');
-    std::string config_folder = config_path.substr(0, pn);
-    YAML::Node config_yaml = YAML::LoadFile(config_path);
-    std::vector<double> v_double;
-    v_double = config_yaml["body_T_imu"]["data"].as<std::vector<double>>();
-    Eigen::Matrix4d b_t_i = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
-
-
-    FLAGS_stereo = config_yaml["num_of_cam"].as<int>() == 2;
-    //话题
-    FLAGS_image0_topic = config_yaml["image0_topic"].as<string>();
-    if(FLAGS_stereo)
-        FLAGS_image1_topic = config_yaml["image1_topic"].as<string>();
-    FLAGS_imu_topic = config_yaml["imu_topic"].as<string>();
-    std::cout<<"image0_topic: "<<FLAGS_image0_topic<<std::endl
-             <<"image1_topic: "<<FLAGS_image1_topic<<std::endl
-             <<"imu_topic: "<<FLAGS_imu_topic<<std::endl;
-
-    if(FLAGS_stereo)
-        FLAGS_iba_param_path = "../config/config_of_stereo.txt";
-    else
-        FLAGS_iba_param_path = "../config/config_of_mono.txt";
-
-
-    FLAGS_LoopClosure = config_yaml["loop_closure"].as<int>() == 1;
-    FLAGS_dbow3_voc_path = config_yaml["dbow3_voc_path"].as<string>();
-
-    IMU_VARIANCE_ACCELERATION_NOISE = float(std::pow(config_yaml["acc_n"].as<double>(),2));
-    IMU_VARIANCE_ACCELERATION_BIAS_WALK = float(std::pow(config_yaml["acc_w"].as<double>(),2));
-    IMU_VARIANCE_GYROSCOPE_NOISE = float(std::pow(config_yaml["gyr_n"].as<double>(),2));
-    IMU_VARIANCE_GYROSCOPE_BIAS_WALK = float(std::pow(config_yaml["gyr_w"].as<double>(),2));
-    IMU_GRAVITY_MAGNITUDE = config_yaml["g_norm"].as<float>();
-
-    FLAGS_GetGT = config_yaml["show_GT"].as<int>() == 1;
-    if(FLAGS_GetGT)
-    {
-        FLAGS_GT_path =  config_yaml["GT_path"].as<string>();
-        GT_skip = config_yaml["GT_SKIP"].as<int>();
-    }
-
-    int Num_Cam = FLAGS_stereo ? 2:1;
-    std::vector<float> v_float;
-    Eigen::Matrix4d b_t_c0,b_t_c1;
-    for (int cam_id = 0; cam_id < Num_Cam; ++cam_id)
-    {
-        std::string cam_string = "cam" + std::to_string(cam_id) + "_calib";
-
-        std::string cam_yaml = config_folder + "/" + config_yaml[cam_string].as<string>();
-        YAML::Node cam_calib = YAML::LoadFile(cam_yaml);
-        //内参
-        v_float = cam_calib["intrinsics"].as<std::vector<float>>();
-        calib_param.Camera.cv_camK_lr[cam_id] << v_float[0], 0, v_float[2],
-                0, v_float[1], v_float[3],
-                0, 0, 1;
-        calib_param.Camera.cameraK_lr[cam_id] << v_float[0], 0, v_float[2],
-                0, v_float[1], v_float[3],
-                0, 0, 1;
-        //畸变 //TODO:Equi
-        v_double = cam_calib["distortion_coefficients"].as<std::vector<double>>();
-        calib_param.Camera.cv_dist_coeff_lr[cam_id] = (cv::Mat_<float>(8, 1) << static_cast<float>(v_double[0]), static_cast<float>(v_double[1]),
-                static_cast<float>(v_double[2]), static_cast<float>(v_double[3]), 0.0, 0.0, 0.0, 0.0);
-
-        string distort_model = cam_calib["distortion_model"].as<string>();
-        if(distort_model == "equidistant")
-            calib_param.Camera.fishEye = true;
-        else
-            calib_param.Camera.fishEye = false;
-        //外参
-        v_double = cam_calib["body_T_cam"]["data"].as<std::vector<double>>();
-
-
-        if(cam_id == 0)
-            b_t_c0 = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
-        else
-            b_t_c1 = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
-    }
-    Tbc0 = b_t_c0;
-    std::cout<<"fisheye?"<<calib_param.Camera.fishEye<<std::endl;
-
-    // ASL {B}ody frame is the IMU
-    // {D}evice frame is the left camera
-    //百度这个代码的表示方式：d_t_cam0就是Tdcam0,即相机0到设备坐标系的变换,这里把设备坐标系固连于左相机坐标系
-    Eigen::Matrix4d d_t_cam0 = Eigen::Matrix4d::Identity();
-    Eigen::Matrix4d d_t_b = d_t_cam0 * b_t_c0.inverse();// Tdb = Tdc0 * Tc0b本体坐标系到设备坐标系
-    if(FLAGS_stereo)
-    {
-        Eigen::Matrix4d d_t_cam1 = d_t_b * b_t_c1;//Tdc1 右相机到设备坐标系
-        calib_param.Camera.D_T_C_lr[1] = d_t_cam1.cast<float>();
-    }
-    Eigen::Matrix4d d_t_imu = d_t_b * b_t_i; //imu坐标系到设备坐标系
-    //设置关于设备坐标系的参数
-    calib_param.Camera.D_T_C_lr[0] = Eigen::Matrix4f::Identity();
-    // Image size 图像大小
-    std::vector<int> v_int = config_yaml["resolution"].as<std::vector<int>>();
-    calib_param.Camera.img_size = cv::Size(v_int[0], v_int[1]);
-    // IMU
-    calib_param.Imu.accel_TK = Eigen::Matrix3f::Identity();
-    calib_param.Imu.accel_bias = Eigen::Vector3f::Zero();
-    calib_param.Imu.gyro_TK = Eigen::Matrix3f::Identity();
-    calib_param.Imu.gyro_bias = Eigen::Vector3f::Zero();
-    calib_param.Imu.accel_noise_var = Eigen::Vector3f{0.0016, 0.0016, 0.0016};
-    calib_param.Imu.angv_noise_var = Eigen::Vector3f{0.0001, 0.0001, 0.0001};
-    calib_param.Imu.D_T_I = d_t_imu.cast<float>();
-    calib_param.device_id = "ASL";
-    calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
-
-    //进行双目立体矫正,事先设置好左右目的remap
-//    calib_param.initUndistortMap(calib_param.Camera.img_size);
-
-
-
-
-}
-
-
-
-inline bool cmp_by_class_id(const cv::KeyPoint& lhs, const cv::KeyPoint& rhs)  {
-    return lhs.class_id < rhs.class_id;
-}
-
-template <typename T>
-void InitPOD(T& t) {
-    memset(&t, 0, sizeof(t));
-}
-//输入左相机特征点,右相机特征点,imu测量,左目时间戳,当前帧,关键帧
-//进行点管理,生成当前帧(imu数据,对于老地图点的观测),并且判断是否要生成关键帧(阈值为看到老地图点的多少或者需要生成新地图点的多少),
-// 如果要生成关键帧，将新的地图点push进Xs保存到关键帧数据结构中
-bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
-                      const vector<cv::KeyPoint>& kps_r,
-                      const vector<XP::ImuData>& imu_samples,
-                      const float rig_time,
-                      IBA::CurrentFrame* ptrCF, IBA::KeyFrame* ptrKF) {
-
-    CHECK(std::is_sorted(kps_l.begin(), kps_l.end(), cmp_by_class_id));
-    CHECK(std::is_sorted(kps_r.begin(), kps_r.end(), cmp_by_class_id));
-    CHECK(std::includes(kps_l.begin(), kps_l.end(), kps_r.begin(), kps_r.end(), cmp_by_class_id));
-
-    // IBA will handle *unknown* initial depth values
-    //IBA将处理*未知*初始深度值
-    IBA::Depth kUnknownDepth;
-    kUnknownDepth.d = 0.0f;
-    kUnknownDepth.s2 = 0.0f;
-    static int last_added_point_id = -1;//用来判断是否是新地图点
-    static int iba_iFrm = 0;//全局frame_idx 从0开始
-    auto kp_it_l = kps_l.cbegin(), kp_it_r = kps_r.cbegin();
-
-    IBA::CurrentFrame& CF = *ptrCF;
-    IBA::KeyFrame& KF = *ptrKF;
-
-    CF.iFrm = iba_iFrm;
-    InitPOD(CF.Cam_state);//初始化一下C中的值 // needed to ensure the dumped frame deterministic even for unused field
-    CF.Cam_state.Cam_pose.R[0][0] = CF.Cam_state.v[0] = CF.Cam_state.ba[0] = CF.Cam_state.bw[0] = FLT_MAX;
-    // MapPointMeasurement, process in ascending class id, left camera to right
-    // Note the right keypoints is acc subset of the left ones
-    IBA::MapPointMeasurement mp_mea;//地图点的测量
-    InitPOD(mp_mea);
-    //这里没有加权,协方差直接是单位阵
-    mp_mea.x.S[0][0] = mp_mea.x.S[1][1] = 1.f;
-    mp_mea.x.S[0][1] = mp_mea.x.S[1][0] = 0.f;
-
-    //第一帧的时候这里是跳过的,因为还没有last_added_point_id
-    //class_id小于上次最后一个地图点id,说明这个点是老地图点的测量,先处理老地图点的观测
-    //这里需要一点,KF的class_id不是连续的,因为追踪过程是普通帧追踪上一帧的地图点,而这个地图点非kf里的地图点,比如说这帧有新的地图点,75,76,77,但是
-    //地图点太少,不算关键帧,到了能判定关键帧的时候,可能这个关键帧看到的是74,76,78---，那么75,77是没有的,last_added_point_id是上一个关键帧的最后一个点的id
-    for (; kp_it_l != kps_l.cend() && kp_it_l->class_id <= last_added_point_id; ++kp_it_l)
-    {
-        //将左侧特征点的id,测量值,均赋值给地图点的测量
-        mp_mea.idx = kp_it_l->class_id;
-        mp_mea.x.x[0] = kp_it_l->pt.x;
-        mp_mea.x.x[1] = kp_it_l->pt.y;
-        mp_mea.right = false;
-        CF.feat_measures.push_back(mp_mea);
-        //kp_it_r里的点数量<= kp_it_l点的数量,所以class_id要么和l的相等要么提前于l
-        //如果右目也观测到了地图点,将右目状态更新,也push进去
-        if (kp_it_r != kps_r.cend() && kp_it_r->class_id == kp_it_l->class_id) {
-            mp_mea.x.x[0] = kp_it_r->pt.x;
-            mp_mea.x.x[1] = kp_it_r->pt.y;
-            mp_mea.right = true;
-            CF.feat_measures.push_back(mp_mea);
-            ++kp_it_r;
-        }
-    }
-    //imu_samples数据类型转成CF.imu_measure所需要的数据类型
-    std::transform(imu_samples.begin(), imu_samples.end(), std::back_inserter(CF.imu_measures), XP::to_iba_imu);
-    CF.t = rig_time;//当前帧时间戳
-    CF.d = kUnknownDepth;
-    //需要一个新关键帧的条件:2个
-    // 1: std::distance(kp_it_l, kps_l.end()) >= 20说明的是没观测到的新的地图点比较多,大于20个
-    // 2: CF.feat_measures.size() < 20说明的是当前帧观测到的地图点数量太少了，不足20个
-    bool need_new_kf;
-    if(FLAGS_stereo)
-        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
-    else
-        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/2) || CF.feat_measures.size() < (kps_l.size()/3);
-
-    if (std::distance(kp_it_l, kps_l.end()) == 0)
-        need_new_kf = false;
-    if (!need_new_kf) KF.iFrm = -1;//如果不需要关键帧
-    else
-        LOG(INFO) << "new keyframe " << KF.iFrm;
-
-    if (!need_new_kf)
-    {
-        KF.iFrm = -1;
-        //  to make it deterministic
-        InitPOD(KF.Cam_pose);//初始化一下,全赋0
-        InitPOD(KF.d);
-    } else {
-        //如果需要增加关键帧的话,就把帧id,pose,对于老地图点的观测给关键帧
-        KF.iFrm = CF.iFrm;
-        KF.Cam_pose = CF.Cam_state.Cam_pose;
-        // MapPointMeasurement, duplication of CF
-        KF.feat_measures = CF.feat_measures;
-        // MapPoint
-        //现在kp_it_l已经遍历到新的地图点处了,后面的都是新的地图点
-        for(; kp_it_l != kps_l.cend(); ++kp_it_l) {
-            IBA::MapPoint mp;
-            InitPOD(mp.X);
-            mp.X.idx = kp_it_l->class_id;//全局id
-            mp.X.X[0] = FLT_MAX;
-            //mappoint的观测,哪一帧,像素坐标,是哪一目看到的都记录下来,push进这个地图点的数据结构里，注意新的地图点的观测是不push进KF.feat_measures的
-            mp_mea.iFrm = iba_iFrm;
-            mp_mea.x.x[0] = kp_it_l->pt.x;
-            mp_mea.x.x[1] = kp_it_l->pt.y;
-            mp_mea.right = false;
-            mp.feat_measures.push_back(mp_mea);
-
-            if (kp_it_r != kps_r.cend() && kp_it_r->class_id == kp_it_l->class_id) {
-                mp_mea.x.x[0] = kp_it_r->pt.x;
-                mp_mea.x.x[1] = kp_it_r->pt.y;
-                mp_mea.right = true;
-                mp.feat_measures.push_back(mp_mea);
-                kp_it_r++;
-            } else {
-                LOG(WARNING) << "add new feature point " << kp_it_l->class_id << " only found in left image";
-            }
-            //将新的地图点push进,也就是说关键帧数据结构中Xs只存由它首次观测到的新地图点
-            KF.Xs.push_back(mp);
-        }
-        last_added_point_id = std::max(KF.Xs.back().X.idx, last_added_point_id);//最后一个新的地图点的id
-        KF.d = kUnknownDepth;
-    }
-    ++iba_iFrm;//全局frame_idx更新
-    return true;
-}
-
-std::vector<std::pair<std::vector<XP::ImuData>, stereo_Img_info_f >> getMeasurements()
-{
-    std::vector<std::pair<std::vector<XP::ImuData>, stereo_Img_info_f >> measurements;
-
-    while (true)
-    {
-        if (imu_buf.empty() || stereo_buf.empty())
-            return measurements;
-
-        if (imu_buf.back()->header.stamp.toSec() <= stereo_buf.front().first)
-        {
-//            std::cout << "wait for imu, only should happen at the beginning sum_of_wait: "<< std::endl;
-            return measurements;
-        }
-
-        if (imu_buf.front()->header.stamp.toSec() >= stereo_buf.front().first)
-        {
-//            std::cout << "throw img, only should happen at the beginning" << std::endl;
-            stereo_buf.pop();
-            continue;
-        }
-        stereo_Img_info_d stereo_info = stereo_buf.front();
-        stereo_buf.pop();
-        XP::ImuData imu_sample;
-        std::vector<XP::ImuData> IMUs;
-        IMUs.reserve(10);
-        while (imu_buf.front()->header.stamp.toSec() < stereo_info.first )
-        {
-            imu_sample.time_stamp = (float)(imu_buf.front()->header.stamp.toSec() - offset_ts);
-            imu_sample.ang_v(0) = (float)imu_buf.front()->angular_velocity.x;
-            imu_sample.ang_v(1) = (float)imu_buf.front()->angular_velocity.y;
-            imu_sample.ang_v(2) = (float)imu_buf.front()->angular_velocity.z;
-            imu_sample.accel(0) = (float)imu_buf.front()->linear_acceleration.x;
-            imu_sample.accel(1) = (float)imu_buf.front()->linear_acceleration.y;
-            imu_sample.accel(2) = (float)imu_buf.front()->linear_acceleration.z;
-            IMUs.push_back(imu_sample);
-            imu_buf.pop();
-        }
-
-        stereo_Img_info_f stereo_info_f;
-        stereo_info_f.second = stereo_info.second;
-        stereo_info_f.first = (float)(stereo_info.first -= offset_ts);
-        measurements.emplace_back(IMUs, stereo_info_f);
-    }
-    return measurements;
-}
+std::shared_ptr<vio::cameras::NCameraSystem> Ncamera_ptr;
 
 bool process_frontend()
 {
@@ -520,12 +141,7 @@ bool process_frontend()
         con.wait(lk, [&] {
             return (measurements = getMeasurements()).size() != 0;//将目前所有的测量取出来
         });
-//        if (measurements.size() > 1) {
-////            std::cout << "1 getMeasurements size: " << measurements.size()
-////                      << " imu sizes: " << measurements[0].first.size()
-////                      << " stereo_buf size: " << stereo_buf.size()
-////                      << " imu_buf size: " << imu_buf.size() << std::endl;
-//        }
+
         lk.unlock();
 
         //处理多组观测
@@ -677,6 +293,9 @@ bool process_frontend()
             //根据class_id(与地图点id一致)进行排序,不过本来就是这个顺序吧
             std::sort(key_pnts.begin(), key_pnts.end(), cmp_by_class_id);
             std::sort(key_pnts_slave.begin(), key_pnts_slave.end(), cmp_by_class_id);
+
+
+
             // push to IBA
             IBA::CurrentFrame CF;
             IBA::KeyFrame KF;
@@ -684,13 +303,6 @@ bool process_frontend()
             //进行点管理(新旧地图点的观测更新),以及关键帧判断以及生成
             create_iba_frame(key_pnts, key_pnts_slave, imu_meas, img_time_stamp, &CF, &KF);
 
-            if(init_first_track)
-                init_first_track = false;
-            else
-            {
-                if(FLAGS_show_track_img)
-                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
-            }
             if(FLAGS_LoopClosure)
             {
                 if(KF.iFrm != -1)
@@ -712,6 +324,13 @@ bool process_frontend()
                     LoopCloser_ptr ->InsertKeyFrame(std::shared_ptr<LC::KeyFrame> (new LC::KeyFrame(KF.iFrm,key_pnts,cur_orb_feat,loop_key_pnts,loop_orb_feat,img_in_smooth)));
                 }
             }
+            if(init_first_track)
+                init_first_track = false;
+            else
+            {
+                if(FLAGS_show_track_img)
+                    pubTrackImage(img_in_smooth,slave_img_smooth,pre_image_key_points,key_pnts,key_pnts_slave,(double)img_time_stamp + offset_ts);
+            }
 
             m_solver_buf.lock();
             CFs_buf.push(CF);
@@ -725,145 +344,6 @@ bool process_frontend()
 
             prev_img_time_stamp = img_time_stamp;
         }
-
-    }
-}
-
-
-void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
-{
-    //设置一下第一个imu的时间
-    if (!set_offset_time) {
-        set_offset_time = true;
-        offset_ts = imu_msg->header.stamp.toSec();
-    }
-    m_syn_buf.lock();
-    imu_buf.push(imu_msg);
-    m_syn_buf.unlock();
-    con.notify_one();
-}
-
-cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
-{
-    cv_bridge::CvImageConstPtr ptr;
-    if (img_msg->encoding == "8UC1")
-    {
-        sensor_msgs::Image img;
-        img.header = img_msg->header;
-        img.height = img_msg->height;
-        img.width = img_msg->width;
-        img.is_bigendian = img_msg->is_bigendian;
-        img.step = img_msg->step;
-        img.data = img_msg->data;
-        img.encoding = "mono8";
-        ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
-    }
-    else
-        ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
-
-    cv::Mat img = ptr->image.clone();
-    return img;
-}
-
-// extract images with same timestamp from two topics
-void sync_stereo()
-{
-    while(1)
-    {
-        if(FLAGS_stereo)
-        {
-            cv::Mat image0, image1;
-            std_msgs::Header header;
-            double time = 0;
-            m_buf.lock();
-            if (!img0_buf.empty() && !img1_buf.empty())
-            {
-                double time0 = img0_buf.front()->header.stamp.toSec();
-                double time1 = img1_buf.front()->header.stamp.toSec();
-                // sync tolerance
-                double sync_tolerance = 0.008;
-                if(time0 < time1 - sync_tolerance)
-                {
-                    img0_buf.pop();
-                    printf("throw img0\n");
-                }
-                else if(time0 > time1 + sync_tolerance)
-                {
-                    img1_buf.pop();
-                    printf("throw img1\n");
-                }
-                else
-                {
-                    time = img0_buf.front()->header.stamp.toSec();
-                    image0 = getImageFromMsg(img0_buf.front());
-                    image1 = getImageFromMsg(img1_buf.front());
-                    img0_buf.pop();
-                    img1_buf.pop();
-                }
-            }
-            m_buf.unlock();
-            if(!image1.empty())
-            {
-                m_syn_buf.lock();
-                stereo_buf.push(std::make_pair(time,std::make_pair(image0,image1)));
-                m_syn_buf.unlock();
-                con.notify_one();
-            }
-        }
-        else
-        {
-            cv::Mat image0;
-            std_msgs::Header header;
-            double time = 0;
-            m_buf.lock();
-            if (!img0_buf.empty())
-            {
-                double time0 = img0_buf.front()->header.stamp.toSec();
-
-                time = img0_buf.front()->header.stamp.toSec();
-                image0 = getImageFromMsg(img0_buf.front());
-                img0_buf.pop();
-            }
-
-            m_buf.unlock();
-            m_syn_buf.lock();
-            stereo_buf.push(std::make_pair(time,std::make_pair(image0,image0)));//单目就都塞一张图吧
-            m_syn_buf.unlock();
-            con.notify_one();
-
-
-        }
-        std::chrono::milliseconds dura(2);
-        std::this_thread::sleep_for(dura);
-    }
-}
-
-void img0_callback(const sensor_msgs::ImageConstPtr &img_msg)
-{
-    m_buf.lock();
-    img0_buf.push(img_msg);
-    m_buf.unlock();
-}
-
-void img1_callback(const sensor_msgs::ImageConstPtr &img_msg)
-{
-    m_buf.lock();
-    img1_buf.push(img_msg);
-    m_buf.unlock();
-}
-
-
-bool command()
-{
-
-    while(true)
-    {
-
-        char c = getchar();
-
-        std::chrono::milliseconds dura(5);
-        std::this_thread::sleep_for(dura);
-
 
     }
 }
@@ -969,30 +449,6 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if(FLAGS_GetGT)
-    {
-        string csv_file = FLAGS_GT_path;
-        std::cout << "load ground truth " << csv_file << std::endl;
-        FILE *f = fopen(csv_file.c_str(), "r");
-        if (f==NULL)
-        {
-            ROS_WARN("can't load ground truth; wrong path");
-            //std::cerr << "can't load ground truth; wrong path " << csv_file << std::endl;
-            return 0;
-        }
-        char tmp[10000];
-        if (fgets(tmp, 10000, f) == NULL)
-        {
-            ROS_WARN("can't load ground truth; no data available");
-        }
-        while (!feof(f))
-            benchmark.emplace_back(f);
-        fclose(f);
-        benchmark.pop_back();
-        ROS_INFO("Data loaded: %d", (int)benchmark.size());
-    }
-
-
 
     int Num_Cam = FLAGS_stereo ? 2:1;
     for (int lr = 0; lr < Num_Cam; ++lr) {
@@ -1039,13 +495,9 @@ int main(int argc, char** argv)
                 FLAGS_max_feature_distance_over_baseline_ratio));//特征点最大深度比例,用于极线搜索)
 
         //双目外参
-        T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
-        T_Cl_Cr_d = Eigen::Matrix4d::Identity();
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                T_Cl_Cr_d(i,j) = (double)T_Cl_Cr(i,j);
-            }
-        }
+        T_Cl_Cr = T_Cl_Cr_d.cast<float>();
+//        T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
+
     }
     //绘制前清除画布
     pose_viewer.set_clear_canvas_before_draw(true);
@@ -1181,8 +633,7 @@ int main(int argc, char** argv)
     //启动求解器
     solver.Start();
 
-//    std::thread keyboard_command_process;
-//    keyboard_command_process = std::thread(command);
+
 
     //左右相机同步
     std::thread sync_thread{sync_stereo};

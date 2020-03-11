@@ -1,7 +1,7 @@
 %YAML:1.0
 
 #common parameters
-#support: 1 imu 2 cam; iba开源的版本目前是不支持单目vio的
+#support: 1 imu 2 cam;1 imu 1 cam;
 imu: 1         
 num_of_cam: 2  
 
@@ -36,5 +36,7 @@ dbow3_voc_path: "/home/wya/ICE-BA_ws/src/ICE-BA/vocab/orbvoc.dbow3"
 
 #ground truth
 show_GT: 1
-GT_path: "/home/wya/dataset/EuRoC/MH_05_difficult/mav0/state_groundtruth_estimate0/data.csv"
-GT_SKIP: 200 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点
+GT_path: "/home/wya/dataset/EuRoC/MH_01_easy/mav0/state_groundtruth_estimate0/data.csv"
+GT_SKIP: 150 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点
+
+GBA_result_path: "/home/wya/ICE-BA-Debug/gbaout.txt" #tx,ty,tz,qx,qy,qz,qw

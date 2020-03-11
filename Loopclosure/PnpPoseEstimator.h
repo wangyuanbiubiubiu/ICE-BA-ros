@@ -13,7 +13,7 @@
 #include <glog/logging.h>
 
 #include "../Frontend/cameras/PinholeCamera.hpp"  // for vio::cameras::CameraBase
-
+#include "../Frontend/cameras/NCameraSystem.hpp"
 
 namespace geometric_vision {
 
