@@ -85,6 +85,7 @@ class Solver {
   bool GetUpdateGba(Global_Map * GM);
 
 
+  void Get_cur_Mps(const std::vector<int> & cur_Mps_idx,std::map<int,Eigen::Vector3f> &cur_Mps_info);
   /*
    * @brief Call for each current frame to synchronize the optimization results
    * @param[out] SW The sliding window of interested

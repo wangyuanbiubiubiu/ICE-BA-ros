@@ -191,9 +191,12 @@ void GlobalBundleAdjustor::ComputeReduction() {
     ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data()/*dogleg求出的增量*/, &m_xcsP/*delta_x中pose的部分*/);//m_xcsP更新最新的增量
     ComputeReductionFeature();
     ComputeReductionPriorCameraPose();
-    ComputeReductionPriorCameraMotion();
+      if(!IMU_GRAVITY_EXCLUDED)
+      {
+          ComputeReductionPriorCameraMotion();
+          ComputeReductionIMU();
+      }
     ComputeReductionPriorDepth();
-    ComputeReductionIMU();
     ComputeReductionFixOrigin();
     ComputeReductionFixPositionZ();
     ComputeReductionFixMotion();

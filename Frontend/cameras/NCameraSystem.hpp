@@ -114,7 +114,7 @@ namespace vio {
 
             /// \brief compute all the overlaps of fields of view. Attention: can be expensive.
 
-            void computeOverlaps();
+            inline void computeOverlaps();
 
             /// \brief get the pose of the IMU frame S with respect to the camera cameraIndex
             /// @param[in] cameraIndex The camera index for which the extrinsics should be returned.

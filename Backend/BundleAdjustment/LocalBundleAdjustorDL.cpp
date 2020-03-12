@@ -164,8 +164,11 @@ void LocalBundleAdjustor::ComputeReduction() {
   if (m_update) {
     ConvertCameraUpdates((LA::Vector6f *) m_xsDL.Data(), &m_xcsP);//m_xcsP = dogleg求出的pose增量
     ComputeReductionFeaturePriorDepth();
-    ComputeReductionPriorCameraMotion();
-    ComputeReductionIMU();//
+    if(!IMU_GRAVITY_EXCLUDED)
+    {
+        ComputeReductionPriorCameraMotion();
+        ComputeReductionIMU();//
+    }
     //ComputeReductionFixOrigin();
     ComputeReductionFixPositionZ();//这两个也没用,我都注释了
     ComputeReductionFixMotion();

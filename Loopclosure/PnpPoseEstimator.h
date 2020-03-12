@@ -39,10 +39,25 @@ namespace geometric_vision {
         bool absolutePoseRansac(const Eigen::Matrix2Xf& measurements,
                 const Eigen::Matrix3Xf& G_landmark_positions, double ransac_threshold,
                 int max_ransac_iters, std::shared_ptr<vio::cameras::CameraBase> camera_ptr,
-                Eigen::Matrix4f & Twc, std::vector<int>* inliers,std::vector<double>* inlier_distances_to_model, int* num_iters,bool use_prior_pose = false);
+                Eigen::Matrix4f & Twc, std::vector<int>* inliers,std::vector<double>* inlier_distances_to_model,
+                int* num_iters,bool use_prior_pose = false);
 
 
+        bool absoluteMultiPoseRansacPinholeCam(
+                const Eigen::Matrix2Xf& measurements,
+                const std::vector<int>& measurement_camera_indices,
+                const Eigen::Matrix3Xf& G_landmark_positions, double pixel_sigma,
+                int max_ransac_iters,std::shared_ptr<vio::cameras::NCameraSystem> ncamera_ptr,
+                Eigen::Matrix4f & Twc, std::vector<int>* inliers,
+                std::vector<double>* inlier_distances_to_model, int* num_iters);
 
+        bool absoluteMultiPoseRansac(
+                const Eigen::Matrix2Xf& measurements,
+                const std::vector<int>& measurement_camera_indices,
+                const Eigen::Matrix3Xf& G_landmark_positions, double ransac_threshold,
+                int max_ransac_iters,std::shared_ptr<vio::cameras::NCameraSystem> ncamera_ptr,
+                Eigen::Matrix4f & Twc, std::vector<int>* inliers,
+                std::vector<double>* inlier_distances_to_model, int* num_iters);
 
     private:
         /// Whether to let RANSAC pick a timestamp-based random seed or not. If false,

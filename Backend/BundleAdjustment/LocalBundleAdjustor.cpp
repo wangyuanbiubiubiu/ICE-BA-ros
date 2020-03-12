@@ -1706,7 +1706,20 @@ void LocalBundleAdjustor::SynchronizeData()
             IMU::Propagate(m_K.m_pu/*外参tc0_i*/, D/*预积分部分*/, _C/*上一帧的状态*/, C/*当前帧的状态*/, BA_ANGLE_EPSILON);//传播
         } else
         {
-            C = _C;
+            if(m_LFs.size() > 1)
+            {
+//                const int pre_preLF = m_ic2LF[m_ic2LF.size()-2];//前前帧的局部帧id
+//                Camera pp_C = m_CsLF[pre_preLF];//上一帧的pose
+//                Rigid3D uniform_pose =  _C.m_Cam_pose / pp_C.m_Cam_pose; //Tc1w * Tc0w.inv = Tc1c0 = Tc2c1
+              //solve pnp
+              //
+                C = _C;
+//                C.m_Cam_pose = uniform_pose * _C.m_Cam_pose;  //Tc2w = Tc2c1 * Tc1w
+            }
+            else
+            {
+                C = _C;
+            }
         }
     }
     if (ILF->m_Cam_state.m_Cam_pose.Invalid()) {
@@ -2093,8 +2106,7 @@ void LocalBundleAdjustor::SynchronizeData()
       GlobalMap::InputKeyFrame &IKF = m_IKFs2.front();
       const bool v1 = IKF.m_Cam_state.m_Cam_pose.Valid(), v2 = IKF.m_Cam_state.m_v.Valid();//之前已经用imu测量初始化过了,应该都是true
       if (!v1 || !v2)
-      {//应该是不会出现这种情况啊
-          CHECK_EQ(1,2); //设个断点看看
+      {
           const int nLFs = static_cast<int>(m_LFs.size());
         for (int ic = nLFs - 1; ic >= 0; --ic)
         {
@@ -2623,7 +2635,8 @@ void LocalBundleAdjustor::MarginalizeLocalFrame()
     const Camera &C2 = m_CsLF[iLF2];//最老帧之后的这帧
     const IMU::Delta &D = m_DsLF[iLF2];//最老帧和次老帧之间的预积分
     //这里没有求对最老帧pose的雅克比,因为这帧同时也是关键帧
-    D.GetFactor(BA_WEIGHT_IMU/* * sd*/, C1/*最老帧的状态*/, C2/*次老帧的相机状态*/, m_K.m_pu/*tc0_i*/, &e, &J, &A/*因子*/, BA_ANGLE_EPSILON);
+    if(!IMU_GRAVITY_EXCLUDED)
+        D.GetFactor(BA_WEIGHT_IMU/* * sd*/, C1/*最老帧的状态*/, C2/*次老帧的相机状态*/, m_K.m_pu/*tc0_i*/, &e, &J, &A/*因子*/, BA_ANGLE_EPSILON);
 
 //#ifdef CFG_DEBUG
 #if 0
@@ -3582,7 +3595,7 @@ void LocalBundleAdjustor::_PushLocalFrame(const InputLocalFrame &ILF/*当前普�
   m_xmsLF[iLF].MakeZero();
 #endif
   IMU::Delta &D = m_DsLF[iLF];//当前帧对应的预积分,保存了预积分以后的状态量,协方差,信息矩阵,以及对ba,bw的雅克比
-  if (nLFs2 > 1)
+  if (nLFs2 > 1 && !IMU_GRAVITY_EXCLUDED)
   {
     const int _iLF = m_ic2LF[nLFs2 - 2];//当前帧的前一帧
     const LocalFrame &_LF = m_LFs[_iLF];//前一帧
@@ -3610,7 +3623,7 @@ void LocalBundleAdjustor::_PushLocalFrame(const InputLocalFrame &ILF/*当前普�
 #ifdef CFG_GROUND_TRUTH
   if (m_CsGT)
   {
-    if (nLFs2 > 1)
+    if (nLFs2 > 1 && !IMU_GRAVITY_EXCLUDED)
     {
       const int _iLF = m_ic2LF[nLFs2 - 2];
       const LocalFrame &_LF = m_LFs[_iLF];

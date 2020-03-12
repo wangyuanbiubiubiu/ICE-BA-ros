@@ -106,6 +106,11 @@ namespace vio {
             }
         }
 
+        void NCameraSystem::computeOverlaps()
+        {
+            //我不用这个
+        }
+
 // get the pose of the IMU frame S with respect to the camera cameraIndex
         std::shared_ptr<const Eigen::Matrix4d> NCameraSystem::T_SC(
                 int cameraIndex) const

@@ -570,6 +570,8 @@ class GlobalBundleAdjustor : public MT::Thread {
 
 
 //add by wya
+    void GetMpInfo(std::vector<bool> &kfs_stereoz);
+
    void GetGbaInfo(std::vector<int> & iFrms, std::vector<Rigid3D> & Cs , std::vector<ubyte> & ucs,
            std::vector<std::vector<int>> & CovisibleKFs,std::vector<bool> &lastkf_stereoz);
 

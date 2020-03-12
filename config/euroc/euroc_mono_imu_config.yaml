@@ -35,6 +35,6 @@ dbow3_voc_path: "/home/wya/ICE-BA_ws/src/ICE-BA/vocab/orbvoc.dbow3"
 #ground truth
 show_GT: 1
 GT_path: "/home/wya/dataset/EuRoC/MH_05_difficult/mav0/state_groundtruth_estimate0/data.csv"
-GT_SKIP: 200 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点
+GT_SKIP: 500 #刚开始就对齐的话对齐不好,稳定时对齐稍微好点
 
-GBA_result_path: "/home/wya/ICE-BA-Debug/gbaout.txt"
+GBA_result_path: ""

@@ -10,6 +10,14 @@
 #include <vector>
 #include <glog/logging.h>
 #include <gflags/gflags.h>
+#include "PnpPoseEstimator.h"
+DECLARE_int32(lc_num_ransac_iters);
+DECLARE_bool(lc_nonlinear_refinement_p3p);
+DECLARE_double(lc_ransac_pixel_sigma);
+DECLARE_int32(lc_min_inlier_count);
+DECLARE_double(lc_min_inlier_ratio);
+DECLARE_bool(lc_use_random_pnp_seed);
+DECLARE_int32(Match_count);
 
 namespace fs = boost::filesystem;
 using std::string;
@@ -40,7 +48,7 @@ extern std::condition_variable con;
 extern double offset_ts;
 bool set_offset_time = false;
 int MIN_PARALLAX = 20;
-
+std::shared_ptr<vio::cameras::NCameraSystem> Ncamera_ptr;
 DECLARE_bool(stereo);
 DECLARE_bool(UseIMU);
 DECLARE_bool(LoopClosure);
@@ -53,7 +61,7 @@ DECLARE_string(iba_param_path);
 DECLARE_string(dbow3_voc_path);
 DECLARE_string(GT_path);
 DECLARE_string(gba_result_path);
-
+///这里就是放一些无用的东西
 
 //配置文件读取
 void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_param)
@@ -132,7 +140,8 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 
     int Num_Cam = FLAGS_stereo ? 2:1;
     std::vector<float> v_float;
-    Eigen::Matrix4d b_t_c0,b_t_c1;
+    vector<Eigen::Matrix4d> b_t_c;//b_t_c0,b_t_c1;
+    b_t_c.resize(Num_Cam);
     for (int cam_id = 0; cam_id < Num_Cam; ++cam_id)
     {
         std::string cam_string = "cam" + std::to_string(cam_id) + "_calib";
@@ -162,12 +171,12 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 
 
         if(cam_id == 0)
-            b_t_c0 = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
+            b_t_c[0] = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
         else
-            b_t_c1 = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
+            b_t_c[1] = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
     }
-    Tbc0 = b_t_c0;
-    T_Cl_Cr_d = b_t_c0.inverse() * b_t_c1;
+    Tbc0 = b_t_c[0];
+    T_Cl_Cr_d = b_t_c[0].inverse() * b_t_c[1];
 
 
     std::cout<<"fisheye?"<<calib_param.Camera.fishEye<<std::endl;
@@ -176,10 +185,10 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
     // {D}evice frame is the left camera
     //百度这个代码的表示方式：d_t_cam0就是Tdcam0,即相机0到设备坐标系的变换,这里把设备坐标系固连于左相机坐标系
     Eigen::Matrix4d d_t_cam0 = Eigen::Matrix4d::Identity();
-    Eigen::Matrix4d d_t_b = d_t_cam0 * b_t_c0.inverse();// Tdb = Tdc0 * Tc0b本体坐标系到设备坐标系
+    Eigen::Matrix4d d_t_b = d_t_cam0 * b_t_c[0].inverse();// Tdb = Tdc0 * Tc0b本体坐标系到设备坐标系
     if(FLAGS_stereo)
     {
-        Eigen::Matrix4d d_t_cam1 = d_t_b * b_t_c1;//Tdc1 右相机到设备坐标系
+        Eigen::Matrix4d d_t_cam1 = d_t_b * b_t_c[1];//Tdc1 右相机到设备坐标系
         calib_param.Camera.D_T_C_lr[1] = d_t_cam1.cast<float>();
     }
     Eigen::Matrix4d d_t_imu = d_t_b * b_t_i; //imu坐标系到设备坐标系
@@ -204,14 +213,146 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 
     if(!FLAGS_UseIMU)//不用imu的话,双目就得用PNP给个位姿初值
     {
-        std::vector<std::shared_ptr<const vio::cameras::CameraBase> > cameras;
-        std::vector<vio::cameras::NCameraSystem::DistortionType> distortions;
-        std::vector<std::shared_ptr<const Eigen::Matrix4d>> T_SC;
+        Ncamera_ptr.reset(new vio::cameras::NCameraSystem());
+        for (int i = 0; i < Num_Cam; ++i )
+        {
+            std::shared_ptr<const vio::cameras::CameraBase> curcam;
+            std::shared_ptr<const Eigen::Matrix4d> b_T_c_ptr(new Eigen::Matrix4d(b_t_c[i]));
+
+            if(calib_param.Camera.fishEye)
+            {
+                curcam.reset(new vio::cameras::PinholeCamera<
+                        vio::cameras::EquidistantDistortion>(
+                        calib_param.Camera.img_size.width,
+                        calib_param.Camera.img_size.height,
+                        calib_param.Camera.cameraK_lr[i](0, 0),  // focalLength[0],
+                        calib_param.Camera.cameraK_lr[i](1, 1),  // focalLength[1],
+                        calib_param.Camera.cameraK_lr[i](0, 2),  // principalPoint[0],
+                        calib_param.Camera.cameraK_lr[i](1, 2),  // principalPoint[1],
+                        vio::cameras::EquidistantDistortion(
+                                calib_param.Camera.cv_dist_coeff_lr[i](0),
+                                calib_param.Camera.cv_dist_coeff_lr[i](1),
+                                calib_param.Camera.cv_dist_coeff_lr[i](2),
+                                calib_param.Camera.cv_dist_coeff_lr[i](3))));
+
+                Ncamera_ptr->addCamera(b_T_c_ptr,curcam,vio::cameras::NCameraSystem::Equidistant,false);
+
+            }
+            else if (calib_param.Camera.cv_dist_coeff_lr[i].rows == 8)//初始化右相机的针孔投影、rantan畸变模型
+            {
+                curcam.reset(new vio::cameras::PinholeCamera<
+                        vio::cameras::RadialTangentialDistortion8>(
+                        calib_param.Camera.img_size.width,
+                        calib_param.Camera.img_size.height,
+                        calib_param.Camera.cameraK_lr[i](0, 0),  // focalLength[0], fu
+                        calib_param.Camera.cameraK_lr[i](1, 1),  // focalLength[1], fv
+                        calib_param.Camera.cameraK_lr[i](0, 2),  // principalPoint[0], cx
+                        calib_param.Camera.cameraK_lr[i](1, 2),  // principalPoint[1], cy
+                        vio::cameras::RadialTangentialDistortion8(//目前只有randtan模型
+                                calib_param.Camera.cv_dist_coeff_lr[i](0),
+                                calib_param.Camera.cv_dist_coeff_lr[i](1),
+                                calib_param.Camera.cv_dist_coeff_lr[i](2),
+                                calib_param.Camera.cv_dist_coeff_lr[i](3),
+                                calib_param.Camera.cv_dist_coeff_lr[i](4),
+                                calib_param.Camera.cv_dist_coeff_lr[i](5),
+                                calib_param.Camera.cv_dist_coeff_lr[i](6),
+                                calib_param.Camera.cv_dist_coeff_lr[i](7))));
+                Ncamera_ptr->addCamera(b_T_c_ptr,curcam,vio::cameras::NCameraSystem::RadialTangential8,false);
+            } else if (calib_param.Camera.cv_dist_coeff_lr[i].rows == 4) {
+                curcam.reset(new vio::cameras::PinholeCamera<
+                        vio::cameras::RadialTangentialDistortion>(
+                        calib_param.Camera.img_size.width,
+                        calib_param.Camera.img_size.height,
+                        calib_param.Camera.cameraK_lr[i](0, 0),  // focalLength[0], fu
+                        calib_param.Camera.cameraK_lr[i](1, 1),  // focalLength[1], fv
+                        calib_param.Camera.cameraK_lr[i](0, 2),  // principalPoint[0], cx
+                        calib_param.Camera.cameraK_lr[i](1, 2),  // principalPoint[1], cy
+                        vio::cameras::RadialTangentialDistortion(
+                                calib_param.Camera.cv_dist_coeff_lr[i](0),
+                                calib_param.Camera.cv_dist_coeff_lr[i](1),
+                                calib_param.Camera.cv_dist_coeff_lr[i](2),
+                                calib_param.Camera.cv_dist_coeff_lr[i](3))));
+                Ncamera_ptr->addCamera(b_T_c_ptr,curcam,vio::cameras::NCameraSystem::RadialTangential,false);
+            } else {
+                LOG(FATAL) << "Dist model unsupported for cam";
+            }
+        }
 
     }
 
+
 }
 
+
+bool SolveMulticamPnP(const std::vector<std::tuple<int,int,cv::KeyPoint>> &cur_track,const std::map<int,Eigen::Vector3f> &cur_Mp_info,
+        Eigen::Matrix4f & Twc_pnp)
+{
+    bool success = false;
+    if(cur_Mp_info.size() == 0)
+    {
+
+    } else
+    {
+        int num_matches = 0;
+        Eigen::Matrix2Xf measurements;
+        vector<int> measurement_camera_indices;
+        Eigen::Matrix3Xf G_landmark_positions;
+
+        for (int i = 0; i < cur_track.size(); ++i)
+        {
+            int Mpidx = std::get<0>(cur_track[i]);
+            if(cur_Mp_info.count(Mpidx))
+            {
+                num_matches++;
+            }
+        }
+        measurements.resize(Eigen::NoChange, num_matches);
+        measurement_camera_indices.resize(num_matches);
+        G_landmark_positions.resize(Eigen::NoChange, num_matches);
+        num_matches = 0;
+        for (int i = 0; i < cur_track.size(); ++i)
+        {
+            int Mpidx = std::get<0>(cur_track[i]);
+            if(cur_Mp_info.count(Mpidx))
+            {
+                cv::KeyPoint pt_ = std::get<2>(cur_track[i]);
+                measurements.col(num_matches) = Eigen::Vector2f{pt_.pt.x,pt_.pt.y};
+                measurement_camera_indices[num_matches] = std::get<1>(cur_track[i]);
+                G_landmark_positions.col(num_matches) = cur_Mp_info.find(Mpidx)->second;
+                num_matches++;
+            }
+        }
+
+
+        geometric_vision::PnpPoseEstimator pose_estimator(
+                FLAGS_lc_nonlinear_refinement_p3p, FLAGS_lc_use_random_pnp_seed);
+
+        double inlier_ratio;
+        int num_inliers;
+        std::vector<double> inlier_distances_to_model;
+        int num_iters;
+        std::vector<int> inliers;
+//        std::cout<<"初始位姿:"<<Twc_pnp<<std::endl;
+        pose_estimator.absoluteMultiPoseRansacPinholeCam(
+                measurements,measurement_camera_indices, G_landmark_positions,
+                FLAGS_lc_ransac_pixel_sigma, FLAGS_lc_num_ransac_iters, Ncamera_ptr,
+                Twc_pnp, &inliers, &inlier_distances_to_model, &num_iters);
+        CHECK_EQ(inliers.size(), inlier_distances_to_model.size());
+        num_inliers = static_cast<int>(inliers.size());
+        inlier_ratio = static_cast<double>(num_inliers) /
+                       static_cast<double>(G_landmark_positions.cols());
+        if (inlier_ratio >= (FLAGS_lc_min_inlier_ratio) || num_inliers >= FLAGS_lc_min_inlier_count )
+        {
+            success = true;
+//            std::cout<<"pnp后位姿:"<<Twc_pnp<<std::endl;
+        } else
+        {
+            std::cout<<"fuck:?"<<std::endl;
+        }
+    }
+
+    return success;
+}
 
 std::vector<std::pair<std::vector<XP::ImuData>, stereo_Img_info_f >> getMeasurements()
 {
@@ -589,6 +730,22 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
     return true;
 }
 
+void Get_Track(const IBA::CurrentFrame & CF,std::vector<std::tuple<int,int,cv::KeyPoint>> & cur_track)
+{
+    cur_track.clear();
+    for (int i = 0; i < CF.feat_measures.size() ; ++i)
+    {
+        cv::KeyPoint cur_kp;
+        cur_kp.pt.x = CF.feat_measures[i].x.x[0];
+        cur_kp.pt.y = CF.feat_measures[i].x.x[1];
+        cur_kp.class_id = CF.feat_measures[i].idx;
+        if(CF.feat_measures[i].right)
+            cur_track.push_back(std::make_tuple(CF.feat_measures[i].idx,1,cur_kp));
+        else
+            cur_track.push_back(std::make_tuple(CF.feat_measures[i].idx,0,cur_kp));
+    }
+}
+
 void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
 {
     if(FLAGS_UseIMU)
@@ -731,10 +888,10 @@ bool command()
 
         std::chrono::milliseconds dura(5);
         std::this_thread::sleep_for(dura);
-
-
     }
 }
+
+
 
 
 #endif //ICE_BA_PARAMSINIT_H

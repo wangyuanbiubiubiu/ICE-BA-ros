@@ -113,11 +113,14 @@ void GlobalBundleAdjustor::UpdateFactors()
   //m_ts[TM_TEST_1].Start();
 //更新LBA给GBA中各个关键帧之间的运动先验约束
   UpdateFactorsPriorCameraPose();
-  //m_ts[TM_TEST_1].Stop();
+
+if(!IMU_GRAVITY_EXCLUDED)
+{
+//m_ts[TM_TEST_1].Stop();
 //更新运动先验,和滑窗中运动之间的残差,也就是GBA和LBA要保持一致,LBA边缘化最老帧是关键帧时会给GBA这帧的先验约束,同时m_ZpLM存储的是LBA中的
 //这个最老帧的(Rc0w*vw，ba,bj)作为测量量
-  UpdateFactorsPriorCameraMotion();
-//更新imu约束所带来的因子
+    UpdateFactorsPriorCameraMotion();
+    //更新imu约束所带来的因子
 //每个imu约束的因子,都连接前后两个关键帧的pose和motion
 //// 残差:
 // e_r = -ln{预积分的Rij * exp[Jrbw *(bwi - z_bw)]x * Rcjw * Rciw.t}v
@@ -126,7 +129,9 @@ void GlobalBundleAdjustor::UpdateFactors()
 //  Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
 // e_ba = bai - baj
 // e_bw = bwi - bwj
-  UpdateFactorsIMU();//imu约束
+    UpdateFactorsIMU();//imu约束
+}
+
   UpdateFactorsFixOrigin();//固定第一帧pose
   UpdateFactorsFixPositionZ();//这个没用上
   UpdateFactorsFixMotion();//这个也没用上啊,不过如果这个因子没有别的观测,那么倒是能用上

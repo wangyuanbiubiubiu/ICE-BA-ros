@@ -99,11 +99,13 @@ void LocalBundleAdjustor::UpdateFactors()
   const int iLF = m_ic2LF.back();
   m_SAcusLF[iLF].m_b.Print(true);
 #endif
-  //运动先验部分就是对滑窗内的最老帧进行约束,m_ZpLF里存储着滑窗后对于最老帧的motion先验约束,残差rv,rba,rbg，其中rv =Rc0w * Vw所以优化变量除了v,ba,bg还有rv
-  //要更新的H右上角的部分就是R0 X motion0,R0 X R0, motion0 X motion0 b 就是 R0,motion0
-  // m_SAcusLF[iLF] 里更新普通帧的pose自己和自己的H以及自己对应的-b
-    //m_SAcmsLF[iLF].m_Au里更新 motion0 X motion0,R0 X motion0, -bmotion0
-  UpdateFactorsPriorCameraMotion();
+  if(!IMU_GRAVITY_EXCLUDED)
+  {
+      //运动先验部分就是对滑窗内的最老帧进行约束,m_ZpLF里存储着滑窗后对于最老帧的motion先验约束,残差rv,rba,rbg，其中rv =Rc0w * Vw所以优化变量除了v,ba,bg还有rv
+      //要更新的H右上角的部分就是R0 X motion0,R0 X R0, motion0 X motion0 b 就是 R0,motion0
+      // m_SAcusLF[iLF] 里更新普通帧的pose自己和自己的H以及自己对应的-b
+      //m_SAcmsLF[iLF].m_Au里更新 motion0 X motion0,R0 X motion0, -bmotion0
+      UpdateFactorsPriorCameraMotion();
 //更新imu约束所带来的因子
 //每个imu约束的因子,都连接前后两帧的pose和motion
 //// 残差:
@@ -113,8 +115,8 @@ void LocalBundleAdjustor::UpdateFactors()
 //  Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
 // e_ba = bai - baj
 // e_bw = bwi - bwj
-  UpdateFactorsIMU();
-
+      UpdateFactorsIMU();
+  }
 
   //UpdateFactorsFixOrigin();
   UpdateFactorsFixPositionZ();//这个是固定滑床内的twc0.z,但是H,b都是0,加上也没有用啊

@@ -833,19 +833,12 @@ bool Solver::GetUpdateGba(Global_Map * GM)
                     continue;
             }
 
-//            std::cout<<"C1"<<C1.m00()<<" "<<C1.m01()<<" "<<C1.m02()<<" "<<C1.tx()<<"\n"
-//                    <<C1.m10()<<" "<<C1.m11()<<" "<<C1.m12()<<" "<<C1.ty()<<"\n"
-//                    <<C1.m20()<<" "<<C1.m21()<<" "<<C1.m22()<<" "<<C1.tz()<<"\n"
-//                    <<"0 0 0 1"<<"\n";
             C1.LA::AlignedMatrix3x3f::Get(C2.R);
             C1.GetPosition(p);
             p.Get(C2.p);
             GM->iFrmsKF.push_back(iFrms[iKF]);
             GM->CsKF.push_back(C2);
-//            std::cout<<"C2"<<C2.R[0][0]<<" "<<C2.R[0][1]<<" "<<C2.R[0][2]<<" "<<C2.p[0]<<"\n"
-//                    <<C2.R[1][0]<<" "<<C2.R[1][1]<<" "<<C2.R[1][2]<<" "<<C2.p[1]<<"\n"
-//                    <<C2.R[2][0]<<" "<<C2.R[2][1]<<" "<<C2.R[2][2]<<" "<<C2.p[2]<<"\n"
-//                     <<"0 0 0 1"<<"\n";
+
         }
     }
 
@@ -899,17 +892,53 @@ bool Solver::GetUpdateGba(Global_Map * GM)
                     continue;
                 }
                 //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
-//                std::cout<<"d:"<< ds[ix].u()<<std::endl;
                 if(ds[ix].u() < DEPTH_MIN || ds[ix].u() > DEPTH_MAX)//明显不好的地图点不要
                     continue;
                 C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
                 X1.Get(X2.X);
                 GM->Xs.push_back(X2);
-//                std::cout<<"d:"<< X2.X[0]<<" "<<X2.X[1]<<" "<<X2.X[2]<<std::endl;
             }
         }
 
     }
+
+}
+
+void Solver::Get_cur_Mps(const std::vector<int> & cur_Mps_idx,std::map<int,Eigen::Vector3f> &cur_Mps_info)
+{
+
+    for (auto iter = cur_Mps_info.begin(); iter != cur_Mps_info.end();)
+    {
+        if (iter->first < cur_Mps_idx[0])
+            cur_Mps_info.erase(iter++); //之前的地图点的坐标就没必要再维护了
+        else
+            break;
+    }
+
+    const std::vector<LocalMap::CameraKF> &CsKF = m_internal->m_CsKF;
+    for (int i = 0; i < cur_Mps_idx.size(); ++i)
+    {
+        int Mp_f_idx = cur_Mps_idx[i]; //前端class_id里的idx
+        int Mp_G_idx = m_internal->m_idx2iX[Mp_f_idx];
+        int iKF =  m_internal->m_idx2iKF[Mp_f_idx];
+        assert(Mp_G_idx >= 0); //因为肯定是KF里有的点
+        assert(iKF >= 0);
+        //如果这个点需要更新或者是这个点是一个双目观测的点的话,就加进cur_Mps_info中
+        if((m_internal->m_uds[Mp_G_idx] & LM_FLAG_TRACK_UPDATE_DEPTH) || (m_internal->m_idx2stereo[Mp_f_idx]))
+        {
+            if(m_internal->m_ds[Mp_G_idx].u() < DEPTH_MIN || m_internal->m_ds[Mp_G_idx].u() > DEPTH_MAX)//明显不好的地图点不要
+                continue;
+            ::Point3D X1;
+            Rigid3D C = CsKF[iKF].m_Cam_pose;
+            //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
+            C.ApplyInversely(m_internal->m_xs[Mp_G_idx]/*对应的归一化坐标*/, 1.0f /  m_internal->m_ds[Mp_G_idx].u()/*深度*/, X1);
+            if(cur_Mps_info.count(Mp_f_idx))//如果已经存在了,就更新就可以了
+                cur_Mps_info.find(Mp_f_idx)->second = Eigen::Vector3f{X1.x(),X1.y(),X1.z()};
+            else
+                cur_Mps_info.insert(std::make_pair(Mp_f_idx,Eigen::Vector3f{X1.x(),X1.y(),X1.z()}));
+        }
+    }
+    int num_valid = cur_Mps_info.size();
 
 }
 
@@ -976,51 +1005,52 @@ bool Solver::GetSlidingWindow(SlidingWindow *SW)
     }
   }
 
-//    SW->Xs.resize(0);
-//    const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
-//    //if (Uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
-//    if (Uc & ucFlag)
-//    {
-//        Rigid3D C;
-//        ::Point3D X1;
-//        Point3D X2;
-//        const int nKFs = static_cast<int>(CsKF.size());
-//        for (int iKF = 0; iKF < nKFs; ++iKF)
-//        {
-//            const LocalMap::CameraKF &_C = CsKF[iKF];
-//            //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
-//            if (!(_C.m_uc & ucFlag))
-//            {
-//                continue;
-//            }
-//            const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
-//            const int id1 = m_internal->m_iKF2d[iKF], id2 = m_internal->m_iKF2d[iKF + 1];
-//            const ::Point2D *xs = m_internal->m_xs.data() + id1;
-//            const ::Depth::InverseGaussian *ds = m_internal->m_ds.data() + id1;
-//            const ubyte *uds = m_internal->m_uds.data() + id1;
-//            const int *idxs = m_internal->m_id2idx.data() + id1;
-//            const int Nx = id2 - id1;
-//            C = _C.m_Cam_pose;
-//            for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
-//            {
-//                //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
-//                if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
-//                {
-//                    continue;
-//                }
-//                X2.idx = idxs[ix];//idx是全局的前端的全局id
-//                if (X2.idx == -1)
-//                {
-//                    continue;
-//                }
-//                //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
-//                C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
-//                X1.Get(X2.X);
-//                SW->Xs.push_back(X2);
-//            }
-//        }
-//
-//    }
+
+    SW->Xs.resize(0);
+    const ubyte ucFlag = LM_FLAG_FRAME_UPDATE_CAMERA_KF | LM_FLAG_FRAME_UPDATE_DEPTH;
+    //if (Uc & LM_FLAG_FRAME_UPDATE_DEPTH) {
+    if (Uc & ucFlag)
+    {
+        Rigid3D C;
+        ::Point3D X1;
+        Point3D X2;
+        const int nKFs = static_cast<int>(CsKF.size());
+        for (int iKF = 0; iKF < nKFs; ++iKF)
+        {
+            const LocalMap::CameraKF &_C = CsKF[iKF];
+            //if (!(_C.m_uc & LM_FLAG_FRAME_UPDATE_DEPTH)) {
+            if (!(_C.m_uc & ucFlag))
+            {
+                continue;
+            }
+            const bool uc = (_C.m_uc & LM_FLAG_FRAME_UPDATE_CAMERA_KF) != 0;
+            const int id1 = m_internal->m_iKF2d[iKF], id2 = m_internal->m_iKF2d[iKF + 1];
+            const ::Point2D *xs = m_internal->m_xs.data() + id1;
+            const ::Depth::InverseGaussian *ds = m_internal->m_ds.data() + id1;
+            const ubyte *uds = m_internal->m_uds.data() + id1;
+            const int *idxs = m_internal->m_id2idx.data() + id1;
+            const int Nx = id2 - id1;
+            C = _C.m_Cam_pose;
+            for (int ix = 0; ix < Nx; ++ix)//遍历所有的地图点
+            {
+                //if (!(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH)) {
+                if (!uc && !(uds[ix] & LM_FLAG_TRACK_UPDATE_DEPTH))
+                {
+                    continue;
+                }
+                X2.idx = idxs[ix];//idx是全局的前端的全局id
+                if (X2.idx == -1)
+                {
+                    continue;
+                }
+                //Pw = Rc0w.t*Pc + -Rc0w.t*tc0w 求的是世界坐标系中地图点的坐标
+                C.ApplyInversely(xs[ix]/*对应的归一化坐标*/, 1.0f / ds[ix].u()/*深度*/, X1);
+                X1.Get(X2.X);
+                SW->Xs.push_back(X2);
+            }
+        }
+
+    }
 
 
 //#ifdef CFG_DEBUG
@@ -2024,7 +2054,9 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
   m_iKF2d.push_back(m_iKF2d.back());
   const int NX1 = static_cast<int>(m_iX2id.size())/*这帧之前的所有关键帧地图点总和*/, NX2 = NX1 + Nx1;//所有关键帧的地图点总数
   m_iX2id.resize(NX2, -1);
-  m_idx2iX.resize(idxMax + 1, -1);//这里应该记录的是全局id和局部id的对应关系吧
+  m_idx2iX.resize(idxMax + 1, -1);//这里应该记录的是前端全局id和后端全局id的对应关系
+  m_idx2stereo.resize(idxMax + 1, -1);
+  m_idx2iKF.resize(idxMax + 1, -1);
   for (int i1 = 0, i2 = 0; i1 < Nx2; i1 = i2) {//遍历所有有效的地图点
     const int iKF = m_IKF.m_Xs[i1].m_iKF;//这个就是当前关键帧的id
     for (i2 = i1 + 1; i2 < Nx2 && m_IKF.m_Xs[i2].m_iKF == iKF; ++i2) {}//将i2 = Nx2
@@ -2075,6 +2107,8 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
         }
       }
       m_idx2iX[Mp_G_idx] = iX;
+      m_idx2iKF[Mp_G_idx] = iKF;
+      m_idx2stereo[Mp_G_idx] = m_IKF.m_Xs[Mp_L_idx].m_x.m_xr.Valid() ? 1 : 0 ;
       const GlobalMap::Point &X = Xs[i];//当前的地图点
       xs[i] = X.m_x.m_x;//左目观测
       ds[i] = X.m_d;//逆深度应该是0吧

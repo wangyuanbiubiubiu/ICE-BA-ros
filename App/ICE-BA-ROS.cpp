@@ -130,7 +130,10 @@ std::vector<cv::KeyPoint> pre_image_key_points;
 cv::Mat pre_image_features;
 int mono_init_count = 0;
 bool need_mono_init = true;
-std::shared_ptr<vio::cameras::NCameraSystem> Ncamera_ptr;
+
+std::map<int,Eigen::Vector3f> cur_Mp_info; //前一帧追踪到的地图点的3d坐标
+std::vector<std::tuple<int,int,cv::KeyPoint>> cur_track;//地图点id,左右目,观测 ;
+Eigen::Matrix4f last_pose_Twc0;
 
 bool process_frontend()
 {
@@ -392,16 +395,6 @@ void process_backend()
         m_solver_buf.unlock();
         if(CF.iFrm != -1)
         {
-            if(total_time.size() > CF.iFrm)//先这么存一下吧,先不考虑上限的问题
-                total_time[CF.iFrm] = CF.t;
-            else
-            {
-                total_time.resize(total_time.size()+300);
-                total_time[CF.iFrm] = CF.t;
-            }
-
-            solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,但是这里是Hx=-b
-
             if(FLAGS_LoopClosure)
             {
                 std::vector<IBA::RelativeConstraint> loop_Relative_priors;
@@ -422,6 +415,35 @@ void process_backend()
                     solver.Wakeup_GBA();
                 }
             }
+
+            if(total_time.size() > CF.iFrm)//先这么存一下吧,先不考虑上限的问题
+                total_time[CF.iFrm] = CF.t;
+            else
+            {
+                total_time.resize(total_time.size()+300);
+                total_time[CF.iFrm] = CF.t;
+            }
+
+            if(!FLAGS_UseIMU)
+            {
+                Get_Track(CF,cur_track);
+
+                if(SolveMulticamPnP(cur_track,cur_Mp_info,last_pose_Twc0))
+                {
+                    Eigen::Matrix3f pose_pnp_Rc0w = last_pose_Twc0.block<3,3>(0,0).transpose();
+                    Eigen::Vector3f pose_pnp_twc0 = last_pose_Twc0.block<3,1>(0,3);
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        CF.Cam_state.Cam_pose.p[i] = pose_pnp_twc0[i];
+                        for (int j = 0; j < 3; ++j) {
+                            CF.Cam_state.Cam_pose.R[i][j] = pose_pnp_Rc0w(i,j);
+                        }
+
+                    }
+                    KF.Cam_pose = CF.Cam_state.Cam_pose;
+                }
+            }
+            solver.PushCurrentFrame(CF, KF.iFrm == -1 ? nullptr : &KF);//先说明一下,我习惯的求解增量的表达是Hx=b,但是这里是Hx=-b
 //          show pose
             pose_viewer.displayTo("trajectory");
             cv::waitKey(1);
@@ -515,7 +537,6 @@ int main(int argc, char** argv)
 
         //双目外参
         T_Cl_Cr = T_Cl_Cr_d.cast<float>();
-//        T_Cl_Cr = duo_calib_param.Camera.D_T_C_lr[0].inverse() * duo_calib_param.Camera.D_T_C_lr[1];
 
     }
     //绘制前清除画布
@@ -613,15 +634,13 @@ int main(int argc, char** argv)
         const IBA::CameraIMUState& X = sliding_window.CsLF.back();//最新的一帧
         const IBA::CameraPose& C = X.Cam_pose;
         Eigen::Matrix4f W_vio_T_S = Eigen::Matrix4f::Identity();  // Twc0最新的
-        Eigen::Matrix4d Twc0 = Eigen::Matrix4d::Identity();  // Twc0最新的
         for (int i = 0; i < 3; ++i) {
             W_vio_T_S(i, 3) = C.p[i];
-            Twc0(i, 3) = (double)C.p[i];
             for (int j = 0; j < 3; ++j) {
                 W_vio_T_S(i, j) = C.R[j][i];  //因为存储的是C.R里是Rc0w,所以要转成Rwc0     Cam_state.R is actually R_SW
-                Twc0(i,j) = (double)C.R[j][i];
             }
         }
+        Eigen::Matrix4d Twc0 = W_vio_T_S.cast<double>();
         Eigen::Matrix<float, 9, 1> speed_and_biases;
         Eigen::Matrix<double , 9, 1> speed_and_biases_d;
         for (int i = 0; i < 3; ++i) {
@@ -643,9 +662,21 @@ int main(int argc, char** argv)
 
         double cur_time =(double)total_time[sliding_window.iFrms.back()] + offset_ts;
 
+        if(!FLAGS_UseIMU)
+        {
+            vector<int> track_idx;
+            for (int i = 0; i < cur_track.size(); ++i)
+                track_idx.push_back(std::get<0>(cur_track[i]));
+            solver.Get_cur_Mps(track_idx,cur_Mp_info);
+            last_pose_Twc0 = W_vio_T_S;
+        }
+
         //ROS pub
+//        pubUpdatePointClouds(sliding_window.Xs,cur_time);
         pubLatestCameraPose(Twc0,speed_and_biases_d.block<3,1>(0,0),cur_time);
         pubTF(Twc0,cur_time);
+
+
     });
 
 

@@ -1681,6 +1681,22 @@ void GlobalBundleAdjustor::PushKeyFrame(const InputKeyFrame &IKF)
   m_SAcmsLM.InsertZero(Nm1);
 }
 
+void GlobalBundleAdjustor::GetMpInfo(std::vector<bool> &kfs_stereoz)
+{
+    int N_total = 0;
+    for (int i = 0; i < m_KFs.size(); ++i)
+    {
+        int Nx = int(m_KFs[i].m_xs.size());
+        kfs_stereoz.resize(N_total + Nx,false);
+        for (int ix = 0; ix < Nx; ++ix)
+        {
+            if(m_KFs[i].m_xs[ix].m_xr.Valid())
+                kfs_stereoz[N_total + ix] = true;
+        }
+        N_total += Nx;
+    }
+}
+
 void GlobalBundleAdjustor::GetGbaInfo(std::vector<int> & iFrms, std::vector<Rigid3D> & Cs ,
         std::vector<ubyte> & ucs,std::vector<std::vector<int>> & CovisibleKFs,std::vector<bool> &lastkf_stereoz)
 {

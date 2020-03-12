@@ -105,6 +105,8 @@ class Internal {
   GlobalBundleAdjustor m_GBA; //全局地图优化器
   int m_debug;
   int m_nFrms;
+  std::vector<int> m_idx2stereo;//记录一下所有的地图点是否是双目,size是和前端地图点id一致,-1是没有这个点,0是不是双目,1是是双目
+  std::vector<int> m_idx2iKF;//记录一下所有的地图点是否是双目,size是和前端地图点id一致
   std::vector<FRM::Tag> m_Ts;//所有非关键帧的信息,每一帧进来都会有一个Tag,当这帧同时还是关键帧时,会从m_Ts中把这帧剔除掉
   std::vector<int> m_iKF2d/*记录的是这个关键帧来之前所有的关键帧数量,比如[1]=70，意思就是第1帧来之前有70个特征点*/,
   m_id2iX,//原始名称:m_id2X 有三种id,一种是地图点在这个关键帧中的id

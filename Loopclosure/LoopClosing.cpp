@@ -202,17 +202,17 @@ namespace LC
                     continue;
                 }
 
-                while(KFqueue.size() > 1)//只闭环最新的,不过也可以注释掉,改成闭环最老的
-                {
-                    mCurrentKF = KFqueue.front();
-                    DBoW3::EntryId id = kfDB->add(mCurrentKF->mBowVec, mCurrentKF->mFeatVec);
-                    mCurrentKF->mloop_Descriptors.release();
-                    mCurrentKF->mloop_KPs.clear();
-                    mCurrentKF->mloop_FeatVec.clear();
-                    maxKFId = id;
-                    checkedKFs[id] = mCurrentKF;
-                    KFqueue.pop_front();
-                }
+//                while(KFqueue.size() > 1)//只闭环最新的,不过也可以注释掉,改成闭环最老的
+//                {
+//                    mCurrentKF = KFqueue.front();
+//                    DBoW3::EntryId id = kfDB->add(mCurrentKF->mBowVec, mCurrentKF->mFeatVec);
+//                    mCurrentKF->mloop_Descriptors.release();
+//                    mCurrentKF->mloop_KPs.clear();
+//                    mCurrentKF->mloop_FeatVec.clear();
+//                    maxKFId = id;
+//                    checkedKFs[id] = mCurrentKF;
+//                    KFqueue.pop_front();
+//                }
                 mCurrentKF = KFqueue.front();
                 KFqueue.pop_front();
 
