@@ -21,10 +21,10 @@ body_T_imu:
          0.0, 0.0, 0.0, 1.0]
 
 #imu parameters   continuous-time    
-acc_n: 0.01           # accelerometer measurement noise continuous-time. 0.01
-acc_w: 0.001         # accelerometer bias random work noise continuous-time.  0.001
-gyr_n: 0.00017453          # gyroscope measurement noise continuous-time.    0.01*pi/180 
-gyr_w: 0.00017453       # gyroscope bias random work noise continuous-time.   0.01*pi/180   
+acc_n: 0.01           # accelerometer measurement noise standard deviation. . 0.01
+acc_w: 0.001         # accelerometer bias random work noise standard deviation. .  0.001
+gyr_n: 0.00017453          # gyroscope measurement noise standard deviation. .    0.01*pi/180 
+gyr_w: 0.00017453       # gyroscope bias random work noise standard deviation. .   0.01*pi/180   
 g_norm: 9.81007     # gravity magnitude
 
 
