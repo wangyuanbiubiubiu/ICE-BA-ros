@@ -17,7 +17,7 @@ mono-vio: (note: If you want to use a mono-vio, you need to give the camera enou
     cd src
     git clone https://github.com/wangyuanbiubiubiu/ICE-BA-ros.git
     cd ICE-BA-ros
-    bash build_thirdparty.sh #opengv use to compute PNP（Because equi_distort is not supported in opencv）
+    bash build_thirdparty.sh #opengv use to compute PNP（Muticam pnp）
     cd $CATKIN_WS
     catkin build ice_ba_ros
 ## How to run
