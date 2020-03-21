@@ -23,9 +23,9 @@
 
 #include <opencv2/calib3d/calib3d.hpp>
 #include <boost/lexical_cast.hpp>
-
-// #define USE_OPENCV_OPTICAL_FLOW
-
+DECLARE_double(uniform_radius);
+ #define USE_OPENCV_OPTICAL_FLOW
+//bool =false;
 namespace XP {
 
 inline void init_mask(const cv::Size mask_size,
@@ -725,6 +725,468 @@ void propagate_with_optical_flow(const std::vector<cv::Mat>& img_in_smooth_pyram
 #endif
 }
 
+
+    void propagate_with_optical_flowVINS(const std::vector<cv::Mat>& img_in_smooth_pyramids/*当前帧的所有金字塔图片*/,
+                                     const cv::Mat_<uchar>& mask/*左相机掩码*/,
+                                     const std::vector<cv::Mat>& pre_image_pyramids/*之前帧的所有金字塔图片*/,
+                                     const cv::Mat& pre_image_orb_feature/*左相机上一帧检测到的特征点的描述子*/,
+                                     const std::vector<cv::KeyPoint>& pre_image_keypoints/*左相机上一帧检测到的特征点*/,
+                                     FeatureTrackDetector* feat_track_detector/*判断是否要存储上一帧点的观测信息*/,
+                                     std::vector<cv::KeyPoint>* key_pnts_ptr/*左相机当前帧提取到的特征点*/,
+                                     cv::Mat_<uchar>* mask_with_of_out_ptr,
+                                     cv::Mat* orb_feat_OF_ptr/*左相机当前帧提取到的特征点对应的描述子*/,
+                                     const bool fisheye,
+                                     const cv::Vec2f& init_pixel_shift,
+                                     const cv::Matx33f* K_ptr/*cv形式的左右相机内参*/,
+                                     const cv::Mat_<float>* dist_ptr/*左右相机的畸变参数*/,
+                                     const cv::Matx33f* old_R_new_ptr/*Rcl(pre)_cl(cur)左相机当前帧到前一帧的旋转*/,
+                                     const bool absolute_static)
+{
+
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+        int t_harris_us = 0;
+        int t_of_us = 0;
+        int t_of_refine_us = 0;
+        int t_of_orb_us = 0;
+        int t_of_total_us = 0;
+        MicrosecondTimer of_total_timer("propagate_with_optical_flow total time", 2);
+        MicrosecondTimer harris_timer("propagate_with_optical_flow harris time", 2);
+#endif
+
+        // select the strong features from the previous image
+        std::vector<cv::KeyPoint> pre_image_strong_kp_small;//Harris响应大于阈值的前一帧的特征点
+        pre_image_strong_kp_small.reserve(pre_image_keypoints.size());
+
+        std::vector<cv::Point2f> pre_image_strong_pt_small;//Harris响应大于阈值的前一帧的特征点像素坐标
+
+        pre_image_strong_pt_small.reserve(pre_image_keypoints.size());
+        std::vector<int> pre_image_strong_feature_ids;//记录过滤后的满足条件的特征点,这里的id是和pre_image_keypoints对应上的
+        pre_image_strong_feature_ids.reserve(pre_image_keypoints.size());
+        std::vector<cv::Point2f> cur_small_img_pt, cur_small_img_pt_init/*Harris响应大于阈值的,经过旋转预测后的前一帧的特征点在当前帧的像素坐标*/;
+        cur_small_img_pt_init.reserve(pre_image_keypoints.size());
+        // do optical flow
+        const cv::Mat& img_in_smooth_small = img_in_smooth_pyramids.at(1);//当前帧第1层金字塔图片
+        const cv::Mat& pre_image_small = pre_image_pyramids.at(1);//前一帧的第1层金字塔图片
+        const cv::Mat& img_in_smooth = img_in_smooth_pyramids.at(0);//当前帧第0层金字塔图片,原始图片
+        // always do OF on level 1，在第1层金字塔进行操作,缩放1倍就可以
+        constexpr int pyra_level_OF = 2;
+        constexpr int compress_ratio_OF = 1 << (pyra_level_OF - 1);
+//利用imu数据算出的旋转对当前帧这些老点在的位置进行一个预测,同时过滤响应弱的老点
+        if (pre_image_keypoints.size() > 0)
+        {
+            // compute harris response
+            auto pre_image_keypoints_small = pre_image_keypoints;//上一帧特征点
+            for (auto& kp : pre_image_keypoints_small) {//因为是在第1层进行操作,所以要对坐标进行缩放
+                kp.pt.x /= compress_ratio_OF;
+                kp.pt.y /= compress_ratio_OF;
+            }//计算Harris响应
+            ORBextractor::HarrisResponses(pre_image_small, 7, 0.04f, &pre_image_keypoints_small);
+            std::vector<cv::Point2f> pre_image_pt_rotated;//经过旋转预测后的前一帧的特征点在当前帧的像素坐标
+            std::vector<cv::Point2f> pre_feat_distorted(pre_image_keypoints_small.size());//带畸变的前一帧的原始特征点
+            for (size_t i = 0; i < pre_image_keypoints_small.size(); i++) {
+                pre_feat_distorted[i] = pre_image_keypoints_small[i].pt;
+            }//如果内参,畸变,imu预测的旋转都有的时候,对前一帧的特征点在当前帧的像素坐标进行一个预测
+            if (K_ptr != nullptr && dist_ptr != nullptr && old_R_new_ptr != nullptr) {
+                // TODO(mingyu): Use vio project & backProject (faster / more accurate)
+                cv::Matx33f K = *K_ptr;
+                // let K fit small image//内参因为分辨率的变化,内参也要相应的变化
+                K(0, 0) /= compress_ratio_OF;
+                K(1, 1) /= compress_ratio_OF;
+                K(0, 2) /= compress_ratio_OF;
+                K(1, 2) /= compress_ratio_OF;
+                const cv::Matx33f& old_R_new = *old_R_new_ptr;//Rcl(pre)_cl(cur)
+                std::vector<cv::Point2f> pre_feat_undistorted;//去完畸变后的特征点的归一化坐标//TODO equi wya
+                // TODO(mingyu): use vio undistort with NEON
+                // wya:fisheye
+                if(fisheye)
+                {
+                    cv::Vec4f distortion_coeffs;
+                    for (int i = 0; i < distortion_coeffs.rows; ++i)
+                        distortion_coeffs[i] = (*dist_ptr)(i);
+                    cv::fisheye::undistortPoints(pre_feat_distorted,//去畸变
+                                                 pre_feat_undistorted,
+                                                 K, distortion_coeffs);
+
+
+                    std::vector<cv::Point3f> feat_new_rays(pre_feat_undistorted.size());//经过旋转预测的当前帧的特征点的归一化坐标
+                    // reset kp position//pre_image_pt_rotated经过旋转预测后的前一帧的特征点在当前帧的像素坐标
+                    for (size_t i = 0; i < pre_feat_undistorted.size(); i++) {
+                        cv::Vec3f pre_ray(pre_feat_undistorted[i].x, pre_feat_undistorted[i].y, 1);//前一帧下这个特征点的归一话坐标
+                        cv::Vec3f predicted_ray = old_R_new.t() * pre_ray;// Pcur = Rcl(cur)_cl(pre) * Ppre //用旋转预测当前特征点的归一化坐标
+                        feat_new_rays[i].x = predicted_ray[0] / predicted_ray[2];
+                        feat_new_rays[i].y = predicted_ray[1] / predicted_ray[2];
+                        feat_new_rays[i].z = 1;
+                    }
+
+                    cv::fisheye::projectPoints(feat_new_rays,pre_image_pt_rotated,
+                                               cv::Matx31d::zeros(),
+                                               cv::Matx31d::zeros(),
+                                               K, distortion_coeffs);
+                }
+                else
+                {
+                    cv::undistortPoints(pre_feat_distorted,//去畸变
+                                        pre_feat_undistorted,
+                                        K, *dist_ptr);
+
+                    std::vector<cv::Point3f> feat_new_rays(pre_feat_undistorted.size());//经过旋转预测的当前帧的特征点的归一化坐标
+                    for (size_t i = 0; i < pre_feat_undistorted.size(); i++) {
+                        cv::Vec3f pre_ray(pre_feat_undistorted[i].x, pre_feat_undistorted[i].y, 1);//前一帧下这个特征点的归一话坐标
+                        cv::Vec3f predicted_ray = old_R_new.t() * pre_ray;// Pcur = Rcl(cur)_cl(pre) * Ppre //用旋转预测当前特征点的归一化坐标
+                        feat_new_rays[i].x = predicted_ray[0] / predicted_ray[2];
+                        feat_new_rays[i].y = predicted_ray[1] / predicted_ray[2];
+                        feat_new_rays[i].z = 1;
+                    }
+                    // reset kp position//pre_image_pt_rotated经过旋转预测后的前一帧的特征点在当前帧的像素坐标
+
+                    cv::projectPoints(feat_new_rays,
+                                      cv::Matx31d::zeros(),
+                                      cv::Matx31d::zeros(),
+                                      K, *dist_ptr,
+                                      pre_image_pt_rotated);
+                }
+
+
+                CHECK_EQ(pre_image_keypoints_small.size(), pre_image_pt_rotated.size());
+            } else {
+                pre_image_pt_rotated = pre_feat_distorted;
+            }
+
+            // Apply init_pixel_shift//图像坐标原点的偏移如果预设了,那就加上
+            for (size_t i = 0; i < pre_image_pt_rotated.size(); ++i) {
+                pre_image_pt_rotated[i].x += init_pixel_shift(0);
+                pre_image_pt_rotated[i].y += init_pixel_shift(1);
+            }//对小响应,图像外的点进行过滤
+            for (size_t i = 0; i < pre_image_keypoints_small.size(); i++) {
+                if (pre_image_keypoints_small[i].response > 1e-7 &&
+                    pre_image_keypoints_small[i].pt.x > 0 &&
+                    pre_image_keypoints_small[i].pt.y > 0 &&
+                    pre_image_keypoints_small[i].pt.x < img_in_smooth_small.cols - 1 &&
+                    pre_image_keypoints_small[i].pt.y < img_in_smooth_small.rows - 1) {
+                    pre_image_strong_pt_small.push_back(pre_image_keypoints_small[i].pt);//将满足条件的老点进行记录
+                    pre_image_strong_kp_small.push_back(pre_image_keypoints_small[i]);
+                    pre_image_strong_feature_ids.push_back(i);
+                    // OF init location
+                    cur_small_img_pt_init.push_back(pre_image_pt_rotated[i]);//将满足条件的老点进行旋转后的预测点进行记录
+                } else {
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+                    if (VLOG_IS_ON(3)) {
+                        if (pre_image_keypoints_small[i].response <= 1e-7) {
+                            LOG(ERROR) << "pre_image_kpts_small[" << i << "] id = "
+                                       << pre_image_keypoints_small[i].class_id << " has weak response: "
+                                       << pre_image_keypoints_small[i].response;
+                        }
+                    }
+#endif
+                }
+            }
+        }
+
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+        CHECK_NOTNULL(key_pnts_ptr);
+        t_harris_us = harris_timer.end();
+        MicrosecondTimer of_timer("propagate_with_optical_flow OF time", 2);
+#endif
+        key_pnts_ptr->clear();//清楚一下数据,后续还要用
+        CHECK_EQ(pre_image_strong_feature_ids.size(), pre_image_strong_kp_small.size());
+        if (pre_image_strong_feature_ids.size() > 0) {//如果上一帧有满足要求的老点
+            // We intentionally keep the initial guess clean in case we need to redo optical flow
+            // with brightness adjusted images
+            cur_small_img_pt = cur_small_img_pt_init;
+
+            // Window size can only be 7 or 8
+            cv::TermCriteria criteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS, 20, 0.01);//设置一下停止迭代条件
+            std::vector<float> err;
+            err.reserve(pre_image_strong_pt_small.size());
+            constexpr int kMaxLevel = 3;
+            constexpr int kStartLevel = 1;
+            constexpr float kStrictPixelErr = 7.5;
+            constexpr float kLoosePixelErr = 15.0;
+            const cv::Size kWinSize(7, 7);
+
+#ifndef USE_OPENCV_OPTICAL_FLOW
+            // Convert to XP_OPTICAL_FLOW::XPKeyPoint first,首先转换一下响应大于阈值的老点数据结构
+        std::vector<XP_OPTICAL_FLOW::XPKeyPoint> pre_xp_kp_small;
+        pre_xp_kp_small.reserve(pre_image_strong_kp_small.size());
+        for (const cv::KeyPoint& cv_kp : pre_image_strong_kp_small) {
+            pre_xp_kp_small.push_back(XP_OPTICAL_FLOW::XPKeyPoint(cv_kp));
+        }
+        std::vector<bool> status;
+        status.reserve(pre_image_strong_pt_small.size());
+        //光流追踪,把cv的源码抄过来了,只支持winsize 7*7的光流
+        XP_OPTICAL_FLOW::XPcalcOpticalFlowPyrLK(pre_image_pyramids/*之前帧的所有金字塔图片*/,
+                                                img_in_smooth_pyramids/*当前帧的所有金字塔图片*/,
+                                                &pre_xp_kp_small/*响应大于阈值的老点*/,
+                                                &cur_small_img_pt/*Harris响应大于阈值的,经过旋转预测后的前一帧的特征点在当前帧的像素坐标*/,
+                                                &status/*记录了每个点有没有被光流追踪上*/,
+                                                &err/*误差函数*/,
+                                                kWinSize/*每个金字塔等级的搜索窗口的winSize大小*/,
+                                                kMaxLevel/*金字塔层数*/,
+                                                kStartLevel/*从第几层开始*/,
+                                                criteria/*终止条件*/,
+                                                cv::OPTFLOW_USE_INITIAL_FLOW);
+#else
+            std::vector<uchar> status;
+            status.reserve(pre_image_strong_pt_small.size());
+            cv::calcOpticalFlowPyrLK(pre_image_small,
+                                     img_in_smooth_small,
+                                     pre_image_strong_pt_small,
+                                     cur_small_img_pt,
+                                     status,
+                                     err,
+                                     kWinSize,
+                                     kMaxLevel - 1,  // cv OpticalFlow starts from pyr1 (pre_image_small)
+                                     criteria,
+                                     cv::OPTFLOW_USE_INITIAL_FLOW);
+#endif  // USE_OPENCV_OPTICAL_FLOW
+
+            // Check the optical flow propagation result to heuristically test if
+            // there is acc abrupt gain/exposure change
+            CHECK_EQ(status.size(), err.size());
+            CHECK_EQ(status.size(), cur_small_img_pt.size());
+
+            // Heuristically remove outlier flows，如果光流前imu预测的初值和光流优化后差得很多,大于了阈值,那么也要剔除
+            filter_outlier_flows(cur_small_img_pt_init/*光流前只用imu旋转修正的右目特征点坐标*/,
+                                 cur_small_img_pt/*光流优化后的右目特征点坐标*/,
+                                 pre_image_strong_kp_small/*Harris响应大于阈值的前一帧的特征点*/,  // need the class_id
+                                 4.f/*阈值*/,
+                                 &status/*是否追踪上*/);
+
+            size_t of_feat_num_in = pre_image_strong_kp_small.size();//上一帧所有要去光流追踪的老点
+            size_t of_feat_num_out = 0;//最终确定下来的点
+            for (size_t i = 0; i < status.size(); ++i) {
+                if (status[i] &&  err[i] < kStrictPixelErr) {
+                    ++of_feat_num_out;
+                }
+            }
+            float of_prop_ratio = static_cast<float>(of_feat_num_out) / of_feat_num_in;
+            bool redo_of = of_feat_num_in > 10 && of_prop_ratio < 0.4;//就说明追踪效果不好呗,要重新调整图像亮度然后LK追踪
+            if (redo_of) {
+                if (VLOG_IS_ON(2)) {
+                    LOG(ERROR) << "of prop ratio = " << of_prop_ratio << " try scale brightness";
+                } else {
+                    VLOG(1) << "of prop ratio = " << of_prop_ratio << " try scale brightness";
+                }
+                //如果追踪不好,那就需要对之前帧的图像进行增益,达到亮度一致
+                std::vector<int> hist_cur, hist_pre;//当前帧和之前帧的像素值分布直方图
+                int avg_cur = 1, avg_pre = 1;//当前帧和之前帧的像素值分布直方图
+                //计算当前帧的像素值分布直方图以及平均像素值
+                sampleBrightnessHistogram(img_in_smooth_pyramids.at(0), &hist_cur, &avg_cur);
+                //计算之前帧的像素值分布直方图以及平均像素值
+                sampleBrightnessHistogram(pre_image_pyramids.at(0), &hist_pre, &avg_pre);
+                //暴力采样算出最佳增益
+                float pre_scale = matchingHistogram(hist_pre/*之前帧像素值分布直方图*/,
+                                                    hist_cur/*当前帧像素值分布直方图*/,
+                                                    static_cast<float>(avg_cur) / avg_pre/*平均像素值比值(c/p)作为初始增益*/);
+
+                // [NOTE] cv::Mat_<uchar> automatically handles the clipping of uchar
+                std::vector<cv::Mat> pre_image_pyramids_clone(pre_image_pyramids.size());
+                for (size_t i = 0; i < pre_image_pyramids.size(); ++i) {
+                    pre_image_pyramids_clone[i] = pre_image_pyramids[i] * pre_scale;//增益
+                }
+
+                // Try optical flow again
+                status.clear();
+                err.clear();
+                cur_small_img_pt = cur_small_img_pt_init;  // restore init guess for optical flow
+#ifndef USE_OPENCV_OPTICAL_FLOW//一样还是用光流跟踪
+                XP_OPTICAL_FLOW::XPcalcOpticalFlowPyrLK(pre_image_pyramids_clone,
+                                                    img_in_smooth_pyramids,
+                                                    &pre_xp_kp_small,
+                                                    &cur_small_img_pt,
+                                                    &status,
+                                                    &err,
+                                                    kWinSize,
+                                                    kMaxLevel,
+                                                    kStartLevel,
+                                                    criteria,
+                                                    cv::OPTFLOW_USE_INITIAL_FLOW);
+#else
+                cv::calcOpticalFlowPyrLK(pre_image_pyramids_clone.at(1),
+                                         img_in_smooth_small,
+                                         pre_image_strong_pt_small,
+                                         cur_small_img_pt,
+                                         status,
+                                         err,
+                                         kWinSize,
+                                         kMaxLevel - 1,  // cv OpticalFlow starts from pyr1 (pre_image_small)
+                                         criteria,
+                                         cv::OPTFLOW_USE_INITIAL_FLOW);
+#endif  // USE_OPENCV_OPTICAL_FLOW
+
+                // Filter flow(s) that differ too much from the medium
+                // [NOTE] Use the init guess to compute the flow distance
+                filter_outlier_flows(cur_small_img_pt_init,//同上
+                                     cur_small_img_pt,
+                                     pre_image_strong_kp_small,  // need the class_id
+                                     4.f,
+                                     &status);
+                int re_of_feat_num_out = 0;
+                for (size_t i = 0; i < status.size(); ++i) {
+                    if (status[i] && err[i] < kLoosePixelErr) {
+                        ++re_of_feat_num_out;
+                    }
+                }
+                float re_of_prop_ratio = static_cast<float>(re_of_feat_num_out) / of_feat_num_in;//这次重新算一下追踪成功率
+                if (VLOG_IS_ON(2)) {
+                    LOG(ERROR) << "After pre_scale = " << pre_scale << " of prop ratio = " << re_of_prop_ratio;
+                } else {
+                    VLOG(1) << "After pre_scale = " << pre_scale << " of prop ratio = " << re_of_prop_ratio;
+                }
+            } else {
+                if (VLOG_IS_ON(2)) {
+                    LOG(ERROR) << "of prop ratio = " << of_prop_ratio;
+                } else {
+                    VLOG(1) << "of prop ratio = " << of_prop_ratio;
+                }
+            }
+
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+            t_of_us = of_timer.end();
+            if (VLOG_IS_ON(2)) {//输出一下追踪信息
+                cv::Mat img_color;
+                cv::cvtColor(img_in_smooth_small, img_color, CV_GRAY2BGR);
+                for (size_t i = 0; i < cur_small_img_pt.size(); i++) {
+                    if (status[i]) {
+                        // Draw the optical flow in blue//光流蓝色
+                        cv::line(img_color, cur_small_img_pt_init[i], cur_small_img_pt[i],
+                                 cv::Scalar(255, 0, 0));
+                        // Draw the init point from the prev point location in green//前后点关系绿色
+                        cv::line(img_color, cur_small_img_pt_init[i], pre_image_strong_pt_small[i],
+                                 cv::Scalar(0, 0, 255));
+                        // Draw the final point in green
+                        img_color.at<cv::Vec3b>(cur_small_img_pt[i].y, cur_small_img_pt[i].x) =
+                                cv::Vec3b(0, 255, 0);
+                    }
+                }
+                cv::putText(img_color, "flow", cv::Point2i(10, 35),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 0, 0), 1);
+                cv::putText(img_color, "prev to init", cv::Point2i(10, 20),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 1);
+                cv::putText(img_color, "final", cv::Point2i(10, 50),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+                cv::imwrite("/tmp/img_OF_after.png", img_color);
+                cv::imshow("after OF", img_color);
+            }
+            MicrosecondTimer of_refine_timer("propagate_with_optical_flow OF refine time", 2);
+#endif
+            // refine OF results.
+            // [NOTE] We impose non-max suppression on OF features for the following reasons:
+            // 1) two different points come to the same location after OF
+            // 2) OF features may cluster together and hence the feature distribution is sub-optimal
+            CHECK_EQ(pre_image_strong_kp_small.size(), status.size());
+            std::vector<cv::KeyPoint> cur_small_img_kp;//剔除大误差后追踪后的当前帧特征点
+            cur_small_img_kp.reserve(status.size());
+            const float pixel_err = redo_of ? kLoosePixelErr : kStrictPixelErr;//如果之前追踪效果不好,就允许像素误差大一些
+            for (size_t i = 0; i < status.size(); i++) {
+                if (status[i] && err[i] < pixel_err) {
+                    // Need to preserve margin for computing orb descriptor (20 pixels at pyramid 0)
+                    if (cur_small_img_pt[i].x - 10 >= 0 &&
+                        cur_small_img_pt[i].y - 10 >= 0 &&
+                        cur_small_img_pt[i].x + 10 < img_in_smooth_small.cols &&
+                        cur_small_img_pt[i].y + 10 < img_in_smooth_small.rows) {
+                        cv::KeyPoint kp_cur_small(pre_image_strong_kp_small[i]);  //主要是为了保存金字塔层和class_id,id就对应于全局地图点id copy all info
+                        kp_cur_small.pt = cur_small_img_pt[i];
+                        cur_small_img_kp.push_back(kp_cur_small);
+                    } else {
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+                        if (VLOG_IS_ON(3)) {
+                            LOG(ERROR) << "OF rejects ft id = " << pre_image_strong_kp_small[i].class_id
+                                       << " with boundary check";
+                        }
+#endif
+                    }
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+                } else {
+                    if (VLOG_IS_ON(3)) {
+                        LOG(ERROR) << "OF rejects ft id = " << pre_image_strong_kp_small[i].class_id
+                                   << ": status = " << static_cast<int>(status[i]) << " err = " << err[i];
+                    }
+#endif
+                }
+            }
+            if (true) {//非极大值抑制以后得到了在原始图像上的特征点
+                // Suppress OF features and generate mask_with_of_out
+                suppress_sort_kp_in_larger_img(img_in_smooth/*当前帧原始图片*/, mask/*左相机掩码*/, cur_small_img_kp/*剔除大误差后追踪后的当前帧特征点(1层)*/,
+                                               key_pnts_ptr/*最终当前帧(0层)提取到的描述子*/, mask_with_of_out_ptr);
+            } else {
+                // Do not refine corner location.  Do not suppress OF features, either.
+                key_pnts_ptr->resize(cur_small_img_kp.size());
+                for (size_t i = 0; i < cur_small_img_kp.size(); ++i) {
+                    (*key_pnts_ptr)[i] = cur_small_img_kp[i];
+                    (*key_pnts_ptr)[i].pt.x *= 2;
+                    (*key_pnts_ptr)[i].pt.y *= 2;
+                }
+                init_mask(img_in_smooth.size(), mask, mask_with_of_out_ptr);
+            }
+            // 进行点管理
+            // Update active feature tracks of this frame.  Also perform the random drop out if necessary.
+            if (feat_track_detector) {
+                if (absolute_static) {
+                    feat_track_detector->filter_static_features(key_pnts_ptr);
+                }
+                feat_track_detector->update_feature_tracks(key_pnts_ptr);//更新feature_tracks_map_点管理信息,对看到的地图点设成active = true
+            }
+
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+            t_of_refine_us = of_refine_timer.end();
+            if (VLOG_IS_ON(2)) {
+                cv::Mat img_color;
+                cv::cvtColor(img_in_smooth, img_color, CV_GRAY2BGR);
+                if (mask_with_of_out_ptr->rows != 0) {
+                    // Plot the mask with dark gray
+                    for (int i = 0; i < img_in_smooth.rows; ++i) {
+                        for (int j = 0; j < img_in_smooth.cols; ++j) {
+                            if ((*mask_with_of_out_ptr)(i, j) == 0x00) {
+                                img_color.at<cv::Vec3b>(i, j)[0] = 0x09;
+                                img_color.at<cv::Vec3b>(i, j)[1] = 0x09;
+                                img_color.at<cv::Vec3b>(i, j)[2] = 0x09;
+                            }
+                        }
+                    }
+                }
+                // Overlay OF features on top with yellow
+                for (size_t i = 0; i < key_pnts_ptr->size(); i++) {
+                    cv::circle(img_color, (*key_pnts_ptr)[i].pt, 2, cv::Vec3b(0, 255, 255));
+                }
+                cv::putText(img_color,
+                            "feat# " + boost::lexical_cast<std::string>(key_pnts_ptr->size()),
+                            cv::Point2i(10, 20),
+                            cv::FONT_HERSHEY_PLAIN, 1, cv::Vec3b(0, 0, 255), 1);
+                cv::imwrite("/tmp/img_OF_compress_w_mask.png", img_color);
+            }
+#endif
+            if (orb_feat_OF_ptr != nullptr) {
+                // compute ORB feat in level 0
+                if (key_pnts_ptr->size() > 0) {
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+                    MicrosecondTimer of_orb_timer("propagate_with_optical_flow orb desc time", 2);
+#endif
+#ifdef __ARM_NEON__
+                    ORBextractor::computeDescriptorsN512(img_in_smooth, *key_pnts_ptr, orb_feat_OF_ptr);
+#else//计算当前帧的特征点描述子
+                    ORBextractor::computeDescriptors(img_in_smooth, *key_pnts_ptr, orb_feat_OF_ptr);
+#endif  // __ARM_NEON__
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+                    t_of_orb_us = of_orb_timer.end();
+                    CHECK_EQ(orb_feat_OF_ptr->rows, key_pnts_ptr->size());
+#endif
+                }
+            }
+        }
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+        t_of_total_us = of_total_timer.end();
+        VLOG(1) << "propagate_with_optical_flow time (imu_measures)"
+                << " harris:" << t_harris_us
+                << " of:" << t_of_us
+                << " of_refine:" << t_of_refine_us
+                << " of_orb:" << t_of_orb_us
+                << " of_total:" << t_of_total_us;
+#endif
+
+}
+
+
 FeatureTrackDetector::FeatureTrackDetector(const int length_thres,
                                            const float drop_rate,
                                            const bool use_fast,
@@ -862,6 +1324,26 @@ bool FeatureTrackDetector::detect(const cv::Mat& img_in_smooth,
                                  1e-7 /*refine_harris_threshold*/);
 }
 
+bool FeatureTrackDetector::detectVINS(const cv::Mat& img_in_smooth,
+                                  const cv::Mat_<uchar>& mask,
+                                  int request_feat_num,
+                                  int pyra_level,  // Total pyramid levels, including the base image
+                                  int fast_thresh,
+                                  std::vector<cv::KeyPoint>* key_pnts_ptr,
+                                  cv::Mat* orb_feat_ptr) {
+    return XP::detect_orb_featuresVINS(img_in_smooth,//相机图片
+                                   mask,//图像掩码
+                                   request_feat_num,//最大提取的特征数目
+                                   pyra_level,//金字塔层数
+                                   fast_thresh,//fast角点提取阈值
+                                   use_fast_,//是否是提取fast
+                                   uniform_radius_,//点多少像素范围内不要有其他点
+                                   key_pnts_ptr,//特征点
+                                   orb_feat_ptr,//orb描述子
+                                   this,
+                                   1e-7 /*refine_harris_threshold*/);
+    }
+
     bool FeatureTrackDetector::detect_for_loop(const cv::Mat& img_in_smooth,
                                       const cv::Mat_<uchar>& mask,
                                       int request_feat_num,
@@ -897,6 +1379,89 @@ bool FeatureTrackDetector::detect(const cv::Mat& img_in_smooth,
 
 
  }
+
+bool FeatureTrackDetector::optical_flow_and_detectVINS(const cv::Mat_<uchar>& mask/*左相机掩码*/,
+                                                   const cv::Mat& pre_image_orb_feature/*左相机上一帧检测到的特征点的描述子*/,
+                                                   const std::vector<cv::KeyPoint>& prev_img_kpts/*左相机上一帧检测到的特征点*/,
+                                                   int request_feat_num/*最大要求提取的特征点数量*/,
+                                                   int pyra_level_det/*金字塔层*/,
+                                                   int fast_thresh/*fast阈值*/,
+                                                   std::vector<cv::KeyPoint>* key_pnts_ptr/*左相机当前帧提取到的特征点*/,
+                                                   cv::Mat* orb_feat_ptr/*左相机当前帧提取到的特征点对应的描述子*/,
+                                                   const bool fisheye,
+                                                   const cv::Vec2f& init_pixel_shift,
+                                                   const cv::Matx33f* K_ptr/*cv形式的左右相机内参*/,
+                                                   const cv::Mat_<float>* dist_ptr/*左右相机的畸变参数*/,
+                                                   const cv::Matx33f* old_R_new_ptr/*Rcl(pre)_cl(cur)左相机当前帧到前一帧的旋转*/,
+                                                   const bool absolute_static)
+{
+
+    this->mark_all_feature_tracks_dead();//将所有的
+    const cv::Mat& img_in_smooth = curr_img_pyramids_.at(0);//原始图片
+    // select the strong features from the previous image
+    std::vector<cv::KeyPoint> pre_image_strong_kp_small;//Harris响应大于阈值的前一帧的特征点
+    //先过滤响应弱的前一帧的特征点,然后imu预测的特征点作为初值进行光流追踪,如果追踪效果不好,
+    // 调整图像亮度再进行一次光流,最后极大值抑制,并且更新观测到的地图点的轨迹长度和坐标
+    cv::Mat orb_feat_OF;
+    XP::propagate_with_optical_flow(curr_img_pyramids_/*当前帧的所有金字塔图片*/,
+                                    mask/*左相机掩码*/,
+                                    prev_img_pyramids_/*之前帧的所有金字塔图片*/,
+                                    pre_image_orb_feature/*左相机上一帧检测到的特征点的描述子*/,
+                                    prev_img_kpts/*左相机上一帧检测到的特征点*/,
+                                    this,
+                                    key_pnts_ptr/*左相机当前帧提取到的特征点*/,
+                                    &mask_with_of_out_/*非极大值以后的掩码,原始mask加点的mask*/,
+                                    (orb_feat_ptr ? &orb_feat_OF : nullptr)/*左相机当前帧提取到的特征点对应的描述子*/,
+                                    fisheye,
+                                    init_pixel_shift,
+                                    K_ptr/*cv形式的左右相机内参*/,
+                                    dist_ptr/*左右相机的畸变参数*/,
+                                    old_R_new_ptr/*Rcl(pre)_cl(cur)左相机当前帧到前一帧的旋转*/,
+                                    absolute_static);
+
+    int n_max_cnt = request_feat_num - static_cast<int>(key_pnts_ptr->size());
+    if (n_max_cnt > 0)
+    {
+        mask_with_of_out_= mask.clone();
+        for (int i = 0; i < key_pnts_ptr->size(); ++i)
+        {
+            if (mask.at<uchar>((*key_pnts_ptr)[i].pt) == 255)
+            {
+
+                cv::circle(mask_with_of_out_, (*key_pnts_ptr)[i].pt, FLAGS_uniform_radius, 0, -1);
+            }
+        }
+
+        std::vector<cv::KeyPoint> key_pnts_new;//新提取到的特征点
+        cv::Mat orb_feat_new;
+
+//    检测新的特征点,在detect中会对新点做点管理,存在feature_tracks_map_中
+        this->detectVINS(img_in_smooth,//一样还是orb的代码检测过程
+                     mask_with_of_out_/*只在没有mask的地方生成新点*/,
+                         n_max_cnt,
+                     pyra_level_det,
+                     fast_thresh,
+                     &key_pnts_new,&orb_feat_new);
+        key_pnts_ptr->insert(key_pnts_ptr->end(), key_pnts_new.begin(), key_pnts_new.end());//将新点存到当前帧的特征点存储中
+    }
+    // Clean up dead feature tracks//遍历特征管理器
+    std::map<int, FeatureTrack>::iterator ft_it = feature_tracks_map_.begin();
+    while (ft_it != feature_tracks_map_.end()) {
+        if (!ft_it->second.isActive) {//将看不到的点从feature_tracks_map_去掉
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+            if (VLOG_IS_ON(3)) {
+                LOG(ERROR) << "dead ft id = " << ft_it->first
+                           << " length = " << ft_it->second.length;
+            }
+#endif
+            ft_it = feature_tracks_map_.erase(ft_it);
+        } else {
+            ++ft_it;
+        }
+    }
+}
+
+
 
 // TODO(mingyu): store pre_image_orb_feature, pre_image_keypoints in
 // FeatureTrackDetector member variables

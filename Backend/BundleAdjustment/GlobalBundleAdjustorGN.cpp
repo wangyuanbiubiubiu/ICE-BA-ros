@@ -239,6 +239,12 @@ void GlobalBundleAdjustor::UpdateFactorsFeature()
                                       , m_K.m_br
 #endif
                                       );
+//          if(A.m_adx.m_add.m_a ==A.m_adx.m_add.m_a)
+//          {
+//          } else
+//          {
+//              A.m_adx.m_add.m_a = 0.0f;
+//          }
 //#ifdef CFG_DEBUG
 #if 0
         if (iKF == 87 && iz == 2) {
@@ -569,6 +575,12 @@ void GlobalBundleAdjustor::UpdateFactorsPriorDepth() {
         //dF = acc.m_F;
         FTR::GetFactor<GBA_ME_FUNCTION>(BA_WEIGHT_FEATURE/*权重*/, m_K.m_br/*-tc0_c1*/, ds[ix]/*地图点的观测*/, KF.m_xs[ix]/*地图点的观测*/, &A, &U);
         dadd = A.m_add;
+//          if(A.m_add.m_a ==A.m_add.m_a)
+//          {
+//          } else
+//          {
+//              A.m_add.m_a = 0.0f;
+//          }
 
 //          foutC.precision(0);
 //          foutC <<"双目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
@@ -1907,73 +1919,73 @@ bool GlobalBundleAdjustor::SolveSchurComplementPCG() {
   return scc;
 }
 
-void GlobalBundleAdjustor::SolveSchurComplementGT(const AlignedVector<Rigid3D> &Cs,
-                                                  const AlignedVector<Camera> &CsLM,
-                                                  LA::AlignedVectorXf *xs, const bool motion) {
-  if (!m_CsGT) {
-    return;
-  }
-#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
-  const float dpMax = 0.01f;
-  const float drMax = 0.1f;
-  const float dvMax = 0.1f;
-  const float dbaMax = 0.1f;
-  const float dbwMax = 0.1f;
-#endif
-  const int pc = 6, pm = 9;
-  const int Nc = m_Cs.Size(), Nm = motion ? m_CsLM.Size() : 0;
-  xs->Resize(Nc * pc + Nm * pm);
-  Rotation3D dR;
-  Point3D p, pGT;
-  LA::AlignedVector3f dr, dp;
-  LA::Vector6f *xcs = (LA::Vector6f *) xs->Data();
-  for (int ic = 0; ic < Nc; ++ic) {
-    const Rigid3D &C = Cs[ic], &CGT = m_CsKFGT[ic];
-    Rotation3D::ATB(C, CGT, dR);
-    dR.GetRodrigues(dr, BA_ANGLE_EPSILON);
-    C.GetPosition(p);
-    CGT.GetPosition(pGT);
-    LA::AlignedVector3f::amb(pGT, p, dp);
-#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
-    dp += LA::AlignedVector3f::GetRandom(dpMax);
-    dr += LA::AlignedVector3f::GetRandom(drMax * UT_FACTOR_DEG_TO_RAD);
-#ifdef CFG_DEBUG
-    dr.z() = 0.0f;
-#endif
-#endif
-    xcs[ic].Set(dp, dr);
-  }
-  ConvertCameraUpdates(xs->Data(), &m_xp2s, &m_xr2s);
-  if (motion) {
-    LA::AlignedVector3f dv, dba, dbw;
-    LA::Vector9f *xms = (LA::Vector9f *) (xcs + Nc);
-    for (int im = 0; im < Nm; ++im) {
-      const Camera &C = CsLM[im], &CGT = m_CsLMGT[im];
-      LA::Vector9f &xm = xms[im];
-      if (CGT.m_v.Valid()) {
-        LA::AlignedVector3f::amb(CGT.m_v, C.m_v, dv);
-#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
-        dv += LA::AlignedVector3f::GetRandom(dvMax);
-#endif
-        xm.Set012(dv);
-      }
-      if (CGT.m_ba.Valid()) {
-        LA::AlignedVector3f::amb(CGT.m_ba, C.m_ba, dba);
-#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
-        dba += LA::AlignedVector3f::GetRandom(dbaMax);
-#endif
-        xm.Set345(dba);
-      }
-      if (CGT.m_bw.Valid()) {
-        LA::AlignedVector3f::amb(CGT.m_bw, C.m_bw, dbw);
-#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
-        dbw += LA::AlignedVector3f::GetRandom(dbwMax * UT_FACTOR_DEG_TO_RAD);
-#endif
-        xm.Set678(dbw);
-      }
-    }
-  }
-}
+//void GlobalBundleAdjustor::SolveSchurComplementGT(const AlignedVector<Rigid3D> &Cs,
+//                                                  const AlignedVector<Camera> &CsLM,
+//                                                  LA::AlignedVectorXf *xs, const bool motion) {
+////  if (!m_CsGT) {
+////    return;
+////  }
+////#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
+////  const float dpMax = 0.01f;
+////  const float drMax = 0.1f;
+////  const float dvMax = 0.1f;
+////  const float dbaMax = 0.1f;
+////  const float dbwMax = 0.1f;
+////#endif
+////  const int pc = 6, pm = 9;
+////  const int Nc = m_Cs.Size(), Nm = motion ? m_CsLM.Size() : 0;
+////  xs->Resize(Nc * pc + Nm * pm);
+////  Rotation3D dR;
+////  Point3D p, pGT;
+////  LA::AlignedVector3f dr, dp;
+////  LA::Vector6f *xcs = (LA::Vector6f *) xs->Data();
+////  for (int ic = 0; ic < Nc; ++ic) {
+////    const Rigid3D &C = Cs[ic], &CGT = m_CsKFGT[ic];
+////    Rotation3D::ATB(C, CGT, dR);
+////    dR.GetRodrigues(dr, BA_ANGLE_EPSILON);
+////    C.GetPosition(p);
+////    CGT.GetPosition(pGT);
+////    LA::AlignedVector3f::amb(pGT, p, dp);
+////#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
+////    dp += LA::AlignedVector3f::GetRandom(dpMax);
+////    dr += LA::AlignedVector3f::GetRandom(drMax * UT_FACTOR_DEG_TO_RAD);
+////#ifdef CFG_DEBUG
+////    dr.z() = 0.0f;
+////#endif
+////#endif
+////    xcs[ic].Set(dp, dr);
+////  }
+////  ConvertCameraUpdates(xs->Data(), &m_xp2s, &m_xr2s);
+////  if (motion) {
+////    LA::AlignedVector3f dv, dba, dbw;
+////    LA::Vector9f *xms = (LA::Vector9f *) (xcs + Nc);
+////    for (int im = 0; im < Nm; ++im) {
+////      const Camera &C = CsLM[im], &CGT = m_CsLMGT[im];
+////      LA::Vector9f &xm = xms[im];
+////      if (CGT.m_v.Valid()) {
+////        LA::AlignedVector3f::amb(CGT.m_v, C.m_v, dv);
+////#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
+////        dv += LA::AlignedVector3f::GetRandom(dvMax);
+////#endif
+////        xm.Set012(dv);
+////      }
+////      if (CGT.m_ba.Valid()) {
+////        LA::AlignedVector3f::amb(CGT.m_ba, C.m_ba, dba);
+////#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
+////        dba += LA::AlignedVector3f::GetRandom(dbaMax);
+////#endif
+////        xm.Set345(dba);
+////      }
+////      if (CGT.m_bw.Valid()) {
+////        LA::AlignedVector3f::amb(CGT.m_bw, C.m_bw, dbw);
+////#ifdef GBA_DEBUG_GROUND_TRUTH_STATE_ERROR
+////        dbw += LA::AlignedVector3f::GetRandom(dbwMax * UT_FACTOR_DEG_TO_RAD);
+////#endif
+////        xm.Set678(dbw);
+////      }
+////    }
+////  }
+//}
 
 #ifdef GBA_DEBUG_EIGEN_PCG
 static EigenMatrixXd g_A/*, g_S, g_SI*/, g_M, g_L, g_D, g_LT;
@@ -3061,32 +3073,32 @@ void GlobalBundleAdjustor::SolveBackSubstitution() {
 #endif
 }
 
-void GlobalBundleAdjustor::SolveBackSubstitutionGT(const std::vector<Depth::InverseGaussian> &ds,
-                                                   LA::AlignedVectorXf *xs) {
-  if (!m_dsGT) {
-    return;
-  }
-  const int Nd = static_cast<int>(m_ds.size());
-  LA::AlignedVectorXf dus, dusGT;
-  m_work.Resize(dus.BindSize(Nd) + dusGT.BindSize(Nd));
-  dus.Bind(m_work.Data(), Nd);
-  dusGT.Bind(dus.BindNext(), Nd);
-  const int nKFs = static_cast<int>(m_KFs.size());
-  for (int iKF = 0; iKF < nKFs; ++iKF) {
-    const int id = m_iKF2d[iKF], iX = m_iKF2X[iKF];
-    const Depth::InverseGaussian *_ds = iX == -1 ? m_ds.data() + id : ds.data() + iX;
-    float *_dus = dus.Data() + id;
-    const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
-    for (int ix = 0; ix < Nx; ++ix) {
-      _dus[ix] = _ds[ix].u();
-    }
-  }
-  for (int id = 0; id < Nd; ++id) {
-    dusGT[id] = m_dsGT->at(id).u();
-  }
-  dusGT -= dus;
-  xs->Push(dusGT);
-}
+//void GlobalBundleAdjustor::SolveBackSubstitutionGT(const std::vector<Depth::InverseGaussian> &ds,
+//                                                   LA::AlignedVectorXf *xs) {
+//  if (!m_dsGT) {
+//    return;
+//  }
+//  const int Nd = static_cast<int>(m_ds.size());
+//  LA::AlignedVectorXf dus, dusGT;
+//  m_work.Resize(dus.BindSize(Nd) + dusGT.BindSize(Nd));
+//  dus.Bind(m_work.Data(), Nd);
+//  dusGT.Bind(dus.BindNext(), Nd);
+//  const int nKFs = static_cast<int>(m_KFs.size());
+//  for (int iKF = 0; iKF < nKFs; ++iKF) {
+//    const int id = m_iKF2d[iKF], iX = m_iKF2X[iKF];
+//    const Depth::InverseGaussian *_ds = iX == -1 ? m_ds.data() + id : ds.data() + iX;
+//    float *_dus = dus.Data() + id;
+//    const int Nx = static_cast<int>(m_KFs[iKF].m_xs.size());
+//    for (int ix = 0; ix < Nx; ++ix) {
+//      _dus[ix] = _ds[ix].u();
+//    }
+//  }
+//  for (int id = 0; id < Nd; ++id) {
+//    dusGT[id] = m_dsGT->at(id).u();
+//  }
+//  dusGT -= dus;
+//  xs->Push(dusGT);
+//}
 
 bool GlobalBundleAdjustor::EmbeddedMotionIteration() {
   const int pc = 6, pm = 9;

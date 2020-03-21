@@ -764,7 +764,7 @@ void PreIntegrate(const Measurement *us/*当前帧和之间帧之间的所有imu
   } else {
     D->m_u2.Invalidate();
   }
-  D->m_ba = C1.m_ba;
+  D->m_ba = C1.m_ba;//这个是c0下的bias
   D->m_bw = C1.m_bw;
 
   D->m_v.MakeZero();

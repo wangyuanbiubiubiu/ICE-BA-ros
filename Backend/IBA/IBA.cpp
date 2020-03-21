@@ -38,8 +38,8 @@
 #include <boost/filesystem.hpp>
 #endif
 #include <glog/logging.h>
-
-
+#include <opencv2/core.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
 namespace IBA {
 
 static inline void ConvertCamera(const CameraIMUState &Ci, Camera *Co) {
@@ -258,7 +258,48 @@ void Solver::PushCurrentFrame(const std::vector<IBA::RelativeConstraint> & loop_
             m_internal->AssertConsistency();
         }
     }
-
+    void Solver::MonoPushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF, const bool serial) {
+//#ifdef CFG_DEBUG
+#if 0
+        if (KF && KF->iFrm == 0 && CF.iFrm != 0) {
+    KF = NULL;
+  }
+#endif
+        //UT::Print("[%d]\n", CF.iFrm);
+        //如果是关键帧的话
+        if (KF) {
+            //UT::Print("[%d]\n", KF->iFrm);
+            //UT::Print("%f\n", KF->Cam_state.R[0][0]);
+            if (KF->iFrm == CF.iFrm) {
+                m_internal->PushCurrentFrame(CF);//构造输入当前帧, 向m_ILF中存储imu测量
+                //输入关键帧,相机位姿状态,同时构造m_IKF,
+                m_internal->PushKeyFrame(*KF, &m_internal->m_ILF.m_Cam_state);
+                //向局部地图中m_CsLF中push局部帧
+                m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state/**/, CF.iFrm/*当前帧的帧id*/));
+                //向局部地图中m_CsKF增加相机关键帧状态,以及m_iKF2d地图点历史数量的更新等
+                m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
+                //向LBA输入普通帧和关键帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
+                m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
+                m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
+            } else {
+                m_internal->PushKeyFrame(*KF);
+                m_internal->PushCurrentFrame(CF);
+                m_internal->m_LM.IBA_PushKeyFrame(m_internal->m_IKF);
+                m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));
+                m_internal->m_LBA.PushKeyFrame(m_internal->m_IKF, serial);
+                m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF);
+            }
+        } else
+        {
+            m_internal->PushCurrentFrame(CF);//输入当前帧, 向m_ILF中存储imu测量
+            m_internal->m_LM.IBA_PushLocalFrame(LocalMap::CameraLF(m_internal->m_ILF.m_Cam_state, CF.iFrm));//向局部地图中m_CsLF中push局部帧
+            m_internal->m_LBA.PushLocalFrame(m_internal->m_ILF/*当前输入关键帧*/);//向LBA输入普通帧,m_ITs1中记录的是m_ILFs1中push的帧的类型
+        }
+//        m_internal->m_LBA.WakeUp(serial);//唤醒LBA如果有关键帧还会唤醒GBA
+//        if (m_internal->m_debug) {
+//            m_internal->AssertConsistency();
+//        }
+    }
 void Solver::PushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF, const bool serial) {
 //#ifdef CFG_DEBUG
 #if 0
@@ -358,6 +399,12 @@ void Solver::Wakeup_GBA()
 {
         m_internal->m_GBA.WakeUp();
 }
+
+void Solver::Wakeup_LBA()
+{
+        m_internal->m_LBA.WakeUp();
+}
+
 
 #ifdef CFG_GROUND_TRUTH
 static inline void OffsetPointer(const LA::AlignedVector3f *t0,
@@ -1783,7 +1830,7 @@ bool Solver::SaveTimesGBA(const std::string fileName, const bool append) {
   return m_internal->m_GBA.SaveTimes(_fileName);
 }
 //去畸变,并且计算这个这个特征点畸变部分的H矩阵,第一次时还会生成畸变对照表
-static inline void Rectify(const ::Intrinsic &K/*内参*/, const Point2D &x/*特征点的畸变像素坐标*/,
+static inline void Rectify(const ::Intrinsic &K/*内参*/, const Point2D &x/*特征点的畸变像素坐标*/,const Point2D &x_un,
                            ::Point2D *xn/*无畸变的归一化坐标*/, LA::SymmetricMatrix2x2f *Wn/*畸变部分的信息矩阵*/,
                            ::Intrinsic::UndistortionMap *UM/*畸变对照表,key是畸变像素坐标,value是无畸变归一化坐标*/ = NULL,
                            const float eps = 0.0f
@@ -1792,13 +1839,17 @@ static inline void Rectify(const ::Intrinsic &K/*内参*/, const Point2D &x/*特
 #endif
                          ) {
   ::Point2D xd/*归一化坐标的前两维*/;
+  ::Point2D xd_un/*归一化坐标的前两维*/;
+    xd_un.x() = x_un.x[0];
+    xd_un.y() = x_un.x[1];
   Point2DCovariance Sd, Sn;
   LA::AlignedMatrix2x2f J_t, JS;
   LA::AlignedMatrix2x2f Wd;
   K.k().ImageToNormalized(x.x, xd);//前者为像素坐标,后者为归一化坐标
+
     //去畸变,如果没有UndistortionMap畸变对照表的时候,需要将图片缩到FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做畸变对照。
 //如果没有UndistortionMap输入或者生成UndistortionMap的时候,会用dogleg方法进行迭代求解。如果用了UndistortionMap作为初值的话,就用G-N求解即可
-  K.Undistort(xd/*带畸变的归一化坐标前两维*/, xn/*去完畸变以后的归一化坐标*/, &J_t/*畸变部分雅克比J.t，这里原来写的是J,不太准确*/, UM/**/);
+  K.Undistort(xd/*带畸变的归一化坐标前两维*/, xd_un,xn/*去完畸变以后的归一化坐标*/, &J_t/*畸变部分雅克比J.t，这里原来写的是J,不太准确*/, UM/**/);
 //#ifdef CFG_DEBUG
 #if 0
   UT::Print("fx = %f %f\n", K.k().m_fx, K.fx());
@@ -1977,7 +2028,7 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
         if (i == 0) {//必然不可能出现这种情况
           continue;
         }
-        Rectify(m_K.m_Kr/*右相机内参*/, z_KF.x/*右目特征点畸变像素坐标*/, &z_GMap.m_zr/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
+        Rectify(m_K.m_Kr/*右相机内参*/, z_KF.x/*右目特征点畸变像素坐标*/,z_KF.x_un, &z_GMap.m_zr/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
                 &z_GMap.m_Wr/*右畸变部分的H矩阵(加上了外参的影响)*/, &m_UMr/*右目畸变对照表*/, eps, &m_K.m_Rr/*Tc0_c1*/);
         if (New_Mp_KF.feat_measures[i - 1].iFrm != z_KF.iFrm) {
           z_GMap.m_z.Invalidate();
@@ -1994,7 +2045,7 @@ const GlobalMap::InputKeyFrame& Internal::PushKeyFrame(const KeyFrame &KF, const
 #endif
       {
           //去畸变,并且为z_GMap计算这个特征点畸变部分的H矩阵,第一次时还会生成畸变对照表
-        Rectify(m_K.m_K/*左相机内参*/, z_KF.x/*左目的特征点*/, &z_GMap.m_z/*左目特征点去畸变后的归一化坐标*/,
+        Rectify(m_K.m_K/*左相机内参*/, z_KF.x/*左目的特征点*/,z_KF.x_un, &z_GMap.m_z/*左目特征点去畸变后的归一化坐标*/,
                 &z_GMap.m_W/*左畸变部分的H矩阵*/, &m_UM/*左目畸变对照表*/, eps);
 #ifdef CFG_STEREO
         const int j = i + 1;
@@ -2202,12 +2253,12 @@ void Internal::ConvertFeatureMeasurements(const std::vector<MapPointMeasurement>
 #ifdef CFG_STEREO
     z2.m_right = z1.right;
     if (z1.right) {
-      Rectify(m_K.m_Kr/*右相机内参*/, z1.x/*右目特征点畸变像素坐标*/, &z2.m_z/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
+      Rectify(m_K.m_Kr/*右相机内参*/, z1.x/*右目特征点畸变像素坐标*/,z1.x_un/*我改了,在前端就进行了畸变处理*/, &z2.m_z/*右目特征点去畸变后的归一化坐标(左乘了Rc0_c1以后进行了归一化)*/,
               &z2.m_W/*右畸变部分的H矩阵(加上了外参的影响)*/, &m_UMr/*右目畸变对照表*/, eps, &m_K.m_Rr/*Tc0_c1*/);
     } else
 #endif
     {
-      Rectify(m_K.m_K, z1.x, &z2.m_z, &z2.m_W, &m_UM, eps);
+      Rectify(m_K.m_K, z1.x,z1.x_un, &z2.m_z, &z2.m_W, &m_UM, eps);
     }
     ++j;
   }

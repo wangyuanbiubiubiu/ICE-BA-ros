@@ -18,7 +18,7 @@
 
 #include <opencv2/core.hpp>
 #include <vector>
-
+#include<Eigen/StdVector>
 namespace XP {
 
 int sampleBrightnessHistogram(const cv::Mat& raw_img,

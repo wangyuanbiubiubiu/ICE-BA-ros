@@ -896,10 +896,15 @@ void LocalBundleAdjustor::Run() {
     m_hists.push_back(hist);
   }
 #endif
-#if 0
-//#if 1
-  UT::PrintSeparator();
-  UT::Print("Time = %f\n", m_ts[TM_TOTAL].GetAverageMilliseconds() * 1000.0);
+//#if 0
+#if 1
+//  UT::PrintSeparator();
+//  UT::Print("Time = %f\n", m_ts[TM_TOTAL].GetAverageMilliseconds() );
+    std::ofstream foutC("/home/wya/odom_paper/lbatime.txt", std::ios::app);
+    foutC.setf(std::ios::fixed, std::ios::floatfield);
+    foutC.precision(6);
+    foutC<<iFrm<<" "<<m_ts[TM_TOTAL].GetAverageMilliseconds()<<std::endl;
+    foutC.close();
 #endif
 #ifdef LBA_DEBUG_VIEW
   if (g_viewer) {
@@ -1585,20 +1590,20 @@ void LocalBundleAdjustor::ComputeErrorDrift(float *er, float *ep) {
 }
 
 float LocalBundleAdjustor::ComputeRMSE() {
-  float Se2 = 0.0f;
-  const int N = static_cast<int>(m_hists.size());
-#ifdef CFG_GROUND_TRUTH
-  if (m_CsGT) {
-    for (int i = 0; i < N; ++i) {
-      const History &hist = m_hists[i];
-      const Point3D p1 = hist.m_C.m_p, p2 = m_CsGT[hist.m_iFrm].m_p;
-      Se2 += (p1 - p2).SquaredLength();
-    }
-  }
-#endif
-  return sqrtf(Se2 / N);
+//  float Se2 = 0.0f;
+//  const int N = static_cast<int>(m_hists.size());
+//#ifdef CFG_GROUND_TRUTH
+//  if (m_CsGT) {
+//    for (int i = 0; i < N; ++i) {
+//      const History &hist = m_hists[i];
+//      const Point3D p1 = hist.m_C.m_p, p2 = m_CsGT[hist.m_iFrm].m_p;
+//      Se2 += (p1 - p2).SquaredLength();
+//    }
+//  }
+//#endif
+//  return sqrtf(Se2 / N);
 }
-
+//
 float LocalBundleAdjustor::GetTotalDistance() {
   float S = 0.0f;
 #ifdef CFG_HISTORY
@@ -1911,10 +1916,11 @@ void LocalBundleAdjustor::SynchronizeData()
             {//如果没有其他观测
               X.m_d.Invalidate();
             } else {
+//                X.m_d.Invalidate();
               X.m_d.Initialize();
               for (int n = 1; n <= Nzd; ++n)
               {
-                Depth::Triangulate(w, n, m_zds.data(), &X.m_d, &m_work);
+                Depth::Triangulate(w, n, m_zds.data(), &X.m_d, &m_work,false,&eAvg);
               }
               if (!X.m_d.Valid())
               {
@@ -2196,7 +2202,7 @@ void LocalBundleAdjustor::SynchronizeData()
   {//如果新的关键帧
     m_ts[TM_TOTAL].Stop();
     m_ts[TM_SYNCHRONIZE].Stop();
-    m_GBA->WakeUp(serialGBA);//唤醒GBA线程,进行globalBA优化
+//    m_GBA->WakeUp(serialGBA);//唤醒GBA线程,进行globalBA优化
     m_ts[TM_SYNCHRONIZE].Start();
     m_ts[TM_TOTAL].Start();
   }
@@ -4653,16 +4659,16 @@ void LocalBundleAdjustor::MarkFeatureMeasurements(const LocalFrame &LF/*滑窗�
 void LocalBundleAdjustor::MarkFeatureMeasurementsUpdateDepth(const FRM::Frame &F,
                                                              std::vector<ubyte> &ucsKF,
                                                              std::vector<ubyte> &uds) {
-  const int NZ = static_cast<int>(F.m_Zs.size());
-  for (int iZ = 0; iZ < NZ; ++iZ) {
-    const FRM::Measurement &Z = F.m_Zs[iZ];
-    const int iKF = Z.m_iKF;
-    ucsKF[iKF] |= LBA_FLAG_FRAME_UPDATE_DEPTH;
-    ubyte *uds = m_udsGT.data() + m_iKF2d[iKF];
-    for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
-      uds[F.m_zs[iz].m_ix] |= LBA_FLAG_TRACK_UPDATE_DEPTH;
-    }
-  }
+//  const int NZ = static_cast<int>(F.m_Zs.size());
+//  for (int iZ = 0; iZ < NZ; ++iZ) {
+//    const FRM::Measurement &Z = F.m_Zs[iZ];
+//    const int iKF = Z.m_iKF;
+//    ucsKF[iKF] |= LBA_FLAG_FRAME_UPDATE_DEPTH;
+//    ubyte *uds = m_udsGT.data() + m_iKF2d[iKF];
+//    for (int iz = Z.m_iz1; iz < Z.m_iz2; ++iz) {
+//      uds[F.m_zs[iz].m_ix] |= LBA_FLAG_TRACK_UPDATE_DEPTH;
+//    }
+//  }
 }
 
 #ifdef CFG_DEBUG

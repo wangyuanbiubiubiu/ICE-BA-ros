@@ -282,6 +282,14 @@ void LocalBundleAdjustor::UpdateFactorsFeatureLF() {
                                         , m_K.m_br/*-tc0_c1*/
 #endif
                                         );
+
+//            if(A.m_add.m_a == A.m_add.m_a)
+//            {
+//            } else
+//            {
+//                A.m_add.m_a = 0.0f;
+//            }
+//            std::cout<< "UpdateFactorsFeatureLF"<< A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
 //            foutC.precision(0);
 //            foutC <<"遍历lf:"<<iLF<<",观测到kf:"<<iZ<<",点id:"<< ix<<",";
 //            foutC.precision(5);
@@ -502,11 +510,19 @@ void LocalBundleAdjustor::UpdateFactorsFeatureKF()
                                       , m_K.m_br/*-tc0_c1*/
 #endif
                                       );
+
+//
+//          if(A.m_add.m_a == A.m_add.m_a)
+//          {
+//          } else
+//          {
+//              A.m_add.m_a = 0.0f;
+//          }
 //          foutC.precision(0);
 //          foutC <<"遍历kf:"<<iKF<<",观测到kf:"<<iZ<<",点id:"<< ix<<",";
 //          foutC.precision(5);
 //          foutC << A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
-
+//          std::cout<<"UpdateFactorsFeatureKF:" << A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
         if (ud)//是一个新的观测,所以直接+=就可以
         {
 //#ifdef CFG_DEBUG
@@ -611,12 +627,18 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
           //dF = acc.m_F;
           FTR::GetFactor<LBA_ME_FUNCTION>(BA_WEIGHT_FEATURE_KEY_FRAME, m_K.m_br/*-tc0_c1*/, ds[ix], KF.m_xs[ix], &A, &U);
           dadd = A.m_add;
+//          if(A.m_add.m_a == A.m_add.m_a)
+//          {
+//          } else
+//          {
+//              A.m_add.m_a = 0.0f;
+//          }
 
 //            foutC.precision(0);
 //            foutC <<"双目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
 //            foutC.precision(5);
 //            foutC <<A.m_F<<","<< A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
-
+//            std::cout<<"UpdateFactorsPriorDepth:" << A.m_add.m_a << ","<< A.m_add.m_b << std::endl;
         } else
 #endif
         {
@@ -629,6 +651,7 @@ void LocalBundleAdjustor::UpdateFactorsPriorDepth()
 //            foutC <<"单目约束"<<"遍历kf:"<<iKF<< ",点id:"<< ix<<",";
 //            foutC.precision(5);
 //            foutC << A.m_F<< ","<<A.m_a<< ","<< A.m_b << std::endl;
+//              std::cout <<"单目"<< A.m_F<< ","<<A.m_a<< ","<< A.m_b << std::endl;
         }
         KF.m_Axps[ix].m_Sadd += dadd;//将左右目约束以及左目和平均场景的约束加入H|-b
         KF.m_Axs[ix].m_Sadd += dadd;

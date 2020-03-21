@@ -21,7 +21,9 @@ if(USE_ROS)
          )
  include_directories(
          ${catkin_INCLUDE_DIRS}
+
  )
+
 endif(USE_ROS)
 
 # =========================
@@ -35,6 +37,7 @@ if(USE_ROS)
          IBA
          OF
          LC
+         MONOinit
          ${catkin_LIBRARIES}
          )
  if (CVD_FOUND)

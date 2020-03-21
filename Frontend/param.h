@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include<Eigen/StdVector>
 namespace XP {
 
 class ParamBase {

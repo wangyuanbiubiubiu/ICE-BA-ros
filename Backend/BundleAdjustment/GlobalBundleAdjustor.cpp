@@ -19,7 +19,7 @@
 //#endif
 #include "GlobalBundleAdjustor.h"
 #include "IBA_internal.h"
-
+#include <glog/logging.h>
 #ifdef CFG_DEBUG
 #ifdef CFG_DEBUG_EIGEN
 #define GBA_DEBUG_EIGEN
@@ -30,7 +30,7 @@
 #ifdef CFG_GROUND_TRUTH
 //#define GBA_DEBUG_GROUND_TRUTH_MEASUREMENT
 #endif
-#define GBA_DEBUG_VIEW
+//#define GBA_DEBUG_VIEW
 #ifdef GBA_DEBUG_VIEW
 #include "ViewerIBA.h"
 #endif
@@ -51,6 +51,8 @@ static const FTR::Factor::Full::Source::A *g_Ax = NULL;
 static const FTR::Factor::Full::Source::M1 *g_Mx1 = NULL;
 static const FTR::Factor::Full::Source::M2 *g_Mx2 = NULL;
 #endif
+
+DECLARE_string(gba_result_path);
 
 void GlobalBundleAdjustor::Initialize(IBA::Solver *solver, const int serial, const int verbose,
                                       const int debug, const int history) {
@@ -719,6 +721,27 @@ void GlobalBundleAdjustor::Run() {
     }
     m_hists.push_back(hist);
   }
+#endif
+
+    //#if 0
+#if 1
+//    UT::PrintSeparator();
+//    UT::Print("Time = %f\n", m_ts[TM_TOTAL].GetAverageMilliseconds() );
+//
+    if(!FLAGS_gba_result_path.empty())
+    {
+        std::ofstream foutC("/home/wya/odom_paper/gbatime.txt", std::ios::app);
+        foutC.setf(std::ios::fixed, std::ios::floatfield);
+        foutC.precision(6);
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_TOTAL:"<<m_ts[TM_TOTAL].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_SYNCHRONIZE:"<<m_ts[TM_SYNCHRONIZE].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_FACTOR:"<<m_ts[TM_FACTOR].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_SCHUR_COMPLEMENT:"<<m_ts[TM_SCHUR_COMPLEMENT].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_CAMERA:"<<m_ts[TM_CAMERA].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_DEPTH:"<<m_ts[TM_DEPTH].GetAverageMilliseconds()<<std::endl;
+        foutC<<m_KFs.back().m_T.m_iFrm<<" TM_DEPTH:"<<m_ts[TM_UPDATE].GetAverageMilliseconds()<<std::endl;
+        foutC.close();
+    }
 #endif
 #ifdef GBA_DEBUG_VIEW
   if (viewer) {

@@ -36,7 +36,7 @@ float FTR_VARIANCE_EPSILON                      = 0.01f;     // 0.1^2
 
   int FTR_UNDIST_MAX_ITERATIONS                 = 10; //10
 float FTR_UNDIST_CONVERGE                       = 1.0e-10f;     // 0.1^2
-  int FTR_UNDIST_LUT_SIZE                       = 11;
+  int FTR_UNDIST_LUT_SIZE                       = 21;
   int FTR_UNDIST_DL_MAX_ITERATIONS              = 10;
 float FTR_UNDIST_DL_RADIUS_INITIAL              = 1.0f;      // 1.0^2
 float FTR_UNDIST_DL_RADIUS_MIN                  = 1.0e-10f;  // 0.00001^2

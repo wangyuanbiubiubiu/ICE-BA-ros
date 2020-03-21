@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 #include "LocalMap.h"
-
+#include<Eigen/StdVector>
 class LocalBundleAdjustor;
 class GlobalBundleAdjustor;
 class ViewerIBA;
@@ -45,6 +45,8 @@ class Solver {
   void Start();
   void Stop();
 
+    void MonoPushCurrentFrame(const CurrentFrame &CF, const KeyFrame *KF = NULL,
+                          const bool serial = false);
   /*
    * @brief Call for each current frame.
    * @param[in] CF current frame
@@ -65,7 +67,7 @@ class Solver {
   bool PushRelativeConstraint(const RelativeConstraint &Z);
 
     void Wakeup_GBA();
-
+    void Wakeup_LBA();
 #ifdef CFG_GROUND_TRUTH
   void PushIMUMeasurementsGT(const CurrentFrame &CF);
   void EstimateMotionGT(std::vector<CameraIMUState> *XsGT);

@@ -315,6 +315,8 @@ bool Triangulate(const float w/*1*/, const int N/*0 or 1*/, const Measurement *z
   if (eAvg) {
     *eAvg = ComputeError(N, zs, *d);//计算平均误差,这次不是马氏距离了,是欧式距离
   }
+
+//  std::cout<<"Triangulate"<<*eAvg<<std::endl;
   return d->Valid();
 }
 
@@ -407,12 +409,18 @@ bool Triangulateinit(const float w/*1*/, const int N/*0 or 1*/, const Measuremen
 //                G_bearing_vectors.col(1) = T_G_right_C.block<3,3>(0,0) * f_r_eigen.cast<double>();
 //                p_G_C_vector.col(1) = T_G_right_C.block<3,1>(0,3);
 //                if(linearTriangulateFromNViews(G_bearing_vectors, p_G_C_vector, p_G_fi))
-//                    depth = (float)p_G_fi[2]; //因为现在左相机就是世界坐标系
+//                {
+//                    if((1.0f/depth) > DEPTH_MIN && (1.0f/depth) < DEPTH_MAX)
+//                        depth = (float)p_G_fi[2]; //因为现在左相机就是世界坐标系
+//                    else
+//                        depth = 5.0f;
+//                }
 //                else
 //                    depth = 5.0f;
 //
 //
 //            }
+//            std::cout<<"深度:"<<depth<<std::endl;
             d->Initialize(1.0f/depth);
 
 
@@ -571,7 +579,10 @@ bool Triangulateinit(const float w/*1*/, const int N/*0 or 1*/, const Measuremen
         d->s2() = DEPTH_VARIANCE_EPSILON + d->s2() * w;
         if (eAvg) {
             *eAvg = ComputeError(N, zs, *d);//计算平均误差,这次不是马氏距离了,是欧式距离
+
         }
+//        std::cout<<"Triangulateinit"<<*eAvg<<std::endl;
+//        std::cout<<*eAvg<<std::endl;
         return d->Valid();
     }
 
@@ -587,24 +598,6 @@ bool Triangulateinit(const float w/*1*/, const int N/*0 or 1*/, const Measuremen
             return false;
         }
 
-        // 1.) Formulate the geometrical problem
-        // p_G_P + alpha[i] * t_G_bv[i] = p_G_C[i]      (+ alpha intended)
-        // as linear system Ax = b, where
-        // x = [p_G_P; alpha[0]; alpha[1]; ... ] and b = [p_G_C[0]; p_G_C[1]; ...]
-        //
-        // 2.) Apply the approximation AtAx = Atb
-        // AtA happens to be composed of mostly more convenient blocks than A:
-        // - Top left = N * Eigen::Matrix3d::Identity()
-        // - Top right and bottom left = t_G_bv
-        // - Bottom right = t_G_bv.colwise().squaredNorm().asDiagonal()
-
-        // - Atb.head(3) = p_G_C.rowwise().sum()
-        // - Atb.tail(N) = columnwise dot products between t_G_bv and p_G_C
-        //               = t_G_bv.cwiseProduct(p_G_C).colwise().sum().transpose()
-        //
-        // 3.) Apply the Schur complement to solve after p_G_P only
-        // AtA = [E B; C D] (same blocks as above) ->
-        // (E - B * D.inverse() * C) * p_G_P = Atb.head(3) - B * D.inverse() * Atb.tail(N)
 
         const Eigen::MatrixXd BiD = t_G_bv *
                                     t_G_bv.colwise().squaredNorm().asDiagonal().inverse();

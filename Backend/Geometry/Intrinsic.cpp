@@ -25,7 +25,8 @@
 #endif
 #define FTR_UNDIST_DOG_LEG
 
-void Intrinsic::UndistortionMap::Set(const Intrinsic &K) {
+void Intrinsic::UndistortionMap::Set(const Intrinsic &K)
+{
   const float sx = float(FTR_UNDIST_LUT_SIZE - 1) / K.w();
   const float sy = float(FTR_UNDIST_LUT_SIZE - 1) / K.h();
   m_fx = sx * K.k().m_fx; m_fy = sy * K.k().m_fy;//将图片缩放到FTR_UNDIST_LUT_SIZE×FTR_UNDIST_LUT_SIZEsize,然后进行畸变表的存储
@@ -50,10 +51,19 @@ void Intrinsic::UndistortionMap::Set(const Intrinsic &K) {
     } else {
       xn = xd * v;
     }
-    if (!K.Undistort(xd, &xn, NULL, NULL, true)) {
-        continue;
-//      exit(0);
+    if(!K.m_fishEye)
+    {
+        if (!K.Undistort(xd,xd, &xn, NULL, NULL, true))
+        {
+            continue;
+        }
     }
+    else
+    {
+        xn = Getfisheye(xd,K.m_k.m_ds);
+    }
+//      exit(0);
+
     v = sqrtf(xn.SquaredLength() / xd.SquaredLength());//大概的一个畸变比例
 //#ifdef CFG_DEBUG
 #if 0
@@ -88,9 +98,11 @@ void Intrinsic::UndistortionMap::Set(const Intrinsic &K) {
   UT::PrintSeparator();
 #endif
 }
+
+
 //去畸变,如果没有UndistortionMap畸变对照表的时候,需要将图片缩到FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做畸变对照。
 //如果没有UndistortionMap输入或者生成UndistortionMap的时候,会用dogleg方法进行迭代求解。如果用了UndistortionMap作为初值的话,就用G-N求解即可
-bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D *xn/*待优化变量,最终反映的是无失真归一化坐标*/,
+bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/,const Point2D &xd_un, Point2D *xn/*待优化变量,最终反映的是无失真归一化坐标*/,
         LA::AlignedMatrix2x2f *JT/*畸变的雅克比J.t*/,UndistortionMap *UM/*畸变对应表*/, const bool initialized) const {
 #ifdef CFG_DEBUG
   if (FishEye()) {
@@ -99,6 +111,7 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
 #endif
   if (!NeedUndistortion()) {//如果不需要去畸变
     *xn = xd;
+
     JT->MakeIdentity();
     return true;
   }
@@ -107,25 +120,53 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
   LA::SymmetricMatrix2x2f A;
   LA::AlignedMatrix2x2f AI;
   LA::Vector2f e, dx;//e就是残差
+    bool success;
 #ifdef FTR_UNDIST_DOG_LEG
   float dx2GN/*G-N解出的步长的欧式距离*/, dx2GD/*pU点的欧式距离*/, delta2/*信赖域半径*/, beta;
   LA::Vector2f dxGN/*G-N解出的增量*/, dxGD/*pU点*/;
-  bool update, converge ,success;
+  bool update, converge ;
     success = false;
 #endif
-  if (UM) {//如果预先做了畸变表,然么就用这里的畸变作为初值
-    if (UM->Empty()) {
-      UM->Set(*this);//如果没有畸变表，需要生成,因为只是做初值,所以就用FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做就好了,
-      // key是畸变的像素坐标,value是无畸变的归一化坐标的值
+
+    if (UM )
+    {
+        *xn = xd_un;
+    } else if(!initialized)
+    {
+        *xn = xd_un;
     }
-    *xn = UM->Get(xd);//用畸变表里对应的无畸变的归一化坐标作为初值
-//#ifdef CFG_DEBUG
-#if 0
-    *xn = xd * xn->x();
-#endif
-  } else if (!initialized) {
-    *xn = xd;//给个初值
-  }
+//    if(m_fishEye)
+//    {
+//        if (UM ) {//如果预先做了畸变表,然么就用这里的畸变作为初值
+//            if (UM->Empty()) {
+//                UM->Set(*this);//如果没有畸变表，需要生成,因为只是做初值,所以就用FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做就好了,
+//                // key是畸变的像素坐标,value是无畸变的归一化坐标的值
+//            }
+//            *xn = UM->Get(xd);//用畸变表里对应的无畸变的归一化坐标作为初值
+////#ifdef CFG_DEBUG
+//#if 0
+//            *xn = xd * xn->x();
+//#endif
+//        } else if (!initialized) {
+//            *xn = xd;//给个初值
+//        }
+//    }
+//    else
+//    {
+//        if (UM ) {//如果预先做了畸变表,然么就用这里的畸变作为初值
+//            if (UM->Empty()) {
+//                UM->Set(*this);//如果没有畸变表，需要生成,因为只是做初值,所以就用FTR_UNDIST_LUT_SIZE*FTR_UNDIST_LUT_SIZE去做就好了,
+//                // key是畸变的像素坐标,value是无畸变的归一化坐标的值
+//            }
+//            *xn = UM->Getfisheye(xd,m_k.m_ds);//用畸变表里对应的无畸变的归一化坐标作为初值
+////#ifdef CFG_DEBUG
+//#if 0
+//            *xn = xd * xn->x();
+//#endif
+//        } else if (!initialized) {
+//            *xn = xd;//给个初值
+//        }
+//    }
 #if defined FTR_UNDIST_VERBOSE && FTR_UNDIST_VERBOSE == 1
   const Point2D _xd = m_k.GetNormalizedToImage(xd);
   UT::Print("x = %03d %03d", int(_xd.x() + 0.5f), int(_xd.y() + 0.5f));
@@ -139,6 +180,12 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
 #endif
   for (int iIter = 0; iIter < FTR_UNDIST_MAX_ITERATIONS; ++iIter)
   {//最大迭代10次
+//      if(iIter == FTR_UNDIST_MAX_ITERATIONS -1 && m_fishEye && dx2 > 0.1)
+//      {
+//          *xn = UM->Getfisheye(xd,m_k.m_ds);
+//          std::cout<<"来了么"<<dx2<<std::endl;
+//      }
+
 #if 0
 //#if 1
     if (UT::Debugging()) {
@@ -364,13 +411,7 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
 #endif
     {
       *xn += dx;
-//      std::cout<<"iIter:"<<iIter<<" "<<"dx2:"<<dx2<<std::endl;
-          const double chi2 = e.SquaredLength();;
-          if (chi2 < dx2Conv * 1e5) {
-              success = true;
-          }
-      if (dx2 < dx2Conv) {//收敛
-          success = true;
+      if (dx2 < dx2Conv) {
         break;
       }
     }
@@ -383,6 +424,10 @@ bool Intrinsic::Undistort(const Point2D &xd/*归一化坐标前两维*/, Point2D
     GetNormalizedToImage(xnBkp).Print(str + "x = ", false, false);
     UT::Print("  e = %f  dx = %f  beta = %f\n", sqrtf(F * fxy()), sqrtf(dx2 * fxy()), beta);
 #endif
+  }
+  if(dx2 > 0.1)
+  {
+      std::cout<<dx2<<std::endl;
   }
   if (JT) {
     J.GetTranspose(*JT);

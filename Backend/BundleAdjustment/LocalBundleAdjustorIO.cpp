@@ -1150,173 +1150,173 @@ void LocalBundleAdjustor::ComputePriorStatisticJoint(const CameraPrior::Joint &Z
 
 LocalBundleAdjustor::MS
 LocalBundleAdjustor::ComputeMarginalizationStatistic(const LA::AlignedVectorXf *x) {
-  MS _MS;
-  const int Npg = 2, Npc = 6, Npm = 9;
-  const int Npgm = Npg + (m_MH.m_FdKF.Valid() ? Npm : 0), Npcm = Npc + Npm;
-#ifdef CFG_DEBUG
-  UT_ASSERT(!m_Zp.m_iKFs.empty() && m_Zp.m_iKFs.back() == INT_MAX);
-#endif
-  const int Nk = static_cast<int>(m_Zp.m_iKFs.size()) - 1, Npk = Nk * Npc, Npgmk = Npgm + Npk;
-  const int Nc = static_cast<int>(m_MH.m_Fxs.size());
-  UT_ASSERT(m_MH.m_b.Size() == Npgmk + Nc * Npcm);
-#ifdef CFG_DEBUG
-  if (x) {
-    UT_ASSERT(x->Size() == m_MH.m_b.Size());
-  }
-#endif
-  int ip;
-  const LA::Vector2f *xg = (LA::Vector2f *) (x ? x->Data() : NULL);
-  if (x) {
-    _MS.m_Fp = m_MH.m_Fp.GetCost(xg);
-    ip = Npg;
-    if (m_MH.m_FdKF.Valid()) {
-      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector9f *) (x->Data() + ip));
-      ip += Npm;
-    }
-    for (int ik = 0; ik < Nk; ++ik, ip += Npc) {
-      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector6f *) (x->Data() + ip));
-    }
-    for (int ic = 0; ic < Nc; ++ic, ip += Npcm) {
-      const LA::Vector9f *xm = (LA::Vector9f *) (x->Data() + ip + Npc);
-      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector6f *) (x->Data() + ip), xm);
-      if (ic == 0 && m_MH.m_FdKF.Invalid()) {
-        _MS.m_Fp += m_MH.m_Fp.GetCost(xm);
-      }
-    }
-#ifdef CFG_DEBUG
-    UT_ASSERT(ip == x->Size());
-#endif
-  } else {
-    _MS.m_Fp = 0.0f;
-  }
-
-  IMU::Delta::Error ed;
-  CameraPrior::Element::EM xm[2];
-  CameraPrior::Element::EC xc[2];
-  const LA::AlignedVector3f *eds1 = &ed.m_er;
-  float *eds2 = &_MS.m_er;
-  if (x) {
-    ip = Npg;
-    if (m_MH.m_FdKF.Valid()) {
-      xm[0].Set(x->Data() + ip);
-      ip += Npm;
-    }
-    ip += Npk;
-    xc[1].Set(x->Data() + ip);   ip += Npc;
-    xm[1].Set(x->Data() + ip);   ip += Npm;
-  }
-  if (m_MH.m_FdKF.Valid()) {
-    if (x) {
-      _MS.m_Fd = m_MH.m_FdKF.GetCost(BA_WEIGHT_IMU, *xg, xm[0], xc[1], xm[1], &ed);
-    } else {
-      _MS.m_Fd = m_MH.m_FdKF.GetCost(BA_WEIGHT_IMU, &ed);
-    }
-    for (int i = 0; i < 5; ++i) {
-      eds2[i] = sqrtf(eds1[i].SquaredLength());
-    }
-  } else {
-    _MS.m_Fd = 0.0f;
-    for (int i = 0; i < 5; ++i) {
-      eds2[i] = 0.0f;
-    }
-  }
-  const int NdLF = m_MH.m_FdsLF.Size();
-#ifdef CFG_DEBUG
-  UT_ASSERT(NdLF == Nc - 1);
-#endif
-  for (int i = 0, r1 = 0, r2 = 1; i < NdLF; ++i) {
-    if (x) {
-      UT_SWAP(r1, r2);
-      xc[r2].Set(x->Data() + ip);  ip += Npc;
-      xm[r2].Set(x->Data() + ip);  ip += Npm;
-      _MS.m_Fd += m_MH.m_FdsLF[i].GetCost(BA_WEIGHT_IMU, *xg, xc[r1], xm[r1], xc[r2], xm[r2], &ed);
-    } else {
-      _MS.m_Fd += m_MH.m_FdsLF[i].GetCost(BA_WEIGHT_IMU, &ed);
-    }
-    for (int i = 0; i < 5; ++i) {
-      eds2[i] += sqrtf(eds1[i].SquaredLength());
-    }
-  }
-  const float s = UT::Inverse(static_cast<float>((m_MH.m_FdKF.Valid() ? 1 : 0) + NdLF));
-  for (int i = 0; i < 5; ++i) {
-    eds2[i] *= s;
-  }
-  _MS.m_er *= UT_FACTOR_RAD_TO_DEG;
-  _MS.m_ebw *= UT_FACTOR_RAD_TO_DEG;
-
-  std::vector<int> &iKF2k = m_idxsTmp1;
-  if (x) {
-    const int nKFs = static_cast<int>(m_KFs.size());
-    iKF2k.assign(nKFs, -1);
-    m_xcsP.Resize(Nk);
-    ip = Npgm;
-    for (int ik = 0; ik < Nk; ++ik, ip += Npc) {
-      iKF2k[m_Zp.m_iKFs[ik]] = ik;
-      m_xcsP[ik].Set(x->Data() + ip);
-    }
-  }
-
-  _MS.m_Fx = 0.0f;
-  _MS.m_ex = 0.0f;
-  LA::ProductVector6f xcz;
-  if (x) {
-    ip = Npgmk;
-  }
-  FTR::Error ex;
-  int Nx = 0;
-  const float eps = 0.0f;
-  const float epsd = UT::Inverse(BA_VARIANCE_MAX_DEPTH, BA_WEIGHT_FEATURE, eps);
-  for (int ic = 0; ic < Nc; ++ic) {
-    if (x) {
-      xcz.Set(x->Data() + ip);
-      ip += Npcm;
-    }
-    const MH::Visual &Fx = m_MH.m_Fxs[ic];
-    const int Nz = Fx.m_Fz.Size();
-    for (int iz = 0; iz < Nz; ++iz) {
-      _MS.m_Fx += Fx.m_Fz.GetCost(iz, x ? &xcz : NULL, &ex, epsd);
-#ifdef CFG_STEREO
-      if (ex.m_e.Valid()) {
-        _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
-        ++Nx;
-      }
-      if (ex.m_er.Valid()) {
-        _MS.m_ex += sqrtf(ex.m_er.SquaredLength() * m_K.m_Kr.fxy());
-        ++Nx;
-      }
-#else
-      _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
-      ++Nx;
-#endif
-    }
-    const int NXZ = static_cast<int>(Fx.m_Fxzs.size());
-    for (int iXZ = 0; iXZ < NXZ; ++iXZ) {
-      const MH::Visual::XZ &Fxz = Fx.m_Fxzs[iXZ];
-      const LA::ProductVector6f *xcx = x ? &m_xcsP[iKF2k[Fxz.m_iKF]] : NULL;
-      const int Nxz = Fxz.Size();
-      for (int ixz = 0; ixz < Nxz; ++ixz) {
-        _MS.m_Fx += Fxz.GetCost(ixz, xcx, &xcz, &ex, epsd);
-#ifdef CFG_STEREO
-        if (ex.m_e.Valid()) {
-          _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
-          ++Nx;
-        }
-        if (ex.m_er.Valid()) {
-          _MS.m_ex += sqrtf(ex.m_er.SquaredLength() * m_K.m_Kr.fxy());
-          ++Nx;
-        }
-#else
-        _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
-        ++Nx;
-#endif
-      }
-    }
-  }
-  if (Nx > 0) {
-    _MS.m_ex /= Nx;
-  }
-  _MS.m_F = _MS.m_Fp + _MS.m_Fd + _MS.m_Fx;
-  return _MS;
+//  MS _MS;
+//  const int Npg = 2, Npc = 6, Npm = 9;
+//  const int Npgm = Npg + (m_MH.m_FdKF.Valid() ? Npm : 0), Npcm = Npc + Npm;
+//#ifdef CFG_DEBUG
+//  UT_ASSERT(!m_Zp.m_iKFs.empty() && m_Zp.m_iKFs.back() == INT_MAX);
+//#endif
+//  const int Nk = static_cast<int>(m_Zp.m_iKFs.size()) - 1, Npk = Nk * Npc, Npgmk = Npgm + Npk;
+//  const int Nc = static_cast<int>(m_MH.m_Fxs.size());
+//  UT_ASSERT(m_MH.m_b.Size() == Npgmk + Nc * Npcm);
+//#ifdef CFG_DEBUG
+//  if (x) {
+//    UT_ASSERT(x->Size() == m_MH.m_b.Size());
+//  }
+//#endif
+//  int ip;
+//  const LA::Vector2f *xg = (LA::Vector2f *) (x ? x->Data() : NULL);
+//  if (x) {
+//    _MS.m_Fp = m_MH.m_Fp.GetCost(xg);
+//    ip = Npg;
+//    if (m_MH.m_FdKF.Valid()) {
+//      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector9f *) (x->Data() + ip));
+//      ip += Npm;
+//    }
+//    for (int ik = 0; ik < Nk; ++ik, ip += Npc) {
+//      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector6f *) (x->Data() + ip));
+//    }
+//    for (int ic = 0; ic < Nc; ++ic, ip += Npcm) {
+//      const LA::Vector9f *xm = (LA::Vector9f *) (x->Data() + ip + Npc);
+//      _MS.m_Fp += m_MH.m_Fp.GetCost((LA::Vector6f *) (x->Data() + ip), xm);
+//      if (ic == 0 && m_MH.m_FdKF.Invalid()) {
+//        _MS.m_Fp += m_MH.m_Fp.GetCost(xm);
+//      }
+//    }
+//#ifdef CFG_DEBUG
+//    UT_ASSERT(ip == x->Size());
+//#endif
+//  } else {
+//    _MS.m_Fp = 0.0f;
+//  }
+//
+//  IMU::Delta::Error ed;
+//  CameraPrior::Element::EM xm[2];
+//  CameraPrior::Element::EC xc[2];
+//  const LA::AlignedVector3f *eds1 = &ed.m_er;
+//  float *eds2 = &_MS.m_er;
+//  if (x) {
+//    ip = Npg;
+//    if (m_MH.m_FdKF.Valid()) {
+//      xm[0].Set(x->Data() + ip);
+//      ip += Npm;
+//    }
+//    ip += Npk;
+//    xc[1].Set(x->Data() + ip);   ip += Npc;
+//    xm[1].Set(x->Data() + ip);   ip += Npm;
+//  }
+//  if (m_MH.m_FdKF.Valid()) {
+//    if (x) {
+//      _MS.m_Fd = m_MH.m_FdKF.GetCost(BA_WEIGHT_IMU, *xg, xm[0], xc[1], xm[1], &ed);
+//    } else {
+//      _MS.m_Fd = m_MH.m_FdKF.GetCost(BA_WEIGHT_IMU, &ed);
+//    }
+//    for (int i = 0; i < 5; ++i) {
+//      eds2[i] = sqrtf(eds1[i].SquaredLength());
+//    }
+//  } else {
+//    _MS.m_Fd = 0.0f;
+//    for (int i = 0; i < 5; ++i) {
+//      eds2[i] = 0.0f;
+//    }
+//  }
+//  const int NdLF = m_MH.m_FdsLF.Size();
+//#ifdef CFG_DEBUG
+//  UT_ASSERT(NdLF == Nc - 1);
+//#endif
+//  for (int i = 0, r1 = 0, r2 = 1; i < NdLF; ++i) {
+//    if (x) {
+//      UT_SWAP(r1, r2);
+//      xc[r2].Set(x->Data() + ip);  ip += Npc;
+//      xm[r2].Set(x->Data() + ip);  ip += Npm;
+//      _MS.m_Fd += m_MH.m_FdsLF[i].GetCost(BA_WEIGHT_IMU, *xg, xc[r1], xm[r1], xc[r2], xm[r2], &ed);
+//    } else {
+//      _MS.m_Fd += m_MH.m_FdsLF[i].GetCost(BA_WEIGHT_IMU, &ed);
+//    }
+//    for (int i = 0; i < 5; ++i) {
+//      eds2[i] += sqrtf(eds1[i].SquaredLength());
+//    }
+//  }
+//  const float s = UT::Inverse(static_cast<float>((m_MH.m_FdKF.Valid() ? 1 : 0) + NdLF));
+//  for (int i = 0; i < 5; ++i) {
+//    eds2[i] *= s;
+//  }
+//  _MS.m_er *= UT_FACTOR_RAD_TO_DEG;
+//  _MS.m_ebw *= UT_FACTOR_RAD_TO_DEG;
+//
+//  std::vector<int> &iKF2k = m_idxsTmp1;
+//  if (x) {
+//    const int nKFs = static_cast<int>(m_KFs.size());
+//    iKF2k.assign(nKFs, -1);
+//    m_xcsP.Resize(Nk);
+//    ip = Npgm;
+//    for (int ik = 0; ik < Nk; ++ik, ip += Npc) {
+//      iKF2k[m_Zp.m_iKFs[ik]] = ik;
+//      m_xcsP[ik].Set(x->Data() + ip);
+//    }
+//  }
+//
+//  _MS.m_Fx = 0.0f;
+//  _MS.m_ex = 0.0f;
+//  LA::ProductVector6f xcz;
+//  if (x) {
+//    ip = Npgmk;
+//  }
+//  FTR::Error ex;
+//  int Nx = 0;
+//  const float eps = 0.0f;
+//  const float epsd = UT::Inverse(BA_VARIANCE_MAX_DEPTH, BA_WEIGHT_FEATURE, eps);
+//  for (int ic = 0; ic < Nc; ++ic) {
+//    if (x) {
+//      xcz.Set(x->Data() + ip);
+//      ip += Npcm;
+//    }
+//    const MH::Visual &Fx = m_MH.m_Fxs[ic];
+//    const int Nz = Fx.m_Fz.Size();
+//    for (int iz = 0; iz < Nz; ++iz) {
+//      _MS.m_Fx += Fx.m_Fz.GetCost(iz, x ? &xcz : NULL, &ex, epsd);
+//#ifdef CFG_STEREO
+//      if (ex.m_e.Valid()) {
+//        _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
+//        ++Nx;
+//      }
+//      if (ex.m_er.Valid()) {
+//        _MS.m_ex += sqrtf(ex.m_er.SquaredLength() * m_K.m_Kr.fxy());
+//        ++Nx;
+//      }
+//#else
+//      _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
+//      ++Nx;
+//#endif
+//    }
+//    const int NXZ = static_cast<int>(Fx.m_Fxzs.size());
+//    for (int iXZ = 0; iXZ < NXZ; ++iXZ) {
+//      const MH::Visual::XZ &Fxz = Fx.m_Fxzs[iXZ];
+//      const LA::ProductVector6f *xcx = x ? &m_xcsP[iKF2k[Fxz.m_iKF]] : NULL;
+//      const int Nxz = Fxz.Size();
+//      for (int ixz = 0; ixz < Nxz; ++ixz) {
+//        _MS.m_Fx += Fxz.GetCost(ixz, xcx, &xcz, &ex, epsd);
+//#ifdef CFG_STEREO
+//        if (ex.m_e.Valid()) {
+//          _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
+//          ++Nx;
+//        }
+//        if (ex.m_er.Valid()) {
+//          _MS.m_ex += sqrtf(ex.m_er.SquaredLength() * m_K.m_Kr.fxy());
+//          ++Nx;
+//        }
+//#else
+//        _MS.m_ex += sqrtf(ex.m_e.SquaredLength() * m_K.m_K.fxy());
+//        ++Nx;
+//#endif
+//      }
+//    }
+//  }
+//  if (Nx > 0) {
+//    _MS.m_ex /= Nx;
+//  }
+//  _MS.m_F = _MS.m_Fp + _MS.m_Fd + _MS.m_Fx;
+//  return _MS;
 }
 
 void LocalBundleAdjustor::AssertConsistency(const bool chkFlag, const bool chkSchur) {

@@ -2845,7 +2845,7 @@ void ORBextractor::detect(const cv::Mat& image,
 
   if (use_fast_)
   {//默认用这个
-      bool USE_Old_Orb = false; //by wya, I use ORB-slam2 code
+      bool USE_Old_Orb = true; //by wya, I use ORB-slam2 code
     // perform ORB-SLAM version FAST detection
     if(!USE_Old_Orb)
         ComputeKeyPointsOctTree(&allKeypoints); //ORB-SLAM2,使用八叉树的方式计算每层图像的特征点以及响应和方向并进行分配

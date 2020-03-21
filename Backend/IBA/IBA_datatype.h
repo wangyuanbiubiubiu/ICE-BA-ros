@@ -111,6 +111,7 @@ struct MapPointMeasurement {
         ;
   }
   Point2D x;//特征点的像素坐标
+  Point2D x_un;//特征点的无畸变归一化坐标
 #ifdef CFG_STEREO
 //#if 1
   ubyte right;//是否是右目相机看到的地图点
@@ -146,6 +147,7 @@ struct CurrentFrame {
 #ifdef CFG_STEREO
 //#if 1
   std::string fileNameRight;
+
 #endif
 };
 

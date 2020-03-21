@@ -29,13 +29,13 @@ typedef float PCG_TYPE;
 #define CFG_CAMERA_PRIOR_DOUBLE
 //#define CFG_CAMERA_PRIOR_REORDER
 //#define CFG_HANDLE_SCALE_JUMP
-#define CFG_CHECK_REPROJECTION
+//#define CFG_CHECK_REPROJECTION
 
 #define CFG_STEREO
 #define CFG_SERIAL
 #define CFG_VERBOSE
-#define CFG_HISTORY
-#define CFG_GROUND_TRUTH
+//#define CFG_HISTORY
+//#define CFG_GROUND_TRUTH
 #ifdef WIN32
 //#define CFG_DEBUG
 #else

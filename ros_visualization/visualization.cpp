@@ -128,6 +128,7 @@ void pubTrackImage(const cv::Mat &cur_l_img, const cv::Mat &cur_r_img ,std::vect
             cv::Point2f rightPt = stereo_matches[j].second;
             rightPt.x += cols;//因为拼接到一起所以右图特征点x坐标应该加上左图长度
             cv::circle(imTrack, rightPt, 2, cv::Scalar(0, 255, 0), 2);
+//            line(imTrack, leftPt, rightPt, cv::Scalar(255, 90, 90), 2);
 
         }
     }
@@ -154,7 +155,10 @@ void pubTrackImage(const cv::Mat &cur_l_img, const cv::Mat &cur_r_img ,std::vect
         else
             curPt_iter++;
     }
-
+    for (size_t j = 0; j < cur_l_kp.size(); j++)
+    {
+        cv::circle(imTrack, cur_l_kp[j].pt, 2, cv::Scalar(0, 0, 255 ), 2);
+    }
     for (int i = 0; i < LK_matches.size(); ++i) {
         cv::arrowedLine(imTrack, LK_matches[i].second,
                         LK_matches[i].first, cv::Scalar(0, 255, 0), 1, 8, 0, 0.2);
@@ -248,6 +252,8 @@ void pubTF(const Eigen::Matrix4d & Twc0, double t)
     br.sendTransform(tf::StampedTransform(transform, header.stamp, "body", "camera"));
 
 }
+
+
 
 void pubLatestCameraPose(const Eigen::Matrix4d & Twc0, const Eigen::Vector3d &V, double t)
 {

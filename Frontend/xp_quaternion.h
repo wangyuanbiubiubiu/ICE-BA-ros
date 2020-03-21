@@ -20,6 +20,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <iostream>
+#include<Eigen/StdVector>
 namespace XP {
 //JPL格式的四元数,具体看Indirect Kalman Filter for 3D Attitude Estimation
 class XpQuaternion : public Eigen::Vector4f {

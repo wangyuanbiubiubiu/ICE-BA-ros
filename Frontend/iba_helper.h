@@ -19,7 +19,7 @@
 #include "param.h"
 #include "basic_datatype.h"  // for ImuData
 #include <IBA_datatype.h>
-
+#include<Eigen/StdVector>
 namespace XP {
 
 // Helper functions to convert from DuoCalibParam to IBA::Calibration

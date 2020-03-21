@@ -764,7 +764,7 @@ bool ImgFeaturePropagator::PropagateFeatures(
   //算一下SE3的逆,分成R，t存储
     R_r_l_ = T_l_r.topLeftCorner<3, 3>().transpose();
     t_r_l_ = - R_r_l_ * T_l_r.topRightCorner<3, 1>();//if(false)
-    if(cam_left_->distortionType() == "EquidistantDistortion" || cam_right_->distortionType() == "EquidistantDistortion")
+    if(false || (cam_left_->distortionType() == "EquidistantDistortion" || cam_right_->distortionType() == "EquidistantDistortion"))
     {
         std::vector<unsigned char> inlier_markers;
 

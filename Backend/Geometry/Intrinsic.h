@@ -20,6 +20,8 @@
 #include "Table.h"
 #include "AlignedVector.h"
 #include <iostream>
+#include <eigen3/Eigen/Dense>
+#include <eigen3/Eigen/SVD>
 class Intrinsic {
  public:
 
@@ -326,6 +328,8 @@ class Intrinsic {
         //只有没有畸变的时候才不需要去畸变,即8维度全是0
         m_needUndist = m_radial6 != 0 || m_tangential != 0 ||
                        (ds && (ds[0] != 0.0f || ds[1] != 0.0f || ds[4] != 0.0f)) ? 1 : 0;
+        if(m_needUndist)
+            std::cout<<"需要去畸变"<<std::endl;
         if (m_needUndist || fxr != 0.0f || fyr != 0.0f || Rr)
         {
             m_needRect = 1;
@@ -359,10 +363,11 @@ class Intrinsic {
             //Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
             //设置另一目的K矩阵
             Set(m_k.m_fx, m_k.m_fy, _cxr, _cyr);
-            const float _fxr = fxr == 0.0f ? GetRectifiedFocal() : fxr;
-            const float _fyr = fyr == 0.0f ? _fxr : fyr;
+//            const float _fxr = fxr == 0.0f ? GetRectifiedFocal() : fxr;
+//            const float _fxr = fx;
+//            const float _fyr = fyr == 0.0f ? _fxr : fyr;
             //Set(_fxr, _fyr, m_k.m_cx, m_k.m_cy);
-            Set(_fxr, _fyr, _cxr, _cyr);
+//            Set(_fxr, _fyr, _cxr, _cyr);
         } else {
             //不需要取畸变的话
             Set(m_k.m_fx, m_k.m_fy, m_k.m_cx, m_k.m_cy);
@@ -416,7 +421,7 @@ class Intrinsic {
   }
   inline void GetInverseTranspose(LA::AlignedMatrix3x3f &KIT) const { GetTransposeInverse(KIT); }
   inline void GetInverse(Intrinsic &KI) const { KI.Set(fxI(), fyI(), -cx() * fxI(), -cy() * fyI()); }
-//这里没看懂,啥操作
+
   inline float GetRectifiedFocal() const {
     const float xdMax = m_k.m_cx / m_k.m_fx;//主目的内参cx/fx
     const float ydMax = m_k.m_cy / m_k.m_fy;//主目的内参cy/fy
@@ -435,7 +440,7 @@ class Intrinsic {
       case 2: xd.Set(-xdMax,  ydMax); break;
       case 3: xd.Set(-xdMax, -ydMax); break;
       }
-      if (!Undistort(xd, &xn)) {
+      if (!Undistort(xd,xd, &xn)) {
         continue;
       }
 #if 0
@@ -731,8 +736,117 @@ class Intrinsic {
       UT::ImageInterpolateWeight(x - ix1, y - iy1, w);
       UT::ImageInterpolate<float, float>(xn11.x(), xn12.x(), xn21.x(), xn22.x(), w, xn.x());
       UT::ImageInterpolate<float, float>(xn11.y(), xn12.y(), xn21.y(), xn22.y(), w, xn.y());
+
       return xn;
     }
+      inline Point2D Getfisheye(const Point2D &xd, const float *dist) const {//fisheye
+
+          Point2D xn;
+        Eigen::Vector2d p_u{xd.x(),xd.y()};
+          double theta, phi;
+          double tol = 1e-10;
+          double p_u_norm = p_u.norm();
+
+          if (p_u_norm < 1e-10)
+          {
+              phi = 0.0;
+          }
+          else
+          {
+              phi = atan2(p_u(1), p_u(0));
+          }
+
+          int npow = 9;
+          if (dist[3] == 0.0)
+          {
+              npow -= 2;
+          }
+          if (dist[2] == 0.0)
+          {
+              npow -= 2;
+          }
+          if (dist[1] == 0.0)
+          {
+              npow -= 2;
+          }
+          if (dist[0] == 0.0)
+          {
+              npow -= 2;
+          }
+
+          Eigen::MatrixXd coeffs(npow + 1, 1);
+          coeffs.setZero();
+          coeffs(0) = -p_u_norm;
+          coeffs(1) = 1.0;
+
+          if (npow >= 3)
+          {
+              coeffs(3) = dist[0];
+          }
+          if (npow >= 5)
+          {
+              coeffs(5) = dist[1];
+          }
+          if (npow >= 7)
+          {
+              coeffs(7) = dist[2];
+          }
+          if (npow >= 9)
+          {
+              coeffs(9) = dist[3];
+          }
+
+          if (npow == 1)
+          {
+              theta = p_u_norm;
+          }
+          else
+          {
+              // Get eigenvalues of companion matrix corresponding to polynomial.
+              // Eigenvalues correspond to roots of polynomial.
+              Eigen::MatrixXd A(npow, npow);
+              A.setZero();
+              A.block(1, 0, npow - 1, npow - 1).setIdentity();
+              A.col(npow - 1) = - coeffs.block(0, 0, npow, 1) / coeffs(npow);
+
+              Eigen::EigenSolver<Eigen::MatrixXd> es(A);
+              Eigen::MatrixXcd eigval = es.eigenvalues();
+
+              std::vector<double> thetas;
+              for (int i = 0; i < eigval.rows(); ++i)
+              {
+                  if (fabs(eigval(i).imag()) > tol)
+                  {
+                      continue;
+                  }
+
+                  double t = eigval(i).real();
+
+                  if (t < -tol)
+                  {
+                      continue;
+                  }
+                  else if (t < 0.0)
+                  {
+                      t = 0.0;
+                  }
+
+                  thetas.push_back(t);
+              }
+
+              if (thetas.empty())
+              {
+                  theta = p_u_norm;
+              }
+              else
+              {
+                  theta = *std::min_element(thetas.begin(), thetas.end());
+              }
+          }
+          xn.x() = float(sin(theta) * cos(phi) / cos(theta));
+          xn.y() = float(sin(theta) * sin(phi) / cos(theta));
+          return xn;
+      }
   protected:
     float m_fx, m_fy, m_cx, m_cy;//将图片缩放到FTR_UNDIST_LUT_SIZE×FTR_UNDIST_LUT_SIZEsize,所以内参也要响应的调整
     Table<Point2D> m_xns;
@@ -774,7 +888,7 @@ class Intrinsic {
     Distort(xn, &xd);
     return xd;
   }
-  bool Undistort(const Point2D &xd, Point2D *xn, LA::AlignedMatrix2x2f *JT = NULL,
+  bool Undistort(const Point2D &xd,const Point2D &xd_un, Point2D *xn, LA::AlignedMatrix2x2f *JT = NULL,
                  UndistortionMap *UM = NULL, const bool initialized = false) const;
 
  protected:

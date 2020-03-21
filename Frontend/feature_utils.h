@@ -27,6 +27,7 @@
 #include <random>
 #include <vector>
 #include <mutex>
+#include<Eigen/StdVector>
 namespace XP {
 #ifndef __ARM_NEON__
 /******************************************************************************
@@ -190,7 +191,23 @@ class FeatureTrackDetector
                        const int uniform_radius,  // <= 5 means no uniformity suppression
                        const cv::Size& img_size);
 
-
+    bool optical_flow_and_detectVINS(const cv::Mat_<uchar>& mask,
+                                 const cv::Mat& pre_image_orb_feature,
+                                 const std::vector<cv::KeyPoint>& prev_img_kpts,
+                                 int request_feat_num,
+                                 int pyra_level_det,
+                                 int fast_thresh,
+                                 std::vector<cv::KeyPoint>* key_pnts_ptr,
+                                 cv::Mat* orb_feat_ptr = nullptr,
+                                 const bool fisheye = false,
+            // Before OF process, add init_pixel_shift to each (x, y) of
+            // pre_image_keypoints as the initial value
+                                 const cv::Vec2f& init_pixel_shift = cv::Vec2f(0, 0),
+            // provide the following info enables feature location prediction
+                                 const cv::Matx33f* K_ptr = nullptr,
+                                 const cv::Mat_<float>* dist_ptr = nullptr,
+                                 const cv::Matx33f* old_R_new_ptr = nullptr,
+                                 const bool absolute_static = false);
 
   bool optical_flow_and_detect(const cv::Mat_<uchar>& mask,
                                const cv::Mat& pre_image_orb_feature,
@@ -233,6 +250,14 @@ class FeatureTrackDetector
               int fast_thresh,
               std::vector<cv::KeyPoint>* key_pnts_ptr,
               cv::Mat* orb_feat_ptr);
+
+    bool  detectVINS(const cv::Mat& img_in_smooth,
+                     const cv::Mat_<uchar>& mask,
+                     int request_feat_num,
+                     int pyra_level,  // Total pyramid levels, including the base image
+                     int fast_thresh,
+                     std::vector<cv::KeyPoint>* key_pnts_ptr,
+                     cv::Mat* orb_feat_ptr);
 
   inline std::map<int,  FeatureTrack> Get_feature_tracks() {return feature_tracks_map_; }
 
@@ -615,7 +640,17 @@ bool detect_orb_features(const cv::Mat& img_in_raw,
                          FeatureTrackDetector* feat_track_detector = nullptr,
                          float refine_harris_threshold = -1.f);
 
-
+    bool detect_orb_featuresVINS(const cv::Mat& img_in_raw,
+                             const cv::Mat_<uchar>& mask,
+                             int request_feat_num,
+                             int pyra_level,
+                             int fast_thresh,
+                             bool use_fast,  // or TomasShi
+                             int enforce_uniformity_radius,  // less than 5 means no enforcement
+                             std::vector<cv::KeyPoint>* key_pnts_ptr,
+                             cv::Mat* orb_feat_ptr,
+                             FeatureTrackDetector* feat_track_detector = nullptr,
+                             float refine_harris_threshold = -1.f);
 
 
 //// [NOTE] We keep this NON-pyramid general interface to support slave_det_mode = OF
@@ -637,6 +672,22 @@ bool detect_orb_features(const cv::Mat& img_in_raw,
 
 // [NOTE] This is pyramid interface is used by FeatureTrackDetctor
 void propagate_with_optical_flow(const std::vector<cv::Mat>& img_in_smooth_pyramids,
+                                 const cv::Mat_<uchar>& mask,
+                                 const std::vector<cv::Mat>& pre_image_pyramids,
+                                 const cv::Mat& pre_image_orb_feature,
+                                 const std::vector<cv::KeyPoint>& pre_image_keypoints,
+                                 FeatureTrackDetector* feat_track_detector,
+                                 std::vector<cv::KeyPoint>* key_pnts_ptr,
+                                 cv::Mat_<uchar>* mask_with_of_out_ptr,
+                                 cv::Mat* orb_feat_OF_ptr,
+                                 const bool fisheye,
+                                 const cv::Vec2f& init_pixel_shift,
+                                 const cv::Matx33f* K_ptr,
+                                 const cv::Mat_<float>* dist_ptr,
+                                 const cv::Matx33f* old_R_new_ptr,
+                                 const bool absolute_static);
+
+void propagate_with_optical_flowVINS(const std::vector<cv::Mat>& img_in_smooth_pyramids,
                                  const cv::Mat_<uchar>& mask,
                                  const std::vector<cv::Mat>& pre_image_pyramids,
                                  const cv::Mat& pre_image_orb_feature,

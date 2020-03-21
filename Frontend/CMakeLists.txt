@@ -44,6 +44,7 @@ set(HEADERS
         timer.h
         xp_quaternion.h
         ParamsInit.h
+        t265imu.h
         )
 
 set(SOURCES

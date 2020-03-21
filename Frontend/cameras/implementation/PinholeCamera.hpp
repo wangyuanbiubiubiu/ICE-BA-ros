@@ -750,20 +750,30 @@ void PinholeCamera<DISTORTION_T>::backProject4f(
 template<class DISTORTION_T>
 bool PinholeCamera<DISTORTION_T>::backProject(const Eigen::Vector2f & imagePoint,
                                               Eigen::Vector3f * direction) const {
-  // unscale and center
-  Eigen::Vector2f imagePoint2;
-  imagePoint2[0] = (imagePoint[0] - cu_) * one_over_fu_;
-  imagePoint2[1] = (imagePoint[1] - cv_) * one_over_fv_;
-  // undistort
-  Eigen::Vector2f undistortedImagePoint = Eigen::Vector2f::Zero();
-  bool success = distortion_.undistort(imagePoint2, &undistortedImagePoint);
+    // unscale and center
+    Eigen::Vector2f imagePoint2;
+    imagePoint2[0] = (imagePoint[0] - cu_) * one_over_fu_;
+    imagePoint2[1] = (imagePoint[1] - cv_) * one_over_fv_;
+    // undistort
+    Eigen::Vector2f undistortedImagePoint = Eigen::Vector2f::Zero();
+    Eigen::VectorXd  dist_parameters;
+    distortion_.getParameters(dist_parameters);
+    bool success = true;
+    if(dist_parameters[0] != 0.0 && dist_parameters[1] != 0.0)
+    {
+        success = distortion_.undistort(imagePoint2, &undistortedImagePoint);
+        // project 1 into z direction
+        (*direction)[0] = undistortedImagePoint[0];
+        (*direction)[1] = undistortedImagePoint[1];
+        (*direction)[2] = 1.0;
+    } else
+    {
+        (*direction)[0] = imagePoint2[0];
+        (*direction)[1] = imagePoint2[1];
+        (*direction)[2] = 1.0;
+    }
 
-  // project 1 into z direction
-  (*direction)[0] = undistortedImagePoint[0];
-  (*direction)[1] = undistortedImagePoint[1];
-  (*direction)[2] = 1.0;
-
-  return success;
+    return success;
 }
 
 // Back-project acc 2d image point into Euclidean space (direction vector).

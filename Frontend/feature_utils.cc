@@ -320,7 +320,57 @@ struct {
 }  // namespace internal
 //
 
+bool detect_orb_featuresVINS(const cv::Mat& img_in_smooth,//相机图片
+                         const cv::Mat_<uchar>& mask,//图像掩码
+                         int request_feat_num,//最大提取的特征数目
+                         int pyra_level,  // Total pyramid levels, including the base image
+                         int fast_thresh,//fast角点提取阈值
+                         bool use_fast,  // or TomasShi
+                         int enforce_uniformity_radius,  // less than 0 means no enforcement
+                         std::vector<cv::KeyPoint>* key_pnts_ptr,//所有特征点
+                         cv::Mat* orb_feat_ptr,//orb描述子
+                         FeatureTrackDetector* feat_track_detector,//是否要做点管理
+                         float refine_harris_threshold)
+{
+    int HALF_PATCH_SIZE = 15;
+    vector<cv::Point2f> n_pts;
+    cv::goodFeaturesToTrack(img_in_smooth, n_pts, request_feat_num, 0.01, enforce_uniformity_radius, mask);
+    std::vector<int> umax;
+    umax.resize(HALF_PATCH_SIZE + 1);
 
+    int v, v0, vmax = cvFloor(HALF_PATCH_SIZE * sqrt(2.f) / 2 + 1);
+    int vmin = cvCeil(HALF_PATCH_SIZE * sqrt(2.f) / 2);
+    const double hp2 = HALF_PATCH_SIZE*HALF_PATCH_SIZE;
+    //利用圆的方程计算每行像素的u坐标边界（max）
+    for (v = 0; v <= vmax; ++v)
+        umax[v] = cvRound(sqrt(hp2 - v * v));
+
+    // Make sure we are symmetric
+    for (v = HALF_PATCH_SIZE, v0 = 0; v >= vmin; --v) {
+        while (umax[v0] == umax[v0 + 1]) ++v0;
+        umax[v] = v0;
+        ++v0;
+    }
+    key_pnts_ptr->reserve(n_pts.size());
+    for (int i = 0; i < n_pts.size(); i++) {
+        cv::KeyPoint tmp;
+        tmp.pt = n_pts[i];
+        tmp.octave = 0;
+        key_pnts_ptr->push_back(tmp);
+    }
+    ORBextractor::computeOrientation(img_in_smooth, umax, key_pnts_ptr);
+    for (int j = 0; j < key_pnts_ptr->size(); ++j)
+    {
+        if (feat_track_detector) //// 注意,新点的点管理都是在这里做的,如果需要做点轨迹管理的话
+        {
+            //新的特征点被观测到会给它一个全局的id,然后会生成一个关于它的点管理,insert进点管理数据结构feature_tracks_map_中
+            (*key_pnts_ptr)[j].class_id = feat_track_detector->add_new_feature_track((*key_pnts_ptr)[j].pt);
+        } else {
+            (*key_pnts_ptr)[j].class_id = -1;  // Feature track is NOT used.
+        }
+
+    }
+}
 
 //step1在第1层金字塔上提取fast点,算Harris响应
 //step2对提取的点进行过滤,让特征点enforce_uniformity_radius范围点无其他点

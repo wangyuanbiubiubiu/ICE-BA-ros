@@ -4,6 +4,7 @@
 
 #ifndef ICE_BA_PARAMSINIT_H
 #define ICE_BA_PARAMSINIT_H
+
 #include <algorithm>
 #include <string>
 #include <fstream>
@@ -11,6 +12,9 @@
 #include <glog/logging.h>
 #include <gflags/gflags.h>
 #include "PnpPoseEstimator.h"
+#include "t265imu.h"
+#include "estimator/estimator.h"
+LinearInterpolation_buf_t lIP_buf;
 DECLARE_int32(lc_num_ransac_iters);
 DECLARE_bool(lc_nonlinear_refinement_p3p);
 DECLARE_double(lc_ransac_pixel_sigma);
@@ -25,7 +29,7 @@ using std::vector;
 using stereo_Img = std::pair<cv::Mat,cv::Mat>;
 using stereo_Img_info_d = std::pair<double,stereo_Img>;
 using stereo_Img_info_f = std::pair<float,stereo_Img>;
-
+int FOCAL_LENGTH;
 int idx = 1;
 struct Data;
 vector<Data> benchmark;
@@ -34,21 +38,29 @@ int init = 0;
 Eigen::Quaterniond baseRgt;
 Eigen::Vector3d baseTgt;
 tf::Transform trans;
-
+vector<int> Mp_ob_num;
 extern Eigen::Matrix4d T_Cl_Cr_d;
 extern Eigen::Matrix4d Tbc0;
+Eigen::Matrix3d Rbc0;
+Eigen::Vector3d tbc0;
+int control_fre = 0;
 
-std::queue<sensor_msgs::ImuConstPtr> imu_buf;
+int last_kf_iFrm = -1;
+
+std::queue<sensor_msgs::Imu> imu_buf;
 std::queue<sensor_msgs::ImageConstPtr> img0_buf;
 std::queue<sensor_msgs::ImageConstPtr> img1_buf;
 std::queue<stereo_Img_info_d> stereo_buf;
 
 extern std::mutex m_buf,m_syn_buf;
+
 extern std::condition_variable con;
 extern double offset_ts;
 bool set_offset_time = false;
-int MIN_PARALLAX = 20;
+int MIN_PARALLAX = 15;
 std::shared_ptr<vio::cameras::NCameraSystem> Ncamera_ptr;
+
+extern Estimator estimator;
 DECLARE_bool(stereo);
 DECLARE_bool(UseIMU);
 DECLARE_bool(LoopClosure);
@@ -57,11 +69,17 @@ DECLARE_bool(GetGT);
 DECLARE_string(image0_topic);
 DECLARE_string(image1_topic);
 DECLARE_string(imu_topic);
+DECLARE_string(gyr_topic);
+DECLARE_string(acc_topic);
 DECLARE_string(iba_param_path);
 DECLARE_string(dbow3_voc_path);
 DECLARE_string(GT_path);
 DECLARE_string(gba_result_path);
 ///这里就是放一些无用的东西
+cv::Mat mapx1;
+cv::Mat mapy1;
+cv::Mat mapx2;
+cv::Mat mapy2;
 
 //配置文件读取
 void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_param)
@@ -72,7 +90,6 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
     std::vector<double> v_double;
     v_double = config_yaml["body_T_imu"]["data"].as<std::vector<double>>();
     Eigen::Matrix4d b_t_i = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
-
 
     FLAGS_stereo = config_yaml["num_of_cam"].as<int>() == 2;
 
@@ -85,6 +102,8 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
         FLAGS_image1_topic = config_yaml["image1_topic"].as<string>();
     if(FLAGS_UseIMU)
         FLAGS_imu_topic = config_yaml["imu_topic"].as<string>();
+//    FLAGS_gyr_topic = config_yaml["gyr_topic"].as<string>();
+//    FLAGS_acc_topic = config_yaml["acc_topic"].as<string>();
     std::cout<<"image0_topic: "<<FLAGS_image0_topic<<std::endl
              <<"image1_topic: "<<FLAGS_image1_topic<<std::endl
              <<"imu_topic: "<<FLAGS_imu_topic<<std::endl;
@@ -98,12 +117,23 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
     FLAGS_LoopClosure = config_yaml["loop_closure"].as<int>() == 1;
     FLAGS_dbow3_voc_path = config_yaml["dbow3_voc_path"].as<string>();
 
-    if(FLAGS_UseIMU)
+    if(FLAGS_UseIMU)//针对IROS,连续的
     {
+//        IMU_VARIANCE_ACCELERATION_NOISE = config_yaml["acc_n"].as<float>();
+//        IMU_VARIANCE_ACCELERATION_BIAS_WALK =config_yaml["acc_w"].as<float>();
+//        IMU_VARIANCE_GYROSCOPE_NOISE =  config_yaml["gyr_n"].as<float>() ;
+//        IMU_VARIANCE_GYROSCOPE_BIAS_WALK = config_yaml["gyr_w"].as<float>();
         IMU_VARIANCE_ACCELERATION_NOISE = float(std::pow(config_yaml["acc_n"].as<double>(),2));
         IMU_VARIANCE_ACCELERATION_BIAS_WALK = float(std::pow(config_yaml["acc_w"].as<double>(),2));
         IMU_VARIANCE_GYROSCOPE_NOISE = float(std::pow(config_yaml["gyr_n"].as<double>(),2));
         IMU_VARIANCE_GYROSCOPE_BIAS_WALK = float(std::pow(config_yaml["gyr_w"].as<double>(),2));
+
+//        std::cout.flags(std::ios::fixed);
+//        std::cout.precision(8);
+//        std::cout<<IMU_VARIANCE_ACCELERATION_NOISE<<std::endl;
+//        std::cout<<IMU_VARIANCE_ACCELERATION_BIAS_WALK<<std::endl;
+//        std::cout<<IMU_VARIANCE_GYROSCOPE_NOISE<<std::endl;
+//        std::cout<<IMU_VARIANCE_GYROSCOPE_BIAS_WALK<<std::endl;
         IMU_GRAVITY_MAGNITUDE = config_yaml["g_norm"].as<float>();
     }
     else
@@ -141,7 +171,7 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
     int Num_Cam = FLAGS_stereo ? 2:1;
     std::vector<float> v_float;
     vector<Eigen::Matrix4d> b_t_c;//b_t_c0,b_t_c1;
-    b_t_c.resize(Num_Cam);
+    b_t_c.resize(2);
     for (int cam_id = 0; cam_id < Num_Cam; ++cam_id)
     {
         std::string cam_string = "cam" + std::to_string(cam_id) + "_calib";
@@ -150,6 +180,7 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
         YAML::Node cam_calib = YAML::LoadFile(cam_yaml);
         //内参
         v_float = cam_calib["intrinsics"].as<std::vector<float>>();
+        FOCAL_LENGTH = (int)((v_float[0] + v_float[2])/2.0);
         calib_param.Camera.cv_camK_lr[cam_id] << v_float[0], 0, v_float[2],
                 0, v_float[1], v_float[3],
                 0, 0, 1;
@@ -175,10 +206,33 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
         else
             b_t_c[1] = Eigen::Map<Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(&v_double[0]);
     }
-    Tbc0 = b_t_c[0];
+
+
+
     T_Cl_Cr_d = b_t_c[0].inverse() * b_t_c[1];
 
 
+//    ///用的内部数据
+//
+//    Eigen::Matrix4d Tc0b;
+//    Tc0b<<-9.9992633141677389e-01, 4.9341275780694404e-03,1.1089910930018767e-02, 1.0699998587400001e-02,
+//            -4.9039224756951853e-03, -9.9998419659493765e-01,2.7492007438955665e-03, 7.2759576141800001e-12,
+//            1.1103300578872334e-02, 2.6946141507085820e-03,9.9993472575505349e-01, -2.9103830456699999e-11,
+//            0., 0., 0.,1.;
+//
+//    b_t_c[0] = Tc0b.inverse();
+//    std::cout<<b_t_c[0]<<std::endl;
+//
+//    T_Cl_Cr_d<<9.9997974130643585e-01, -3.1362423552325577e-04,6.3575637277560014e-03, 6.4078249037300000e-02,
+//            3.3728347348993087e-04, 9.9999302128760181e-01,-3.7207010028402045e-03, 3.9032954373400001e-04,
+//            -6.3563524581395654e-03, 3.7227699274757758e-03,9.9997286851568878e-01, -3.2292646938000000e-04,
+//            0., 0., 0.,1.;
+
+    b_t_c[1] = b_t_c[0] * T_Cl_Cr_d;
+//    std::cout<<b_t_c[1]<<std::endl;
+    Tbc0 = b_t_c[0];
+    Rbc0 = Tbc0.block<3,3>(0,0);
+    tbc0 = Tbc0.block<3,1>(0,3);
     std::cout<<"fisheye?"<<calib_param.Camera.fishEye<<std::endl;
 
     // ASL {B}ody frame is the IMU
@@ -210,7 +264,6 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
         calib_param.device_id = "ASL";
         calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
     }
-
     if(!FLAGS_UseIMU)//不用imu的话,双目就得用PNP给个位姿初值
     {
         Ncamera_ptr.reset(new vio::cameras::NCameraSystem());
@@ -282,7 +335,74 @@ void load_Parameters(const std::string &config_path,XP::DuoCalibParam &calib_par
 
 
 }
+cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg,int camtype)
+{
+    cv_bridge::CvImageConstPtr ptr;
+    if (img_msg->encoding == "8UC1")
+    {
+        sensor_msgs::Image img;
+        img.header = img_msg->header;
+        img.height = img_msg->height;
+        img.width = img_msg->width;
+        img.is_bigendian = img_msg->is_bigendian;
+        img.step = img_msg->step;
+        img.data = img_msg->data;
+        img.encoding = "mono8";
+        ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+    }
+    else
+        ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
 
+    cv::Mat img = ptr->image.clone();
+    cv::Mat distortiona = ptr->image.clone();
+
+    if(camtype == 0)
+        cv::remap(img,distortiona,mapx1,mapy1,CV_INTER_LINEAR);
+    else
+        cv::remap(img,distortiona,mapx2,mapy2,CV_INTER_LINEAR);
+
+    return distortiona;
+}
+
+bool SolvePnP(const vector<cv::Point2f> & point_2d_un,const vector<Eigen::Vector3d> &point_3d,Eigen::Matrix4d & Twc_pnp)
+{
+    int success = false;
+    Eigen::Matrix2Xd measurements;
+    Eigen::Matrix3Xd G_landmark_positions;
+
+    int nmatches = point_2d_un.size();
+    measurements.resize(Eigen::NoChange, nmatches);
+    G_landmark_positions.resize(Eigen::NoChange,nmatches);
+    int idx = 0;
+    for (int i = 0; i < point_2d_un.size(); ++i)
+    {
+        measurements.col(idx) = Eigen::Vector2d{point_2d_un[i].x,point_2d_un[i].y};
+        G_landmark_positions.col(idx++) = point_3d[i];
+    }
+
+    geometric_vision::PnpPoseEstimator pose_estimator(
+            FLAGS_lc_nonlinear_refinement_p3p, FLAGS_lc_use_random_pnp_seed);
+
+    double inlier_ratio;
+    int num_inliers;
+    std::vector<double> inlier_distances_to_model;
+    int num_iters;
+    std::vector<int> inliers;
+    pose_estimator.absolutePoseRansacPinholeCam(
+            measurements, G_landmark_positions,
+            FLAGS_lc_ransac_pixel_sigma, FLAGS_lc_num_ransac_iters, FOCAL_LENGTH,
+            Twc_pnp, &inliers, &inlier_distances_to_model, &num_iters,true);
+    CHECK_EQ(inliers.size(), inlier_distances_to_model.size());
+    num_inliers = static_cast<int>(inliers.size());
+    inlier_ratio = static_cast<double>(num_inliers) /
+                   static_cast<double>(G_landmark_positions.cols());
+    if (inlier_ratio >= FLAGS_lc_min_inlier_ratio || num_inliers >= FLAGS_lc_min_inlier_count+3 )
+    {
+        success = true;
+    }
+
+    return success;
+}
 
 bool SolveMulticamPnP(const std::vector<std::tuple<int,int,cv::KeyPoint>> &cur_track,const std::map<int,Eigen::Vector3f> &cur_Mp_info,
         Eigen::Matrix4f & Twc_pnp)
@@ -365,13 +485,13 @@ std::vector<std::pair<std::vector<XP::ImuData>, stereo_Img_info_f >> getMeasurem
             if (imu_buf.empty() || stereo_buf.empty())
                 return measurements;
 
-            if (imu_buf.back()->header.stamp.toSec() <= stereo_buf.front().first)
+            if (imu_buf.back().header.stamp.toSec() <= stereo_buf.front().first)
             {
 //            std::cout << "wait for imu, only should happen at the beginning sum_of_wait: "<< std::endl;
                 return measurements;
             }
 
-            if (imu_buf.front()->header.stamp.toSec() >= stereo_buf.front().first)
+            if (imu_buf.front().header.stamp.toSec() >= stereo_buf.front().first)
             {
 //            std::cout << "throw img, only should happen at the beginning" << std::endl;
                 stereo_buf.pop();
@@ -382,17 +502,23 @@ std::vector<std::pair<std::vector<XP::ImuData>, stereo_Img_info_f >> getMeasurem
             XP::ImuData imu_sample;
             std::vector<XP::ImuData> IMUs;
             IMUs.reserve(10);
-            while (imu_buf.front()->header.stamp.toSec() < stereo_info.first )
+            while (imu_buf.front().header.stamp.toSec() < stereo_info.first )
             {
-                imu_sample.time_stamp = (float)(imu_buf.front()->header.stamp.toSec() - offset_ts);
-                imu_sample.ang_v(0) = (float)imu_buf.front()->angular_velocity.x;
-                imu_sample.ang_v(1) = (float)imu_buf.front()->angular_velocity.y;
-                imu_sample.ang_v(2) = (float)imu_buf.front()->angular_velocity.z;
-                imu_sample.accel(0) = (float)imu_buf.front()->linear_acceleration.x;
-                imu_sample.accel(1) = (float)imu_buf.front()->linear_acceleration.y;
-                imu_sample.accel(2) = (float)imu_buf.front()->linear_acceleration.z;
+                imu_sample.time_stamp = (float)(imu_buf.front().header.stamp.toSec() - offset_ts);
+                imu_sample.ang_v(0) = (float)imu_buf.front().angular_velocity.x;
+                imu_sample.ang_v(1) = (float)imu_buf.front().angular_velocity.y;
+                imu_sample.ang_v(2) = (float)imu_buf.front().angular_velocity.z;
+                imu_sample.accel(0) = (float)imu_buf.front().linear_acceleration.x;
+                imu_sample.accel(1) = (float)imu_buf.front().linear_acceleration.y;
+                imu_sample.accel(2) = (float)imu_buf.front().linear_acceleration.z;
+
+                if(!FLAGS_stereo && (estimator.solver_flag == Estimator::SolverFlag::INITIAL))
+                    estimator.inputIMU((double)imu_sample.time_stamp, imu_sample.accel.cast<double>(), imu_sample.ang_v.cast<double>());
                 IMUs.push_back(imu_sample);
+//                std::cout<<"imu_buf.size()before"<<imu_buf.size()<<" "<<imu_buf.front().header.stamp.toSec()<<std::endl;
+               //todo:这里总会报错啊而且不能重现,不知道为啥了
                 imu_buf.pop();
+//                std::cout<<"imu_buf.size()after"<<imu_buf.size()<<" "<<imu_buf.front().header.stamp.toSec()<<std::endl;
             }
 
             stereo_Img_info_f stereo_info_f;
@@ -527,11 +653,8 @@ float compensatedParallax2(const std::vector<cv::Point2f> & pre_bearing_vec, con
 }
 
 
-void mono_begin_compute(std::vector<cv::KeyPoint> pre_key_pnts,std::vector<cv::KeyPoint> cur_key_pnts,
-                        const cv::Matx33f& K,
-                        const cv::Mat_<float>* dist_coeffs_ptr,
-                        const bool fisheye,
-                        const cv::Mat_<uchar> &  cam_mask,int *init_count)
+bool good_track(std::vector<cv::KeyPoint> pre_key_pnts,std::vector<cv::KeyPoint> cur_key_pnts,
+                const cv::Matx33f& K,const cv::Mat_<float>* dist_coeffs_ptr,const bool fisheye)
 {
     std::vector<cv::Point2f> pre_uv;
     std::vector<cv::Point2f> cur_uv;
@@ -555,13 +678,13 @@ void mono_begin_compute(std::vector<cv::KeyPoint> pre_key_pnts,std::vector<cv::K
     assert(cur_uv.size() == pre_uv.size());
     double track_ratio = (double)cur_uv.size() / (double)pre_key_pnts.size();
 
-    bool valid_track = track_ratio < 0.95 && track_ratio > 0.2;//也不能全追踪上
+    bool valid_track =  track_ratio > 0.6;
 
     std::vector<cv::Point2f> pre_feat_undistorted;
     std::vector<cv::Point2f> cur_feat_undistorted;
     if(pre_uv.empty())
     {
-        (*init_count) = 0;
+        return false;//第一帧肯定要是关键帧
     } else
     {
         if(fisheye)
@@ -591,17 +714,44 @@ void mono_begin_compute(std::vector<cv::KeyPoint> pre_key_pnts,std::vector<cv::K
         float focal_len = (K(0,0) + K(1,1)) / 2.0f;
         float aver_Parallax = compensatedParallax2(pre_feat_undistorted,cur_feat_undistorted) * focal_len;
 //        std::cout<<aver_Parallax<<" "<<track_ratio<<std::endl;
-        if(aver_Parallax > MIN_PARALLAX && valid_track)
-            (*init_count) ++;
-        else
-        if((*init_count) > 0)
-            (*init_count) --;
+        if(aver_Parallax < MIN_PARALLAX && valid_track)
+            return true;
     }
 
+    return false;
 }
+
 
 inline bool cmp_by_class_id(const cv::KeyPoint& lhs, const cv::KeyPoint& rhs)  {
     return lhs.class_id < rhs.class_id;
+}
+
+void undistortPoint(const std::vector<cv::KeyPoint> &kps,std::vector<cv::Point2f> &pre_feat_undistorted,const bool fisheye,
+const cv::Matx33f* K_ptr/*cv形式的左右相机内参*/,const cv::Mat_<float>* dist_ptr/*左右相机的畸变参数*/)
+{
+    pre_feat_undistorted.clear();
+    std::vector<cv::Point2f> pre_feat_distorted;
+    cv::KeyPoint::convert(kps, pre_feat_distorted);
+    // TODO(mingyu): use vio undistort with NEON
+    // wya:fisheye
+    if(fisheye)
+    {
+        cv::Vec4f distortion_coeffs;
+        for (int i = 0; i < distortion_coeffs.rows; ++i)
+            distortion_coeffs[i] = (*dist_ptr)(i);
+        cv::fisheye::undistortPoints(pre_feat_distorted,//去畸变
+                                     pre_feat_undistorted,
+                                     *K_ptr, distortion_coeffs);
+
+
+    }
+    else
+    {
+        cv::undistortPoints(pre_feat_distorted,//去畸变
+                            pre_feat_undistorted,
+                            *K_ptr, *dist_ptr);
+
+    }
 }
 
 template <typename T>
@@ -613,10 +763,14 @@ void InitPOD(T& t) {
 // 如果要生成关键帧，将新的地图点push进Xs保存到关键帧数据结构中
 bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
                       const vector<cv::KeyPoint>& kps_r,
+                      const vector<cv::Point2f>& kps_l_un,
+                      const vector<cv::Point2f>& kps_r_un,
                       const vector<XP::ImuData>& imu_samples,
                       const float rig_time,
-                      IBA::CurrentFrame* ptrCF, IBA::KeyFrame* ptrKF) {
+                      IBA::CurrentFrame* ptrCF, IBA::KeyFrame* ptrKF,bool isgoodtrack) {
 
+    assert(kps_l.size() == kps_l_un.size());
+    assert(kps_r.size() == kps_r_un.size());
     CHECK(std::is_sorted(kps_l.begin(), kps_l.end(), cmp_by_class_id));
     CHECK(std::is_sorted(kps_r.begin(), kps_r.end(), cmp_by_class_id));
     CHECK(std::includes(kps_l.begin(), kps_l.end(), kps_r.begin(), kps_r.end(), cmp_by_class_id));
@@ -628,7 +782,9 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
     kUnknownDepth.s2 = 0.0f;
     static int last_added_point_id = -1;//用来判断是否是新地图点
     static int iba_iFrm = 0;//全局frame_idx 从0开始
+    static int last_track_num = 0;
     auto kp_it_l = kps_l.cbegin(), kp_it_r = kps_r.cbegin();
+    auto kp_it_l_un = kps_l_un.cbegin(), kp_it_r_un = kps_r_un.cbegin();
 
     IBA::CurrentFrame& CF = *ptrCF;
     IBA::KeyFrame& KF = *ptrKF;
@@ -648,12 +804,30 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
     //class_id小于上次最后一个地图点id,说明这个点是老地图点的测量,先处理老地图点的观测
     //这里需要一点,KF的class_id不是连续的,因为追踪过程是普通帧追踪上一帧的地图点,而这个地图点非kf里的地图点,比如说这帧有新的地图点,75,76,77,但是
     //地图点太少,不算关键帧,到了能判定关键帧的时候,可能这个关键帧看到的是74,76,78---，那么75,77是没有的,last_added_point_id是上一个关键帧的最后一个点的id
-    for (; kp_it_l != kps_l.cend() && kp_it_l->class_id <= last_added_point_id; ++kp_it_l)
+
+    int long_track_num = 0;
+    for (int i = 0; i < kps_l.size(); ++i)
+    {
+        if(Mp_ob_num.size() > kps_l[i].class_id)//先这么存一下吧,先不考虑上限的问题
+            Mp_ob_num[kps_l[i].class_id] ++ ;
+        else
+        {
+            Mp_ob_num.resize(Mp_ob_num.size()+300);
+            Mp_ob_num[kps_l[i].class_id] ++ ;
+        }
+        if(Mp_ob_num[kps_l[i].class_id] >= 4)
+            long_track_num++;
+    }
+
+
+    for (; kp_it_l != kps_l.cend() && kp_it_l->class_id <= last_added_point_id; ++kp_it_l,++kp_it_l_un)
     {
         //将左侧特征点的id,测量值,均赋值给地图点的测量
         mp_mea.idx = kp_it_l->class_id;
         mp_mea.x.x[0] = kp_it_l->pt.x;
         mp_mea.x.x[1] = kp_it_l->pt.y;
+        mp_mea.x_un.x[0] = kp_it_l_un->x;
+        mp_mea.x_un.x[1] = kp_it_l_un->y;
         mp_mea.right = false;
         CF.feat_measures.push_back(mp_mea);
         //kp_it_r里的点数量<= kp_it_l点的数量,所以class_id要么和l的相等要么提前于l
@@ -661,9 +835,12 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
         if (kp_it_r != kps_r.cend() && kp_it_r->class_id == kp_it_l->class_id) {
             mp_mea.x.x[0] = kp_it_r->pt.x;
             mp_mea.x.x[1] = kp_it_r->pt.y;
+            mp_mea.x_un.x[0] = kp_it_r_un->x;
+            mp_mea.x_un.x[1] = kp_it_r_un->y;
             mp_mea.right = true;
             CF.feat_measures.push_back(mp_mea);
             ++kp_it_r;
+            ++kp_it_r_un;
         }
     }
     //imu_samples数据类型转成CF.imu_measure所需要的数据类型
@@ -673,18 +850,44 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
     //需要一个新关键帧的条件:2个
     // 1: std::distance(kp_it_l, kps_l.end()) >= 20说明的是没观测到的新的地图点比较多,大于20个
     // 2: CF.feat_measures.size() < 20说明的是当前帧观测到的地图点数量太少了，不足20个
-    bool need_new_kf;
-    if(FLAGS_stereo)
-        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
-    else
-        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/2) || CF.feat_measures.size() < (kps_l.size()/3);
+    bool need_new_kf = false;
+//    if(FLAGS_stereo)
+//        need_new_kf =  (std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3));
+//    else
+//        need_new_kf = std::distance(kp_it_l, kps_l.end()) >= (kps_l.size()/3) || CF.feat_measures.size() < (kps_l.size()/3);
+
+    int new_feature_num = std::distance(kp_it_l, kps_l.end());
+    last_track_num = CF.feat_measures.size();
+    if (iba_iFrm < 2 || last_track_num < 20 || long_track_num < 40 || new_feature_num > 0.5 * last_track_num)
+        need_new_kf = true;
+//    if(last_kf_iFrm != -1)
+//    {
+//        if(!FLAGS_stereo && (estimator.solver_flag == Estimator::SolverFlag::INITIAL))
+//        {
+//            if(iba_iFrm > last_kf_iFrm + 6)
+//                need_new_kf = true;
+//        }
+////        else if(iba_iFrm > last_kf_iFrm + 20)
+////            need_new_kf = true;
+//    }
 
     if (std::distance(kp_it_l, kps_l.end()) == 0)
         need_new_kf = false;
+
+//    if(iba_iFrm < 2)
+//        need_new_kf = true;
+
+//        if(iba_iFrm < last_kf_iFrm + 2 && (std::distance(kp_it_l, kps_l.end()) < (kps_l.size() * 2 / 3)) && CF.feat_measures.size() > 30)
+//            need_new_kf = false;
+//    }
+
     if (!need_new_kf) KF.iFrm = -1;//如果不需要关键帧
     else
         LOG(INFO) << "new keyframe " << KF.iFrm;
-
+    std::ofstream foutC("/home/wya/odom_paper/frontend.txt", std::ios::app);
+//
+    foutC<<CF.iFrm<<"是否是关键帧?:"<<need_new_kf<<" 总点:"<<kps_l.size()<<"新点数:"<<std::distance(kp_it_l, kps_l.end())<<"观测到老点数量:"<<CF.feat_measures.size()<<std::endl;
+    foutC.close();
     if (!need_new_kf)
     {
         KF.iFrm = -1;
@@ -692,6 +895,7 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
         InitPOD(KF.Cam_pose);//初始化一下,全赋0
         InitPOD(KF.d);
     } else {
+        last_kf_iFrm =  CF.iFrm;
         //如果需要增加关键帧的话,就把帧id,pose,对于老地图点的观测给关键帧
         KF.iFrm = CF.iFrm;
         KF.Cam_pose = CF.Cam_state.Cam_pose;
@@ -699,7 +903,7 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
         KF.feat_measures = CF.feat_measures;
         // MapPoint
         //现在kp_it_l已经遍历到新的地图点处了,后面的都是新的地图点
-        for(; kp_it_l != kps_l.cend(); ++kp_it_l) {
+        for(; kp_it_l != kps_l.cend(); ++kp_it_l,++kp_it_l_un) {
             IBA::MapPoint mp;
             InitPOD(mp.X);
             mp.X.idx = kp_it_l->class_id;//全局id
@@ -708,27 +912,36 @@ bool create_iba_frame(const vector<cv::KeyPoint>& kps_l,
             mp_mea.iFrm = iba_iFrm;
             mp_mea.x.x[0] = kp_it_l->pt.x;
             mp_mea.x.x[1] = kp_it_l->pt.y;
+            mp_mea.x_un.x[0] = kp_it_l_un->x;
+            mp_mea.x_un.x[1] = kp_it_l_un->y;
             mp_mea.right = false;
             mp.feat_measures.push_back(mp_mea);
 
             if (kp_it_r != kps_r.cend() && kp_it_r->class_id == kp_it_l->class_id) {
                 mp_mea.x.x[0] = kp_it_r->pt.x;
                 mp_mea.x.x[1] = kp_it_r->pt.y;
+                mp_mea.x_un.x[0] = kp_it_r_un->x;
+                mp_mea.x_un.x[1] = kp_it_r_un->y;
                 mp_mea.right = true;
                 mp.feat_measures.push_back(mp_mea);
                 kp_it_r++;
+                kp_it_r_un++;
+
             } else {
                 LOG(WARNING) << "add new feature point " << kp_it_l->class_id << " only found in left image";
             }
             //将新的地图点push进,也就是说关键帧数据结构中Xs只存由它首次观测到的新地图点
             KF.Xs.push_back(mp);
         }
-        last_added_point_id = std::max(KF.Xs.back().X.idx, last_added_point_id);//最后一个新的地图点的id
+        if(!KF.Xs.empty())
+            last_added_point_id = std::max(KF.Xs.back().X.idx, last_added_point_id);//最后一个新的地图点的id
         KF.d = kUnknownDepth;
     }
     ++iba_iFrm;//全局frame_idx更新
     return true;
 }
+
+
 
 void Get_Track(const IBA::CurrentFrame & CF,std::vector<std::tuple<int,int,cv::KeyPoint>> & cur_track)
 {
@@ -746,20 +959,71 @@ void Get_Track(const IBA::CurrentFrame & CF,std::vector<std::tuple<int,int,cv::K
     }
 }
 
-void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
+static geometry_msgs::Vector3Stamped
+create_vec3_msg(const std_msgs::Header & header,const Eigen::Vector3d & data) {
+    geometry_msgs::Vector3Stamped msg;
+    msg.header = header;
+    msg.vector.x = data[0];
+    msg.vector.y = data[1];
+    msg.vector.z = data[2];
+
+    return msg;
+}
+
+template <typename Time, typename InterpolateType>
+void linerarInterpolation(
+        const Time t1, const InterpolateType& x1, const Time t2,
+        const InterpolateType& x2, const Time t_interpolated,
+        InterpolateType & x_interpolated) {
+    assert(t1 < t2);
+    assert(t1 <= t_interpolated);
+    assert(t_interpolated <= t2);
+    x_interpolated = x1 + (x2 - x1) / (t2 - t1) * (t_interpolated - t1);
+}
+void imu_callback(const sensor_msgs::Imu &imu_msg)
 {
     if(FLAGS_UseIMU)
     {
         //设置一下第一个imu的时间
         if (!set_offset_time) {
             set_offset_time = true;
-            offset_ts = imu_msg->header.stamp.toSec();
+            offset_ts = imu_msg.header.stamp.toSec();
         }
         m_syn_buf.lock();
         imu_buf.push(imu_msg);
         m_syn_buf.unlock();
         con.notify_one();
     }
+}
+
+void gyr_callback(const sensor_msgs::ImuConstPtr &imu_msg)
+{
+    const auto msg = create_vec3_msg(imu_msg->header, Eigen::Vector3d{
+        imu_msg->angular_velocity.x,imu_msg->angular_velocity.y,imu_msg->angular_velocity.z});
+    m_syn_buf.lock();
+    lIP_buf.addGyro(msg);//添加加速度数据
+
+    m_syn_buf.unlock();
+}
+
+void acc_callback(const sensor_msgs::ImuConstPtr &imu_msg)
+{
+    const auto msg = create_vec3_msg(imu_msg->header, Eigen::Vector3d{
+        imu_msg->linear_acceleration.x,imu_msg->linear_acceleration.y,imu_msg->linear_acceleration.z});
+    m_syn_buf.lock();
+    lIP_buf.addAccel(msg);//添加加速度数据
+    if (lIP_buf.ready())
+    {
+        lIP_buf.interpolate();//将低频加速度数据对高频陀螺仪数据进行插值
+        double t = lIP_buf.publishIMUMessages(imu_buf);
+        if (!set_offset_time) {
+            set_offset_time = true;
+            offset_ts = t;
+        }
+    }
+    m_syn_buf.unlock();
+
+
 }
 
 cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
@@ -795,7 +1059,7 @@ void sync_stereo()
             std_msgs::Header header;
             double time = 0;
             m_buf.lock();
-            if (!img0_buf.empty() && !img1_buf.empty())
+            if (!img0_buf.empty() && !img1_buf.empty() && control_fre++ % 2 ==0)
             {
                 double time0 = img0_buf.front()->header.stamp.toSec();
                 double time1 = img1_buf.front()->header.stamp.toSec();
@@ -816,10 +1080,14 @@ void sync_stereo()
                     time = img0_buf.front()->header.stamp.toSec();
                     image0 = getImageFromMsg(img0_buf.front());
                     image1 = getImageFromMsg(img1_buf.front());
+//                    image0 = getImageFromMsg(img0_buf.front(),0);
+//                    image1 = getImageFromMsg(img1_buf.front(),1);
                     img0_buf.pop();
                     img1_buf.pop();
+//                    control_fre ++;
                 }
             }
+
             m_buf.unlock();
             if(!image1.empty())
             {
@@ -841,13 +1109,14 @@ void sync_stereo()
             std_msgs::Header header;
             double time = 0;
             m_buf.lock();
-            if (!img0_buf.empty())
+            if (!img0_buf.empty() && control_fre++ % 2 ==0)
             {
                 double time0 = img0_buf.front()->header.stamp.toSec();
 
                 time = img0_buf.front()->header.stamp.toSec();
                 image0 = getImageFromMsg(img0_buf.front());
                 img0_buf.pop();
+                control_fre ++;
             }
 
             m_buf.unlock();
