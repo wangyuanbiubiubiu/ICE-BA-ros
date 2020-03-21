@@ -3,7 +3,7 @@
 If you want to use the ros version, set(USE_ROS true)   #true or false  
 stereo-vio:   
 ![rviz](https://github.com/wangyuanbiubiubiu/ICE-BA-ros/blob/master/config/ice-ba.png)  
-mono-vio: (note: If you want to use a mono-vio, you need to give the camera enough movement to get started ,see`mono_begin_compute`)   
+mono-vio: (note: If you want to use a mono-vio, you need to give the camera enough movement to get started ,see`mono_begin_compute` And I also added the initialization version of vinsmono, but I needed to rely on Ceres for SFM BA.git checkout use_vinsmono_init)   
 ![rviz](https://github.com/wangyuanbiubiubiu/ICE-BA-ros/blob/master/config/iceba-mono.png)
 ## How to build
     export ROS_VERSION=kinetic
@@ -16,7 +16,7 @@ mono-vio: (note: If you want to use a mono-vio, you need to give the camera enou
     catkin config --cmake-args -DCMAKE_BUILD_TYPE=Release
     cd src
     git clone https://github.com/wangyuanbiubiubiu/ICE-BA-ros.git
-    cd ICE-BA-ros
+    cd ICE-BA-ros #git checkout use_vinsmono_init ，if you want to use vinsmono init
     bash build_thirdparty.sh #opengv use to compute PNP（Muticam pnp）
     cd $CATKIN_WS
     catkin build ice_ba_ros
