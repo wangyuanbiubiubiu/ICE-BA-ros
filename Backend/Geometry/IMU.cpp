@@ -1053,10 +1053,12 @@ void Propagate(const Point3D &pu/*外参tc0_i*/, const Delta &D/*预积分部分
   C2.m_Cam_pose = D.GetRotationMeasurement(dbw, eps) / R1T;
 #endif
   const LA::AlignedVector3f dp = D.m_p + D.m_Jpba * dba + D.m_Jpbw * dbw;//考虑bias的影响
-  C2.m_p = (R1T - C2.m_Cam_pose.GetRotationTranspose()) * pu /*因为把imu的测量挪到了c0上,所以这里需要考虑挪到c0以后的外参的ex_t补偿*/
-          //b是imu twb = Rwc0*tc0b + twc0 ,ex_t=(twbj - twbi) - (twc0j - twc0i) = (Rwc0j - Rwc0i)*tc0i
+  //因为是用c0系来对齐重力系的,所以v和bias都左乘了Rc0i
+  //twcj - twci + Rwcj*tc0i=  twbj - twbi + Rwci*tc0i
+  //twcj = twbj - twbi + (Rwci-Rwci)*tc0i + twci
+  //     = Vw_c0i*dt + -0.5*gw*dt^2 + Rwc0*pc0i_c0j(这个预积分实际上积的还是b的位移,但是是转到了c0系的) + (Rwci-Rwci)*tc0i + twci
+  C2.m_p = (R1T - C2.m_Cam_pose.GetRotationTranspose()) * pu 
           +C1.m_p + C1.m_v * D.m_Tpv + R1T.GetApplied(dp);
-  //tw_c0j = ex_t + tw_c0i + Vw_c0i*dt + Rwc0*pc0i_c0j -0.5*gw*dt^2
   if (!IMU_GRAVITY_EXCLUDED) {
     C2.m_p.z() -= IMU_GRAVITY_MAGNITUDE * D.m_Tpg;//考虑重力
   }
