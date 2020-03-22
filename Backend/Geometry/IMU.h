@@ -1151,6 +1151,12 @@ class Delta {
 ////       div(e_v)/div(bai) = -m_Jvba
 ////       div(e_v)/div(bwi) = -m_Jvbw
 
+ //twcj - twci + Rwcj*tc0i=  twbj - twbi + Rwci*tc0i
+//twcj = twbj - twbi + (Rwci-Rwci)*tc0i + twci
+//     = Vw_c0i*dt + -0.5*gw*dt^2 + Rwc0*pc0i_c0j + (Rwci-Rwci)*tc0i + twci
+
+// 0 = twcj - twci - Vw_c0i*dt +0.5*gw*dt^2 - Rwc0i*pc0i_c0j - (Rwci-Rwci)*tc0i
+//  同时左乘Rciw,并且考虑了bias的扰动就是e_p
 ////  e_p = Rciw*(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2) + Rciw * Rcjw.t*tc0i - tc0i - (m_p + m_Jpba * (bai - m_ba) + m_Jpbw * (bwi - m_bw))
 // Rciw右乘扰动 div(e_p)/div(Rciw) = Rciw * exp[-th]x(p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i)
 //                               = Rciw * [p_wcj - p_wci - v_wci*dt + 0.5*g*dt^2 + Rcjw.t*tc0i]x
@@ -1271,9 +1277,6 @@ inline void GetErrorJacobian(const Camera &C1/*前一帧状态*/, const Camera &
     e->m_ep = C1.m_Cam_pose.GetAppliedRotation(e->m_ep);//e_p = Rciw*(p_wcj - p_wci - v_wji*dt + g*dt)
 #ifdef CFG_IMU_FULL_COVARIANCE
     const LA::AlignedVector3f R21pu = dR.GetApplied(pu);//Rciw * Rcjw.t*tc0i
-    //因为把imu的测量挪到了c0上,所以这里需要考虑挪到c0以后的外参的ex_t补偿，b是imu twb = Rwc0*tc0b + twc0(c0下的位置转到b下)
-    //ex_t=(twbj - twbi) - (twc0j - twc0i)/*因为之前只对测量值加了旋转,还需要考虑到平移带来的位置变化*/= (Rwc0j - Rwc0i)*tc0i
-    // 又因为现在的残差是转到c0坐标系下比较,所以 Rwc0*ex_t =  Rciw * (Rcjw.t - Rciw.t)*tc0i =  Rciw * Rcjw.t*tc0i -tc0i
 #else
     const LA::AlignedVector3f R21pu = dR.GetAppliedInversely(pu);
 #endif
