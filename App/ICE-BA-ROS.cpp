@@ -717,7 +717,7 @@ void process_backend()
                         iba_bg = Tbc0.block<3,3>(0,0).transpose() * vins_bg;
                         for (int k = 0; k < 3; ++k)
                         {
-                            CF_iter->second.Cam_state.v[k] = (float)(vins_v[k]);
+                            CF_iter->second.Cam_state.v[k] = (float)(iba_v[k]);
                             CF_iter->second.Cam_state.ba[k] = (float)(iba_ba[k]);
                             CF_iter->second.Cam_state.bw[k] = (float)(iba_bg[k]);
                         }
