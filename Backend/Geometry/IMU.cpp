@@ -847,7 +847,7 @@ void PreIntegrate(const Measurement *us/*当前帧和之间帧之间的所有imu
     const xp128f dt = xp128f::get(_t2 - _t1);//delta_t
     const xp128f dT = xp128f::get(_t1 - t1/*上一帧的时间戳*/);
     const xp128f dt_2 = xp128f::get(dt[0] * 0.5f);//0.5*delta_t
-    Tpg = (dt_2[0] + (_t1 - t1)) * dt[0] + Tpg;// Tpg += (0.5dt + dt0)dt 这里为啥这么算呢
+    Tpg = (dt_2[0] + (_t1 - t1)) * dt[0] + Tpg;// Tpg += (0.5dt + dt0)dt 就是0.5 (t2-t1)^2
 //预计分pvq
     w.GetScaled(dt, wdt);//wdt = (w-bw)*delta_t
     //dR.SetRodrigues(wdt);
