@@ -25,14 +25,27 @@
 namespace IMU {
 
 void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部分的雅克比*/, const Error &e,//motion部分的残差
-                                           const float w, const Weight &W/*motion部分的协方差*/, const float Tpv/*dt*/) {
+                                           const float w, const Weight &W/*motion部分的信息矩阵*/, const float Tpv/*dt*/) {
   J.GetTranspose(m_JT);//m_Jrr1,m_Jrbw1,m_Jvr1,m_Jvv1,m_Jvba1,m_Jvbw1,m_Jpr1,m_Jpr2,m_Jpp1,m_Jpv1,m_Jpba1,m_Jpbw1的转置
   W.GetScaled(w, &m_W);
   const xp128f _Tpv = xp128f::get(Tpv);//dt
 #ifdef CFG_IMU_FULL_COVARIANCE
-  for (int i = 0; i < 5; ++i) {//m_W存储的顺序是R,v,p,ba,bw,这里矩阵存储的顺序好像是变了
+  for (int i = 0; i < 5; ++i) {//m_W存储的顺序是R,v,p,ba,bw。
+      //正常J.t * W是(rvpbabw)_i, (rvpbabw)_j
+      //但是这里顺序变成了(prvbabw)_i, (prvbabw)_j,横排还是rvpbabw
+      //所以m_JTW中第0行的第i个元素[0][i] = Jppi.t * W[2][i](==Wi2,为了和代码一致,我后面都用括号里这种形式表达了)
+      //[1][i] = Jrri.t * W[i][0] + Jvri.t * W[i][1] + Jpri.t * W[i][2]
+      //[2][i] = Jvvi.t * W[i][1] + Jpvi.t * W[i][2](这里为啥用的是dt)
+      //[3][i] = Jvbai.t * W[i][1] + Jpbai.t * W[i][2] + W[i][3]
+      //[4][i] = Jrbwi.t * W[i][0] + Jvbwi.t * W[i][1] + Jpbwi.t * W[i][2] + W[i][4]
+      //[5][i] = -Jppi.t * W[i][2]
+      //[6][i] = -Jrri.t * W[i][0] + Jprj.t * W[i][2]
+      //[7][i] = -Jvvi.t * W[i][1]
+      //[8][i] = -W[i][3]
+      //[8][i] = -W[i][4]
     const LA::AlignedMatrix3x3f *Wi = m_W[i];//i对应的状态各自对应的那一行
     const LA::AlignedMatrix3x3f &Wir = Wi[0];//i和r部分的信息矩阵
+
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrr1, Wir, m_JTW[1][i]);
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrbw1, Wir, m_JTW[4][i]);
     m_JTW[1][i].GetMinus(m_JTW[6][i]);
@@ -45,7 +58,7 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
     const LA::AlignedMatrix3x3f &Wip = Wi[2];
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jpp1, Wip, m_JTW[0][i]);
     LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpr1, Wip, m_JTW[1][i]);
-    //LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpv1, Wip, m_JTW[2][i]);
+    //LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpv1, Wip, m_JTW[2][i]);//???为什么不用这个而是下面这个,少了一个-Rciw啊
     LA::AlignedMatrix3x3f::AddsATo(_Tpv, m_JTW[0][i], m_JTW[2][i]);
     LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpba1, Wip, m_JTW[3][i]);
     LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpbw1, Wip, m_JTW[4][i]);
@@ -57,31 +70,55 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
     m_W[4][i].GetMinus(m_JTW[9][i]);
   }
 //这里在算J.t*W*J的上三角存在m_A里
+//这里使用的J.t*(J.t*w).t
+//这里还做了一个行列的变化，因为最后行列都需要是(prvbabw)_i, (prvbabw)_j
+//只计算上三角部分(这里&m_A[ 0], &m_A[ 9], &m_A[17], &m_A[24], &m_A[30],&m_A[35], &m_A[39], &m_A[42], &m_A[44], &m_A[45]
+// 其实是&m_A[ 0], &m_A[ 9+1], &m_A[17+2], &m_A[24+3], &m_A[30+4],&m_A[35+5], &m_A[39+6], &m_A[42+7], &m_A[44+8], &m_A[45+9])
+//i>= 代表是否需要保存
+//A[0][i] = Jpp1.t * m_JTW[i][2].t p1对应的这行 i>=0
+//A[1][i] = Jrr1.t * m_JTW[i][0].t + Jvr1.t * m_JTW[i][1].t + Jpr1.t * m_JTW[i][2].t r1对应的这行 i>=1
+//A[2][i] = Jvv1.t * m_JTW[i][1].t + Jpv1.t * m_JTW[i][2].t v1对应的这行 i>=2
+//A[3][i] = Jvba1.t * m_JTW[i][1].t + Jpba1.t * m_JTW[i][2].t + m_JTW[i][3].t ba1对应的这行 i>=3
+//A[4][i] = Jrbw1.t * m_JTW[i][0].t + Jvbw1.t * m_JTW[i][1].t + Jpbw1.t * m_JTW[i][2].t + m_JTW[i][4].t bw1对应的这行 i>=4
+//A[5][i] = -Jpp1.t * m_JTW[i][2].t p2对应的这行 i>=5
+//A[6][i] = -Jrr1.t * m_JTW[i][0].t + Jpr2.t * m_JTW[i][2].t r2对应的这行 i>=6
+//A[7][i] = -Jvv1.t * m_JTW[i][1].t v2对应的这行 i>=7
+//A[8][i] = -m_JTW[i][3].t ba2对应的这行  i>=8
+//A[9][i] = -m_JTW[i][4].t bw2对应的这行 i>=9
+
   LA::AlignedMatrix3x3f *A[10] = {&m_A[ 0], &m_A[ 9], &m_A[17], &m_A[24], &m_A[30],
-                                  &m_A[35], &m_A[39], &m_A[42], &m_A[44], &m_A[45]};
+                                  &m_A[35], &m_A[39], &m_A[42], &m_A[44], &m_A[45]};//这里是用的导推,就是45+9这样子,就是上三角
   const LA::AlignedVector3f *_e = (LA::AlignedVector3f *) &e;
   LA::AlignedMatrix3x3f WJ;
-  for (int i = 0; i < 10; ++i) {
+  for (int i = 0; i < 10; ++i)//遍历10行
+  {
     const LA::AlignedMatrix3x3f *JTWi = m_JTW[i];
-    if (i >= 1) {
+    if (i >= 1)
+    {
       const LA::AlignedMatrix3x3f &JTWir = JTWi[0];
       LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrr1, JTWir, A[1][i], i == 1);
-      if (i >= 4) {
+      if (i >= 4)
+      {
         LA::AlignedMatrix3x3f::ABT(m_JT.m_Jrbw1, JTWir, A[4][i], i == 4);
-        if (i >= 6) {
+        if (i >= 6)
+        {
           A[1][i].GetMinus(A[6][i]);
         }
       }
       const LA::AlignedMatrix3x3f &JTWiv = JTWi[1];
       LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jvr1, JTWiv, A[1][i], i == 1);
-      if (i >= 2) {
+      if (i >= 2)
+      {
         LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvv1, JTWiv, A[2][i], i == 2);
-        if (i >= 3) {
+        if (i >= 3)
+        {
           LA::AlignedMatrix3x3f::ABT(m_JT.m_Jvba1, JTWiv, A[3][i], i == 3);
-          if (i >= 4) {
+          if (i >= 4)
+          {
             LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jvbw1, JTWiv, A[4][i], i == 4);
           }
-          if (i >= 7) {
+          if (i >= 7)
+          {
             A[2][i].GetMinus(A[7][i]);
           }
         }
@@ -89,18 +126,24 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
     }
     const LA::AlignedMatrix3x3f &JTWip = JTWi[2];
     LA::AlignedMatrix3x3f::ABT(m_JT.m_Jpp1, JTWip, A[0][i], i == 0);
-    if (i >= 1) {
+    if (i >= 1)
+    {
       LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpr1, JTWip, A[1][i], i == 1);
-      if (i >= 2) {
+      if (i >= 2)
+      {
         //LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpv1, JTWip, A[2][i], i == 2);
         LA::AlignedMatrix3x3f::AddsATo(_Tpv, A[0][i], A[2][i], i == 2);
-        if (i >= 3) {
+        if (i >= 3)
+        {
           LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpba1, JTWip, A[3][i], i == 3);
-          if (i >= 4) {
+          if (i >= 4)
+          {
             LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpbw1, JTWip, A[4][i], i == 4);
-            if (i >= 5) {
+            if (i >= 5)
+            {
               A[0][i].GetMinus(A[5][i]);
-              if (i >= 6) {
+              if (i >= 6)
+              {
                 LA::AlignedMatrix3x3f::AddABTTo(m_JT.m_Jpr2, JTWip, A[6][i], i == 6);
               }
             }
@@ -108,18 +151,23 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
         }
       }
     }
-    if (i >= 3) {
+    if (i >= 3)
+    {
       JTWi[3].GetTranspose(WJ);
       A[3][i] += WJ;
-      if (i == 3) {
+      if (i == 3)
+      {
         A[3][i].SetLowerFromUpper();
-      } else if (i >= 8) {
+      } else if (i >= 8)
+      {
         WJ.GetMinus(A[8][i]);
       }
-      if (i >= 4) {
+      if (i >= 4)
+      {
         JTWi[4].GetTranspose(WJ);
         A[4][i] += WJ;
-        if (i == 4) {
+        if (i == 4)
+        {
           A[4][i].SetLowerFromUpper();
         } else if (i >= 9) {
           WJ.GetMinus(A[9][i]);
@@ -129,7 +177,8 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
     LA::AlignedVector3f &bi = m_b[i];//J.t*W*e
     bi.MakeZero();
     float *_bi = bi;
-    for (int j = 0; j < 5; ++j) {
+    for (int j = 0; j < 5; ++j)
+    {
       LA::AlignedMatrix3x3f::AddAbTo(JTWi[j], _e[j], _bi);
     }
   }
@@ -232,6 +281,7 @@ void Delta::Factor::Auxiliary::Global::Set(const Jacobian::Global &J/*motion部�
   m_Abw2bw2 = m_W.m_wbw;
 #endif
 }
+
 
 void Delta::Factor::Auxiliary::RelativeLF::Set(const Jacobian::RelativeLF &J, const Error &e,
                                                const float w, const Weight &W, const float Tpv) {
